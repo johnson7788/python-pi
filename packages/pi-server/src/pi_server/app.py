@@ -327,6 +327,9 @@ class SessionRegistry:
             resume=resume,
             extension_paths=(),
             no_extensions=not self.config.allow_user_extensions,
+            # The process environment holds the shared credential; without this any user
+            # could read it back by asking the agent to run `env`.
+            scrub_shell_env=True,
         )
 
     async def acquire(self, uid: str) -> SessionWorker:

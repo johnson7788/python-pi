@@ -602,3 +602,13 @@ def test_single_mode_passes_the_command_line_through(tmp_path):
     base = BootstrapOptions(cwd="/tmp/somewhere", agent_dir="/tmp/agent")
     registry = SessionRegistry(base, config)
     assert registry.options_for("local") is base
+
+
+def test_team_mode_scrubs_the_shell_environment(tmp_path):
+    """Team mode must not hand the shared credential to a shell the agent runs."""
+    config = ServerConfig(data_root=str(tmp_path), auth_mode="team")
+    registry = SessionRegistry(BootstrapOptions(cwd="/tmp"), config)
+    options = registry.options_for("someuid")
+    assert options.scrub_shell_env is True
+    assert options.no_extensions is True
+    assert options.api_key is None  # no shared key configured in this unit test

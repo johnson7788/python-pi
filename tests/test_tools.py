@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from pi_ai import ImageContent
 
+from pi_coding_agent.tools.bash import build_shell_env
 from pi_coding_agent.tools import (
     BUILTIN_TOOL_NAMES,
     DEFAULT_ACTIVE_TOOL_NAMES,
@@ -834,3 +835,68 @@ async def test_tool_details_are_json_serializable(tmp_path: Path) -> None:
 
     for result in results:
         json.dumps(result.details)
+
+
+# --------------------------------------------------------------------------------------
+# Shared-deployment environment scrubbing
+# --------------------------------------------------------------------------------------
+
+
+def test_build_shell_env_keeps_the_parent_environment_by_default(monkeypatch):
+    """A personal install must keep seeing its own tokens; this is the old behaviour."""
+    monkeypatch.setenv("GITHUB_TOKEN", "personal-token")
+    env = build_shell_env("/tmp")
+    assert env["GITHUB_TOKEN"] == "personal-token"
+
+
+def test_build_shell_env_scrubs_credentials_for_a_shared_deployment(monkeypatch):
+    monkeypatch.setenv("PI_API_KEY", "shared-company-key")
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-token")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-secret")
+    monkeypatch.setenv("DB_PASSWORD", "hunter2")
+    monkeypatch.setenv("MY_CREDENTIALS", "creds")
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Ada")
+
+    env = build_shell_env("/tmp", scrub_secrets=True)
+
+    for leaked in (
+        "PI_API_KEY",
+        "GITHUB_TOKEN",
+        "AWS_SECRET_ACCESS_KEY",
+        "DB_PASSWORD",
+        "MY_CREDENTIALS",
+        "XDG_SESSION_TYPE",
+    ):
+        assert leaked not in env, leaked
+
+    # The rule is per underscore-separated segment, so ordinary variables survive:
+    # `GIT_AUTHOR_NAME` contains "AUTH" as a substring but is not a credential.
+    assert env["GIT_AUTHOR_NAME"] == "Ada"
+    assert env["PATH"] == "/usr/bin"
+
+
+def test_build_shell_env_still_exposes_the_session(monkeypatch):
+    monkeypatch.setenv("PI_API_KEY", "shared-company-key")
+    env = build_shell_env("/tmp/work", {"PI_SESSION_ID": "s-1"}, scrub_secrets=True)
+    assert env["PI_CWD"] == "/tmp/work"
+    assert env["PI_SESSION_ID"] == "s-1"
+
+
+async def test_a_scrubbed_bash_tool_cannot_read_the_shared_credential(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The tool-level end of the scrub: ask the shell for the key and get nothing back."""
+    monkeypatch.setenv("PI_API_KEY", "shared-company-key")
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-token")
+    tool = create_bash_tool(str(tmp_path), scrub_secrets=True)
+
+    result = await tool.execute(
+        CALL_ID, {"command": "printenv PI_API_KEY; printenv GITHUB_TOKEN; echo done"}
+    )
+
+    output = text_of(result)
+    assert "shared-company-key" not in output
+    assert "gh-token" not in output
+    assert "done" in output

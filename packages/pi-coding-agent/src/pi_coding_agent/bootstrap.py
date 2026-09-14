@@ -41,6 +41,11 @@ class BootstrapOptions:
     extension_paths: Sequence[str] = ()
     no_extensions: bool = False
     no_skills: bool = False
+    #: Withhold credential-shaped environment variables from shells the agent runs.
+    #: A shared deployment turns this on because the process environment holds the
+    #: company model credential; a personal install leaves it off so its own CLI
+    #: tokens keep working.
+    scrub_shell_env: bool = False
     unknown_flags: Sequence[str] = ()
     host_mode: str = "print"
     with_runtime: bool = False
@@ -314,6 +319,7 @@ async def bootstrap(
             auth_storage=auth,
             thinking_level=thinking_level,
             extension_runner=extension_runner,
+            scrub_shell_env=options.scrub_shell_env,
         )
 
     runtime = None

@@ -41,12 +41,15 @@ BUILTIN_TOOL_NAMES: tuple[str, ...] = ("read", "bash", "edit", "write", "grep", 
 DEFAULT_ACTIVE_TOOL_NAMES: tuple[str, ...] = ("read", "bash", "edit", "write")
 
 
-def create_builtin_tools(cwd: str, names: Iterable[str] | None = None) -> list[AgentTool]:
+def create_builtin_tools(
+    cwd: str, names: Iterable[str] | None = None, *, scrub_secrets: bool = False
+) -> list[AgentTool]:
     """Build the named built-in tools, defaulting to the active set.
 
     Ordering follows ``BUILTIN_TOOL_NAMES`` rather than the caller's order so
     prompt output is stable, and unknown names fail loudly instead of silently
-    producing a smaller tool set.
+    producing a smaller tool set.  ``scrub_secrets`` withholds credential-shaped
+    environment variables from shells the agent runs; a shared deployment sets it.
     """
     selected = set(names) if names is not None else set(DEFAULT_ACTIVE_TOOL_NAMES)
     unknown = selected - set(BUILTIN_TOOL_NAMES)
@@ -63,7 +66,7 @@ def create_builtin_tools(cwd: str, names: Iterable[str] | None = None) -> list[A
         if name == "read":
             tools.append(create_read_tool(cwd))
         elif name == "bash":
-            tools.append(create_bash_tool(cwd))
+            tools.append(create_bash_tool(cwd, scrub_secrets=scrub_secrets))
         elif name == "edit":
             tools.append(create_edit_tool(cwd, queue))
         elif name == "write":

@@ -103,16 +103,57 @@ def format_seconds(seconds: float) -> str:
     return str(int(seconds)) if float(seconds).is_integer() else str(seconds)
 
 
-def build_shell_env(cwd: str, metadata: dict[str, str] | None = None) -> dict[str, str]:
+#: Environment variable name segments that mark a value as a credential.  Matched per
+#: underscore-separated segment rather than as a substring, so ``GIT_AUTHOR_NAME`` (which
+#: contains "AUTH") stays usable while ``PI_API_KEY``, ``AWS_SECRET_ACCESS_KEY`` and
+#: ``GITHUB_TOKEN`` do not.
+_SECRET_SEGMENTS = frozenset(
+    {
+        "KEY",
+        "KEYS",
+        "TOKEN",
+        "TOKENS",
+        "SECRET",
+        "SECRETS",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "CREDENTIALS",
+        "AUTH",
+        "SESSION",
+    }
+)
+
+
+def _looks_like_a_credential(name: str) -> bool:
+    return any(segment in _SECRET_SEGMENTS for segment in name.upper().split("_"))
+
+
+def build_shell_env(
+    cwd: str, metadata: dict[str, str] | None = None, *, scrub_secrets: bool = False
+) -> dict[str, str]:
     """Build the child environment, exposing the session through ``PI_*``.
 
     Session-scoped ``PI_*`` variables inherited from the parent process are
     cleared first so a nested pi session cannot leak stale identity into the
     command it runs.
+
+    ``scrub_secrets`` exists for a shared deployment: the server process holds the
+    company model credential, so without this any user could read it out simply by asking
+    the agent to run ``env``.  It is off by default because a personal install
+    legitimately expects its own tokens (``GITHUB_TOKEN``, cloud CLI credentials) to be
+    visible to the commands it runs.
     """
-    env = dict(os.environ)
-    for key in ("PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"):
-        env.pop(key, None)
+    if scrub_secrets:
+        env = {
+            name: value
+            for name, value in os.environ.items()
+            if not name.startswith("PI_") and not _looks_like_a_credential(name)
+        }
+    else:
+        env = dict(os.environ)
+        for key in ("PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"):
+            env.pop(key, None)
     env["PI_CWD"] = cwd
     if metadata:
         for key, value in metadata.items():
@@ -231,11 +272,14 @@ def write_full_output(raw: bytes) -> str:
     return path
 
 
-def create_bash_tool(cwd: str, metadata: dict[str, str] | None = None) -> AgentTool:
+def create_bash_tool(
+    cwd: str, metadata: dict[str, str] | None = None, *, scrub_secrets: bool = False
+) -> AgentTool:
     """Build the ``bash`` tool bound to ``cwd``.
 
     ``metadata`` is merged into the child environment, which is how the session
-    layer exposes ``PI_SESSION_ID`` / ``PI_MODEL`` and friends.
+    layer exposes ``PI_SESSION_ID`` / ``PI_MODEL`` and friends.  ``scrub_secrets``
+    withholds credential-shaped variables from the child; see :func:`build_shell_env`.
     """
 
     async def execute(
@@ -258,7 +302,7 @@ def create_bash_tool(cwd: str, metadata: dict[str, str] | None = None) -> AgentT
                 f"Working directory does not exist: {working_dir}\nCannot execute bash commands."
             )
 
-        env = build_shell_env(working_dir, metadata)
+        env = build_shell_env(working_dir, metadata, scrub_secrets=scrub_secrets)
 
         if on_update is not None:
             on_update(AgentToolResult(content=[], details=None))

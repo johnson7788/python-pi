@@ -412,6 +412,7 @@ class AgentSession:
         active_tool_names: Sequence[str] | None = None,
         thinking_level: str | None = None,
         extension_runner: Any = None,
+        scrub_shell_env: bool = False,
     ) -> None:
         self._model = model
         self._cwd = cwd
@@ -425,7 +426,11 @@ class AgentSession:
             list(active_tool_names) if active_tool_names is not None else list(DEFAULT_ACTIVE_TOOL_NAMES)
         )
         self._tools: list[AgentTool] = (
-            list(tools) if tools is not None else create_builtin_tools(cwd, self._active_tool_names)
+            list(tools)
+            if tools is not None
+            else create_builtin_tools(
+                cwd, self._active_tool_names, scrub_secrets=scrub_shell_env
+            )
         )
         # Extension tools are merged in and enabled by default: an extension
         # registers a tool because it wants it usable.
