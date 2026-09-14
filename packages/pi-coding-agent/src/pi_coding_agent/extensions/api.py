@@ -382,6 +382,10 @@ class ExtensionHost:
     signal: Any = None
     session: Any = None
     runtime: Any = None
+    #: Configuration for a first-party extension (see ``pi_coding_agent.policy``).  It is
+    #: carried on the host rather than read from a module global because one process can
+    #: now serve several users at once: a global would hand every session the same policy.
+    policy: Any = None
 
     async def send_custom_message(self, content, **kwargs) -> None:
         await self.session.send_custom_message(content, **kwargs)
@@ -425,6 +429,11 @@ class ExtensionContext:
     @property
     def runtime(self) -> Any:
         return self._host.runtime
+
+    @property
+    def policy(self) -> Any:
+        """Deployment-supplied configuration for a first-party extension."""
+        return self._host.policy
 
     def is_project_trusted(self) -> bool:
         return self._host.is_project_trusted

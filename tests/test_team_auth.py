@@ -20,11 +20,12 @@ import websockets
 from conftest import (
     TEAM_ADMIN_PASSWORD,
     TEAM_USER_PASSWORD,
-    FakeOpenAIHandler,
     TeamServer,
     cookie_header,
     login,
+    reset_fake_model,
     team_server,  # noqa: F401 - re-exported so pytest can see the fixture
+    ws_prompt,
 )
 
 from pi_coding_agent.bootstrap import BootstrapOptions
@@ -333,35 +334,6 @@ def _cookie(client: httpx.Client) -> str:
     return cookie_header(client)
 
 
-def _reset_model() -> None:
-    """The fake model serves a tool call on its *first* request only.
-
-    Two users prompting in the same test would otherwise have the second one receive plain
-    text instead of a file write, which would make the isolation assertions vacuous.
-    """
-    FakeOpenAIHandler.calls = 0
-
-
-def _ws_prompt(server: TeamServer, cookie: str, message: str = "create the file") -> list[dict]:
-    async def scenario() -> list[dict]:
-        async with websockets.connect(
-            server.ws_url, additional_headers={"Cookie": cookie}
-        ) as ws:
-            await ws.recv()  # ready
-            await ws.recv()  # initial state
-            await ws.send(json.dumps({"id": "p", "type": "prompt", "message": message}))
-            seen: list[dict] = []
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                record = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
-                seen.append(record)
-                if record.get("type") == "agent_end":
-                    return seen
-            raise AssertionError(f"no agent_end; saw {[r.get('type') for r in seen]}")
-
-    return asyncio.run(scenario())
-
-
 def _create_members(admin: httpx.Client, *usernames: str) -> dict[str, str]:
     """Create accounts and return ``{username: uid}``."""
     uids: dict[str, str] = {}
@@ -391,10 +363,10 @@ def test_two_users_share_nothing(team_server):
             assert bob_state["cwd"] == str(team_server.data_root / "workspaces" / uids["bob"])
 
             # Each user's agent really writes into its own workspace.
-            _reset_model()
-            _ws_prompt(team_server, _cookie(ada))
-            _reset_model()
-            _ws_prompt(team_server, _cookie(bob))
+            reset_fake_model()
+            ws_prompt(team_server, _cookie(ada))
+            reset_fake_model()
+            ws_prompt(team_server, _cookie(bob))
 
             ada_workspace = team_server.data_root / "workspaces" / uids["ada"]
             bob_workspace = team_server.data_root / "workspaces" / uids["bob"]

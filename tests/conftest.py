@@ -283,3 +283,41 @@ def login(server: TeamServer, username: str, password: str) -> httpx.Client:
 
 def cookie_header(client: httpx.Client) -> str:
     return f"{COOKIE_NAME}={client.cookies[COOKIE_NAME]}"
+
+
+def reset_fake_model() -> None:
+    """The fake model serves a tool call on its *first* request only.
+
+    A test that prompts twice (or two users once each) would otherwise have the second
+    turn receive plain text instead of a tool call, which silently makes assertions about
+    tool execution vacuous.
+    """
+    FakeOpenAIHandler.calls = 0
+
+
+def ws_prompt(
+    server: "TeamServer", cookie: str, message: str = "create the file", *, timeout: float = 30.0
+) -> list[dict]:
+    """Drive one full turn over the WebSocket and return every record it produced."""
+    import asyncio
+    import json
+
+    import websockets
+
+    async def scenario() -> list[dict]:
+        async with websockets.connect(
+            server.ws_url, additional_headers={"Cookie": cookie}
+        ) as ws:
+            await ws.recv()  # ready
+            await ws.recv()  # initial state
+            await ws.send(json.dumps({"id": "p", "type": "prompt", "message": message}))
+            seen: list[dict] = []
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                record = json.loads(await asyncio.wait_for(ws.recv(), timeout=timeout))
+                seen.append(record)
+                if record.get("type") == "agent_end":
+                    return seen
+            raise AssertionError(f"no agent_end; saw {[r.get('type') for r in seen]}")
+
+    return asyncio.run(scenario())

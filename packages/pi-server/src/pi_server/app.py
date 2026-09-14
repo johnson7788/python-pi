@@ -42,6 +42,7 @@ from pydantic import BaseModel
 from pi_coding_agent.bootstrap import BootstrapOptions, bootstrap
 from pi_coding_agent.modes.jsonl import serialize_json_line
 from pi_coding_agent.modes.rpc_mode import RpcMode, model_to_json
+from pi_coding_agent.policy import POLICY_EXTENSION_PATH, PolicyConfig
 from pi_coding_agent.session_manager import SessionManager
 
 from . import auth
@@ -155,6 +156,9 @@ class SessionWorker:
         *,
         on_warning: Callable[[str], None] | None = None,
         on_session_file: Callable[[str, str], None] | None = None,
+        policy_factory: Callable[["SessionWorker"], Any] | None = None,
+        on_audit: Callable[[dict[str, Any]], int | None] | None = None,
+        on_audit_finish: Callable[[int, bool, int], None] | None = None,
     ) -> None:
         self.uid = uid
         self.options = options
@@ -163,6 +167,12 @@ class SessionWorker:
         self.last_active = time.monotonic()
         self._on_warning = on_warning
         self._on_session_file = on_session_file
+        self._policy_factory = policy_factory
+        self._on_audit = on_audit
+        self._on_audit_finish = on_audit_finish
+        #: tool_call_id -> (audit row id, monotonic start), so an execution outcome can be
+        #: attached to the decision that authorised it.
+        self._pending_audit: dict[str, tuple[int, float]] = {}
         self._state: Any = None
         self._controller: RpcMode | None = None
         self._lock = asyncio.Lock()
@@ -227,9 +237,63 @@ class SessionWorker:
                 model_registry=state.registry,
                 resource_loader=state.loader,
                 extension_runner=state.extension_runner,
-                emit=self.hub.emit_routed,
+                emit=self._emit,
                 host_mode="web",
             )
+            # The policy goes in after ``RpcMode`` has bound the host, because binding is
+            # what supplies the UI context a confirmation dialog needs.
+            if self._policy_factory is not None and state.extension_runner is not None:
+                policy = self._policy_factory(self)
+                if policy is not None:
+                    state.extension_runner.host.policy = policy
+
+    # -- auditing ----------------------------------------------------------------------
+
+    def _emit(self, payload: dict[str, Any]) -> None:
+        """Every outbound record, observed for audit and then routed to the user's tabs."""
+        try:
+            self._observe_execution(payload)
+        except Exception:  # noqa: BLE001 - auditing must not be able to break the stream
+            pass
+        self.hub.emit_routed(payload)
+
+    def _observe_execution(self, payload: dict[str, Any]) -> None:
+        if payload.get("type") != "tool_execution_end":
+            return
+        call_id = payload.get("toolCallId") or payload.get("tool_call_id") or ""
+        pending = self._pending_audit.pop(str(call_id), None)
+        if pending is None or self._on_audit_finish is None:
+            return
+        row_id, started = pending
+        self._on_audit_finish(row_id, bool(payload.get("isError")), int((time.monotonic() - started) * 1000))
+
+    def record_tool_decision(self, entry: dict[str, Any]) -> None:
+        """The policy extension's audit sink.
+
+        The decision is written as soon as it is made — a blocked call never reaches
+        execution, so waiting for an outcome would lose exactly the rows that matter most.
+        """
+        if self._on_audit is None:
+            return
+        session_id = ""
+        try:
+            session_id = self.controller.session.state().get("session_id") or ""
+        except Exception:  # noqa: BLE001 - a torn-down session still gets audited
+            pass
+        row_id = self._on_audit(
+            {
+                "uid": self.uid,
+                "session_id": session_id,
+                "tool_name": str(entry.get("tool_name") or ""),
+                "tool_call_id": str(entry.get("tool_call_id") or ""),
+                "decision": str(entry.get("decision") or ""),
+                "reason": str(entry.get("reason") or ""),
+                "input_preview": str(entry.get("input_preview") or ""),
+            }
+        )
+        call_id = str(entry.get("tool_call_id") or "")
+        if row_id and call_id:
+            self._pending_audit[call_id] = (int(row_id), time.monotonic())
 
     async def shutdown(self, reason: str = "session closed") -> None:
         """Record where the user was, then release the session object."""
@@ -288,12 +352,18 @@ class SessionRegistry:
         on_warning: Callable[[str], None] | None = None,
         on_session_file: Callable[[str, str], None] | None = None,
         resume_lookup: Callable[[str], str | None] | None = None,
+        policy_factory: Callable[[SessionWorker], Any] | None = None,
+        on_audit: Callable[[dict[str, Any]], int | None] | None = None,
+        on_audit_finish: Callable[[int, bool, int], None] | None = None,
     ) -> None:
         self.base_options = base_options
         self.config = config
         self._on_warning = on_warning
         self._on_session_file = on_session_file
         self._resume_lookup = resume_lookup
+        self._policy_factory = policy_factory
+        self._on_audit = on_audit
+        self._on_audit_finish = on_audit_finish
         self._workers: dict[str, SessionWorker] = {}
         self._lock = asyncio.Lock()
 
@@ -329,6 +399,9 @@ class SessionRegistry:
             resume=resume,
             extension_paths=(),
             no_extensions=not self.config.allow_user_extensions,
+            # The governance extension is a *built-in* path, so it loads in exactly the
+            # configuration that refuses per-user extension code.
+            builtin_extension_paths=(POLICY_EXTENSION_PATH,),
             # The process environment holds the shared credential; without this any user
             # could read it back by asking the agent to run `env`.
             scrub_shell_env=True,
@@ -353,6 +426,9 @@ class SessionRegistry:
                 self.options_for(uid),
                 on_warning=self._on_warning,
                 on_session_file=self._on_session_file,
+                policy_factory=self._policy_factory,
+                on_audit=self._on_audit,
+                on_audit_finish=self._on_audit_finish,
             )
             self._workers[uid] = worker
 
@@ -505,6 +581,45 @@ def create_app(
         database = Database(server_config.db_path)
         database.purge_expired_sessions()
 
+    def _audit_sink(entry: dict[str, Any]) -> int | None:
+        """Write one policy decision to the audit log; never let it break a turn."""
+        if database is None:
+            return None
+        try:
+            return database.record_audit(
+                uid=str(entry.get("uid") or ""),
+                session_id=str(entry.get("session_id") or ""),
+                tool_name=str(entry.get("tool_name") or ""),
+                tool_call_id=str(entry.get("tool_call_id") or ""),
+                decision=str(entry.get("decision") or "unknown"),
+                reason=str(entry.get("reason") or ""),
+                input_preview=str(entry.get("input_preview") or ""),
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _audit_finish(row_id: int, is_error: bool, duration_ms: int) -> None:
+        if database is None:
+            return
+        try:
+            database.finish_audit(row_id, is_error=is_error, duration_ms=duration_ms)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _policy_for(worker: SessionWorker) -> PolicyConfig | None:
+        """The governance policy for one worker's session.
+
+        The workspace root is the worker's ``cwd``, which in team mode is derived from the
+        uid — so the policy enforces exactly the same boundary the filesystem already does.
+        """
+        if database is None:
+            return None
+        return PolicyConfig(
+            workspace_root=worker.options.cwd,
+            uid=worker.uid,
+            record=worker.record_tool_decision,
+        )
+
     registry = SessionRegistry(
         options,
         server_config,
@@ -517,6 +632,9 @@ def create_app(
         resume_lookup=(
             (lambda uid: database.recall_session(uid)) if database is not None else None
         ),
+        policy_factory=_policy_for if database is not None else None,
+        on_audit=_audit_sink if database is not None else None,
+        on_audit_finish=_audit_finish if database is not None else None,
     )
 
     @asynccontextmanager
@@ -775,6 +893,16 @@ def create_app(
         updated = db.get_user(uid)
         assert updated is not None
         return {"user": _user_row_to_json(updated)}
+
+    @app.get("/api/admin/audit")
+    async def admin_audit(
+        _actor: auth.AuthUser = Depends(auth.get_admin_user),
+        uid: str | None = Query(None, description="Restrict to one account"),
+        limit: int = Query(100, ge=1, le=500),
+        offset: int = Query(0, ge=0),
+    ) -> dict[str, Any]:
+        db = require_team_mode()
+        return {"records": db.query_audit(uid=uid, limit=limit, offset=offset)}
 
     @app.get("/api/models")
     async def models(request: Request) -> dict[str, Any]:

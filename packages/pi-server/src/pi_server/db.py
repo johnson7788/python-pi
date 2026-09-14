@@ -501,6 +501,26 @@ class Database:
             )
             return int(cursor.lastrowid or 0)
 
+    def finish_audit(
+        self,
+        row_id: int,
+        *,
+        is_error: bool = False,
+        duration_ms: int | None = None,
+        exit_code: int | None = None,
+    ) -> None:
+        """Attach an outcome to a decision already recorded for the same tool call.
+
+        The decision is written before the call runs (a blocked call never produces an
+        outcome), so this is an update rather than a second row: one audit row per call.
+        """
+        if not row_id:
+            return
+        self._write(
+            "UPDATE audit_records SET is_error = ?, duration_ms = ?, exit_code = ? WHERE id = ?",
+            (1 if is_error else 0, duration_ms, exit_code, int(row_id)),
+        )
+
     def query_audit(
         self,
         *,

@@ -41,6 +41,11 @@ class BootstrapOptions:
     extension_paths: Sequence[str] = ()
     no_extensions: bool = False
     no_skills: bool = False
+    #: Extension files that load even when user extensions are disabled.  This is how a
+    #: shared deployment keeps its own governance extension (*only* that one) while
+    #: refusing per-user extension code, which would run with the process's full
+    #: permissions.
+    builtin_extension_paths: Sequence[str] = ()
     #: Withhold credential-shaped environment variables from shells the agent runs.
     #: A shared deployment turns this on because the process environment holds the
     #: company model credential; a personal install leaves it off so its own CLI
@@ -209,19 +214,34 @@ def load_extension_runner(
     unknown_flags: Sequence[str],
     disabled: bool,
     on_diagnostic: Callable[[str], None] | None = None,
+    builtin_paths: Sequence[str] = (),
 ):
     """Discover and load extensions; returns a runner, or None when there are none.
 
+    ``builtin_paths`` survives ``disabled``: a deployment that refuses user extension code
+    still needs its own governance extension to load.  Those paths are loaded *in
+    addition* to discovery, and after it, so a project extension cannot outrank the
+    governance extension's ``tool_call`` verdict.
+
     Never raises: a broken extension becomes a diagnostic and the session still starts.
     """
-    if disabled:
+    if disabled and not builtin_paths:
         return None
 
     from .extensions import ExtensionRunner, load_extensions, resolve_extension_paths
 
-    paths = resolve_extension_paths(
-        cwd=cwd, agent_dir=agent_dir, project_trusted=trusted, extra_paths=extra_paths
-    )
+    if disabled:
+        paths = [path for path in builtin_paths]
+    else:
+        paths = list(
+            resolve_extension_paths(
+                cwd=cwd, agent_dir=agent_dir, project_trusted=trusted, extra_paths=extra_paths
+            )
+        )
+        for path in builtin_paths:
+            if path not in paths:
+                paths.append(path)
+
     result = load_extensions(paths, flag_values=extension_flag_values(unknown_flags))
     for diagnostic in result.diagnostics:
         message = f"extension {diagnostic.severity}: {diagnostic.path}: {diagnostic.message}"
@@ -277,6 +297,7 @@ async def bootstrap(
         extra_paths=tuple(options.extension_paths),
         unknown_flags=tuple(options.unknown_flags),
         disabled=options.no_extensions,
+        builtin_paths=tuple(options.builtin_extension_paths),
         on_diagnostic=_warn,
     )
 
