@@ -1,0 +1,32 @@
+[project]
+name = "python-pi"
+version = "0.0.0"
+description = "Python port of the pi coding-agent harness (uv workspace root)"
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = [
+    "pi-ai",
+    "pi-agent-core",
+    "pi-coding-agent",
+    "pi-server",
+]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+pi-ai = { workspace = true }
+pi-agent-core = { workspace = true }
+pi-coding-agent = { workspace = true }
+pi-server = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error::RuntimeWarning"]

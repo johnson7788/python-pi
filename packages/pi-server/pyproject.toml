@@ -1,0 +1,24 @@
+[project]
+name = "pi-server"
+version = "0.1.0"
+description = "Browser UI server for python-pi: the pi command protocol over WebSocket"
+requires-python = ">=3.11"
+dependencies = [
+    "pi-ai",
+    "pi-agent-core",
+    "pi-coding-agent",
+    "fastapi>=0.115",
+    # `[standard]` brings the WebSocket protocol implementation; plain uvicorn
+    # cannot accept WS connections at all.
+    "uvicorn[standard]>=0.30",
+]
+
+[project.scripts]
+pi-py-web = "pi_server.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pi_server"]
