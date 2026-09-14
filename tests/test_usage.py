@@ -197,3 +197,61 @@ def test_usage_views_enforce_roles(team_server):
             member.close()
     finally:
         admin.close()
+
+
+def _recorder_worker() -> tuple[object, list[dict]]:
+    from pi_coding_agent.bootstrap import BootstrapOptions
+    from pi_server.app import SessionWorker
+
+    recorded: list[dict] = []
+    worker = SessionWorker("uid-1", BootstrapOptions(cwd="."), on_usage=recorded.append)
+    return worker, recorded
+
+
+def _assistant_message(tokens: int = 10) -> dict:
+    return {
+        "type": "message_end",
+        "message": {
+            "role": "assistant",
+            "usage": {"input": tokens, "output": 1, "cost": {"total": 0.001}},
+        },
+    }
+
+
+def test_the_observer_counts_each_response_exactly_once():
+    """`turn_end` re-sends the same message; counting it would double every turn."""
+    worker, recorded = _recorder_worker()
+
+    worker._observe(_assistant_message())
+    worker._observe({"type": "turn_end", "message": _assistant_message()["message"]})
+    # A user message has no usage to bill.
+    worker._observe({"type": "message_end", "message": {"role": "user", "content": "hi"}})
+    # An empty usage block is not a billable response.
+    worker._observe({"type": "message_end", "message": {"role": "assistant", "usage": {}}})
+
+    assert len(recorded) == 1
+    assert recorded[0]["request_kind"] == "turn"
+    assert recorded[0]["input_tokens"] == 10
+    assert recorded[0]["uid"] == "uid-1"
+
+
+def test_compaction_is_accounted_as_its_own_kind():
+    """Compaction is the most expensive call a session makes and emits no message_end."""
+    worker, recorded = _recorder_worker()
+
+    worker._observe(
+        {
+            "type": "response",
+            "command": "compact",
+            "success": True,
+            "data": {"usage": {"input": 50_000, "output": 400, "cost": {"total": 0.12}}},
+        }
+    )
+    assert recorded[0]["request_kind"] == "compaction"
+    assert recorded[0]["input_tokens"] == 50_000
+
+    # A failed compaction spent nothing worth recording, and neither did a non-compact
+    # response that happens to carry a usage field.
+    worker._observe({"type": "response", "command": "compact", "success": False, "data": {}})
+    worker._observe({"type": "response", "command": "get_state", "success": True, "data": {}})
+    assert len(recorded) == 1

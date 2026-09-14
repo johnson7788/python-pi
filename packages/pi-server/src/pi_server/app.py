@@ -265,22 +265,12 @@ class SessionWorker:
             self._observe_tool_end(payload)
         elif kind == "message_end":
             self._observe_message_end(payload)
+        elif kind == "response":
+            self._observe_response(payload)
 
-    def _observe_message_end(self, payload: dict[str, Any]) -> None:
-        """Record one model response's usage.
-
-        ``message_end`` fires once per assistant message and carries that message's own
-        usage, so this is per-response accounting rather than a running total — which is
-        what makes the sum over a month meaningful.  ``turn_end`` carries the same message
-        again and is deliberately ignored, or every response would be counted twice.
-        """
-        if self._on_usage is None:
-            return
-        message = payload.get("message")
-        if not isinstance(message, dict) or message.get("role") != "assistant":
-            return
-        usage = message.get("usage")
-        if not isinstance(usage, dict):
+    def _record_usage(self, usage: Any, request_kind: str) -> None:
+        """Persist one usage payload, if it reports anything at all."""
+        if self._on_usage is None or not isinstance(usage, dict):
             return
         input_tokens = int(usage.get("input") or 0)
         output_tokens = int(usage.get("output") or 0)
@@ -308,9 +298,35 @@ class SessionWorker:
                 "cache_read_tokens": int(usage.get("cacheRead") or 0),
                 "cache_write_tokens": int(usage.get("cacheWrite") or 0),
                 "cost": cost,
-                "request_kind": "turn",
+                "request_kind": request_kind,
             }
         )
+
+    def _observe_message_end(self, payload: dict[str, Any]) -> None:
+        """Record one model response's usage.
+
+        ``message_end`` fires once per assistant message and carries that message's own
+        usage, so this is per-response accounting rather than a running total — which is
+        what makes the sum over a month meaningful.  ``turn_end`` carries the same message
+        again and is deliberately ignored, or every response would be counted twice.
+        """
+        message = payload.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            return
+        self._record_usage(message.get("usage"), "turn")
+
+    def _observe_response(self, payload: dict[str, Any]) -> None:
+        """Record context compaction, which never produces a ``message_end``.
+
+        Compaction is a full summarisation pass over the transcript, so it is one of the
+        most expensive calls a session makes; leaving it out would understate usage in
+        exactly the sessions that use the most tokens.
+        """
+        if not payload.get("success") or payload.get("command") != "compact":
+            return
+        data = payload.get("data")
+        if isinstance(data, dict):
+            self._record_usage(data.get("usage"), "compaction")
 
     def _observe_tool_end(self, payload: dict[str, Any]) -> None:
         call_id = payload.get("toolCallId") or payload.get("tool_call_id") or ""
@@ -1020,6 +1036,7 @@ def create_app(
             "windowStart": since,
             "summary": db.usage_summary(user.uid, since),
             "byDay": db.usage_by_day(user.uid, since),
+            "byKind": db.usage_by_kind(user.uid, since),
             "bySession": db.usage_by_session(user.uid, since),
             "quota": {
                 "tokens": row["monthly_token_quota"] if row is not None else None,

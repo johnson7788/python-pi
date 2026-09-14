@@ -447,6 +447,15 @@ class Database:
         )
         return [dict(row) for row in rows]
 
+    def usage_by_kind(self, uid: str, since: str) -> list[dict[str, Any]]:
+        """Split a user's usage into ordinary turns and context compaction."""
+        rows = self._query(
+            f"SELECT request_kind, {self._USAGE_SUMS} FROM usage_records"
+            " WHERE uid = ? AND ts >= ? GROUP BY request_kind ORDER BY request_kind",
+            (uid, since),
+        )
+        return [dict(row) for row in rows]
+
     def usage_all_users(self, since: str) -> list[dict[str, Any]]:
         """Admin view: every account's usage this window, including those with none."""
         rows = self._query(
