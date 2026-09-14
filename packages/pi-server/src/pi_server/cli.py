@@ -90,24 +90,32 @@ def _server_config(args: argparse.Namespace) -> ServerConfig:
 
 
 def _check_sandbox_backend(config: ServerConfig) -> None:
-    """Refuse to start when the requested execution backend does not exist.
+    """Refuse to start on a sandbox configuration that cannot contain anything.
 
-    The alternative — starting anyway and running every command in-process — would mean an
-    operator who asked for containment silently does not get it.
+    An operator who sets ``PI_SANDBOX_BACKEND=provisioner`` believes commands are contained.
+    Starting anyway with a missing URL or token would mean they silently are not, and the
+    first sign of it would be a command running on the host.
     """
-    from pi_coding_agent.sandbox import assert_backend_usable, select_backend
+    from pi_coding_agent.sandbox import SandboxScope, assert_backend_usable, select_backend
 
+    # A throwaway scope: this checks that the *configuration* is complete, not that a
+    # particular user's container exists.
+    scope = SandboxScope(uid="startup-check", thread="startup-check", workspace=config.data_root)
     try:
-        backend = select_backend(config.sandbox_backend)
-    except ValueError as error:
-        print(f"pi-py-web: {error}", file=sys.stderr)
-        raise SystemExit(2) from None
-    try:
+        backend = select_backend(
+            config.sandbox_backend,
+            scope=scope,
+            url=config.provisioner_url,
+            token=config.provisioner_token,
+            image=config.sandbox_image,
+            network=config.sandbox_network,
+            run_as=config.sandbox_run_as,
+        )
         assert_backend_usable(backend)
-    except NotImplementedError as error:
+    except (ValueError, RuntimeError) as error:
         print(f"pi-py-web: {error}", file=sys.stderr)
         print(
-            "pi-py-web: unset PI_SANDBOX_BACKEND to run in-process, or wait for phase two.",
+            "pi-py-web: unset PI_SANDBOX_BACKEND to run in-process. See docs/DEPLOY.md.",
             file=sys.stderr,
         )
         raise SystemExit(2) from None

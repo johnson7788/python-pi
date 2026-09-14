@@ -273,14 +273,26 @@ def write_full_output(raw: bytes) -> str:
 
 
 def create_bash_tool(
-    cwd: str, metadata: dict[str, str] | None = None, *, scrub_secrets: bool = False
+    cwd: str,
+    metadata: dict[str, str] | None = None,
+    *,
+    scrub_secrets: bool = False,
+    backend: Any = None,
 ) -> AgentTool:
     """Build the ``bash`` tool bound to ``cwd``.
 
-    ``metadata`` is merged into the child environment, which is how the session
-    layer exposes ``PI_SESSION_ID`` / ``PI_MODEL`` and friends.  ``scrub_secrets``
-    withholds credential-shaped variables from the child; see :func:`build_shell_env`.
+    ``metadata`` is merged into the child environment, which is how the session layer exposes
+    ``PI_SESSION_ID`` / ``PI_MODEL`` and friends.
+
+    ``backend`` is *where the command runs* — this process by default, or a sandbox container
+    when the deployment supplies one (see ``pi_coding_agent.sandbox``).  There is deliberately
+    only one execution path: a second inline branch would drift from the sandboxed one, and
+    the sandboxed path is the one nobody notices is broken.
     """
+    if backend is None:
+        from ..sandbox import LocalBackend
+
+        backend = LocalBackend(scrub_secrets=scrub_secrets)
 
     async def execute(
         tool_call_id: str,
@@ -301,8 +313,6 @@ def create_bash_tool(
             raise RuntimeError(
                 f"Working directory does not exist: {working_dir}\nCannot execute bash commands."
             )
-
-        env = build_shell_env(working_dir, metadata, scrub_secrets=scrub_secrets)
 
         if on_update is not None:
             on_update(AgentToolResult(content=[], details=None))
@@ -351,15 +361,24 @@ def create_bash_tool(
                 )
             return text, {"truncation": truncation.to_dict(), "fullOutputPath": path}
 
-        try:
-            result = await run_command(command, working_dir, env, timeout_seconds, signal, on_chunk=on_chunk)
-        except CommandAborted as exc:
-            text, _details = format_output(exc.result, "")
-            raise RuntimeError(_append_status(text, "Command aborted")) from None
-        except CommandTimedOut as exc:
-            text, _details = format_output(exc.result, "")
+        outcome = await backend.exec(
+            command,
+            cwd=working_dir,
+            metadata=metadata,
+            timeout_seconds=timeout_seconds,
+            signal=signal,
+            on_chunk=on_chunk,
+        )
+        # The backend reports rather than raises (a remote one cannot raise our exception
+        # types), so the two failures the tool distinguishes are re-established here.
+        result = CommandResult(text=outcome.output, raw=outcome.raw, exit_code=outcome.exit_code)
+        if outcome.aborted:
+            text, _details = format_output(result, "")
+            raise RuntimeError(_append_status(text, "Command aborted"))
+        if outcome.timed_out:
+            text, _details = format_output(result, "")
             seconds = format_seconds(timeout_seconds) if timeout_seconds is not None else "0"
-            raise RuntimeError(_append_status(text, f"Command timed out after {seconds} seconds")) from None
+            raise RuntimeError(_append_status(text, f"Command timed out after {seconds} seconds"))
 
         text, details = format_output(result)
         if result.exit_code not in (0, None):

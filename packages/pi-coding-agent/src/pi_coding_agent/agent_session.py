@@ -413,6 +413,7 @@ class AgentSession:
         thinking_level: str | None = None,
         extension_runner: Any = None,
         scrub_shell_env: bool = False,
+        sandbox_backend: Any = None,
     ) -> None:
         self._model = model
         self._cwd = cwd
@@ -429,7 +430,10 @@ class AgentSession:
             list(tools)
             if tools is not None
             else create_builtin_tools(
-                cwd, self._active_tool_names, scrub_secrets=scrub_shell_env
+                cwd,
+                self._active_tool_names,
+                scrub_secrets=scrub_shell_env,
+                backend=sandbox_backend,
             )
         )
         # Extension tools are merged in and enabled by default: an extension

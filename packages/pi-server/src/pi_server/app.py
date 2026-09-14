@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import inspect
 import json
 import os
 import time
@@ -57,6 +58,11 @@ _MIN_PASSWORD_LENGTH = 8
 
 #: The single implicit tenant in ``single`` mode.  Team mode never uses it.
 LOCAL_UID = "local"
+
+#: A user has at most one live worker, so one sandbox slot per user is enough.  Naming it
+#: (rather than hashing something dynamic) is what makes the container id stable across an
+#: idle eviction and restart, so a user's installed packages survive a quiet afternoon.
+DEFAULT_SANDBOX_SLOT = "session"
 
 #: Dialog methods that block a handler until a client answers.
 BLOCKING_DIALOG_METHODS = frozenset({"select", "confirm", "input", "editor"})
@@ -367,7 +373,7 @@ class SessionWorker:
             self._pending_audit[call_id] = (int(row_id), time.monotonic())
 
     async def shutdown(self, reason: str = "session closed") -> None:
-        """Record where the user was, then release the session object."""
+        """Record where the user was, then release the session object and its sandbox."""
         if self._on_session_file is not None:
             path = self.session_file()
             if path:
@@ -378,6 +384,24 @@ class SessionWorker:
             controller.close()
         if state is not None:
             await state.shutdown(reason)
+        await self._release_sandbox()
+
+    async def _release_sandbox(self) -> None:
+        """Drop the user's container when their session goes away.
+
+        Best effort: the provisioner also reaps idle containers, because a server that dies
+        cannot be relied on to have cleaned up.
+        """
+        backend = getattr(self.options, "sandbox_backend", None)
+        release = getattr(backend, "release", None)
+        if release is None:
+            return
+        try:
+            result = release()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001 - a stuck container must not block eviction
+            pass
 
     def state_payload(self) -> dict[str, Any]:
         """The same shape the ``get_state`` command returns."""
@@ -454,10 +478,50 @@ class SessionRegistry:
 
     # -- lifecycle -------------------------------------------------------------------
 
+    def backend_for(self, uid: str, workspace: str) -> Any:
+        """The execution backend for one user's session.
+
+        The scope is per **user**, not per command: one container serves their conversation
+        so a ``ls`` does not pay for a container start, and it is released when their worker
+        is evicted.  The id is a function of the uid, so a user who comes back finds the
+        same container if the provisioner has not reaped it yet.
+        """
+        if self.config.sandbox_backend in ("", "local", "process"):
+            return None  # LocalBackend is the tool's own default; no need to construct one.
+        from pi_coding_agent.sandbox import SandboxScope, host_path_for, select_backend
+
+        host_workspace = host_path_for(
+            workspace,
+            app_root=self.config.data_root,
+            host_root=self.config.host_data_root,
+        )
+        scope = SandboxScope(
+            uid=uid,
+            thread=DEFAULT_SANDBOX_SLOT,
+            workspace=workspace,
+            host_workspace=host_workspace,
+        )
+        return select_backend(
+            self.config.sandbox_backend,
+            scope=scope,
+            url=self.config.provisioner_url,
+            token=self.config.provisioner_token,
+            image=self.config.sandbox_image,
+            network=self.config.sandbox_network,
+            run_as=self.config.sandbox_run_as,
+        )
+
     def options_for(self, uid: str) -> BootstrapOptions:
         """Per-user session options.  Single mode passes the command line through."""
         if not self.config.requires_auth:
-            return self.base_options
+            # Sandboxing is orthogonal to tenancy: a single-user install may still want its
+            # commands contained, so the backend is attached in both modes.
+            if self.config.sandbox_backend in ("", "local", "process"):
+                return self.base_options
+            return dataclasses.replace(
+                self.base_options,
+                sandbox_backend=self.backend_for(LOCAL_UID, self.base_options.cwd),
+            )
         workspace, agent = self.config.ensure_user_layout(uid)
         resume = self._resume_lookup(uid) if self._resume_lookup is not None else None
         if resume and not os.path.isfile(resume):
@@ -478,6 +542,7 @@ class SessionRegistry:
             # The process environment holds the shared credential; without this any user
             # could read it back by asking the agent to run `env`.
             scrub_shell_env=True,
+            sandbox_backend=self.backend_for(uid, workspace),
         )
 
     async def acquire(self, uid: str) -> SessionWorker:

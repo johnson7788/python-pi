@@ -75,6 +75,19 @@ def _secret(name: str) -> str | None:
         return None
 
 
+def _default_run_as() -> str | None:
+    """The uid:gid a sandbox container should run as.
+
+    Defaulting to this process's ids is what keeps the bind-mounted workspace writable: a
+    container running as root would leave root-owned files behind, and the server would then
+    be unable to edit or delete the agent's own output.  POSIX only; on Windows the daemon
+    decides and ``None`` means "whatever the image defaults to".
+    """
+    if not hasattr(os, "getuid"):  # pragma: no cover - Windows
+        return None
+    return f"{os.getuid()}:{os.getgid()}"
+
+
 @dataclass(frozen=True)
 class ServerConfig:
     """Where the deployment keeps its state, and how strict it is."""
@@ -99,9 +112,22 @@ class ServerConfig:
     #: Caps that bound the blast radius of a single process holding every session.
     max_active_users: int = 20
     session_idle_minutes: int = 30
-    #: Which execution backend the sessions should use.  Only ``local`` exists in phase one;
-    #: anything else is refused at startup rather than silently ignored.
+    #: Which execution backend the sessions should use.  ``local`` runs in this process;
+    #: ``provisioner`` runs each command in a container (see ``PI_SANDBOX_*`` below).
     sandbox_backend: str = "local"
+    #: Where the provisioner service lives, and the shared secret it expects.
+    provisioner_url: str | None = None
+    provisioner_token: str | None = None
+    #: The image a sandbox container is built from, and whether it gets a network.
+    sandbox_image: str | None = None
+    sandbox_network: str | None = None
+    #: uid:gid the container runs as.  Defaults to this process's, so files created inside
+    #: the sandbox stay writable by the server that owns the workspace.
+    sandbox_run_as: str | None = None
+    #: The data root **as the container host sees it**.  Only needed when the server itself
+    #: runs in a container: the Docker daemon resolves bind mounts on the host, so the path
+    #: the server knows is not the path the daemon can mount.
+    host_data_root: str | None = None
     #: How long a confirmation dialog may stay unanswered before the call is refused.
     #: A turn that waits forever on a closed browser tab is worse than a denied command.
     confirm_timeout_seconds: float = 300.0
@@ -191,6 +217,12 @@ class ServerConfig:
             "api_key": _secret("PI_API_KEY"),
             "template_agent_dir": os.environ.get("PI_TEMPLATE_AGENT_DIR") or None,
             "sandbox_backend": (os.environ.get("PI_SANDBOX_BACKEND") or "local").strip().lower(),
+            "provisioner_url": os.environ.get("PI_SANDBOX_PROVISIONER_URL") or None,
+            "provisioner_token": _secret("PI_SANDBOX_PROVISIONER_TOKEN"),
+            "sandbox_image": os.environ.get("PI_SANDBOX_IMAGE") or None,
+            "sandbox_network": os.environ.get("PI_SANDBOX_NETWORK") or None,
+            "sandbox_run_as": os.environ.get("PI_SANDBOX_RUN_AS") or _default_run_as(),
+            "host_data_root": os.environ.get("PI_SANDBOX_HOST_DATA_ROOT") or None,
         }
         ttl = os.environ.get("PI_SESSION_TTL_HOURS")
         if ttl:

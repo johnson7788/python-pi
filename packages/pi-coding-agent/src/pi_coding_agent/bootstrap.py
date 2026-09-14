@@ -51,6 +51,9 @@ class BootstrapOptions:
     #: company model credential; a personal install leaves it off so its own CLI
     #: tokens keep working.
     scrub_shell_env: bool = False
+    #: Where commands run: None means this process.  A deployment that wants containment
+    #: supplies a sandbox backend (see ``pi_coding_agent.sandbox``).
+    sandbox_backend: Any = None
     unknown_flags: Sequence[str] = ()
     host_mode: str = "print"
     with_runtime: bool = False
@@ -341,6 +344,7 @@ async def bootstrap(
             thinking_level=thinking_level,
             extension_runner=extension_runner,
             scrub_shell_env=options.scrub_shell_env,
+            sandbox_backend=options.sandbox_backend,
         )
 
     runtime = None
