@@ -1,0 +1,51 @@
+# Caddy in front of the pi-server team deployment.
+#
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# Caddy obtains and renews the certificate automatically, which is why the server itself
+# binds 127.0.0.1 and sets Secure on the session cookie: TLS terminates here.
+#
+# The command socket at /api/ws needs no special configuration — Caddy's reverse_proxy
+# handles the Upgrade handshake. It *does* need `flush_interval -1`, because the whole point
+# of the transcript stream is that tokens appear as they are produced rather than when a
+# buffer fills up.
+
+pi.example.com {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:8787 {
+		# Stream instead of buffering. Without this, a long answer arrives in chunks.
+		flush_interval -1
+		# A turn can legitimately run for minutes on a large refactor; do not hang up on it.
+		transport http {
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		# The app keeps everything on one origin, so nothing needs to leak a referrer.
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/pi.log
+		# Default access logs record the request line only; no cookies, so no session ids.
+		format json
+	}
+}
+
+# If the deployment is internal-only, replace the hostname above with the internal name and
+# use Caddy's internal CA instead:
+#
+#   pi.internal {
+#       tls internal
+#       reverse_proxy 127.0.0.1:8787
+#   }
+#
+# ...and drop PI_COOKIE_SECURE from the unit only if that host is served over plain HTTP,
+# which it should not be.

@@ -194,6 +194,44 @@ uv run python examples/demo_model_server.py --port 8791
 配置方式见 `tests/conftest.py` 里的 `write_agent_config`。注意它只会回那两段固定内容，
 不要误以为模型坏了。
 
+## 团队部署（多租户）
+
+同一套服务端也支持公司内网多人共用，用 `--auth-mode team` 打开：
+
+```bash
+PI_API_KEY=sk-xxx .venv/bin/python -m pi_server.cli \
+  --auth-mode team --data-root /var/lib/pi --model deepseek/deepseek-v4-flash
+# 首次启动会创建 superadmin，并把一次性密码打到 stderr
+```
+
+| | `single`（默认） | `team` |
+|---|---|---|
+| 账号 | 无 | 有；管理员建号、可禁用、可重置密码 |
+| 会话 | 全进程一个 | 每个用户一个，互不可见 |
+| 工作目录 | `--cwd` 指定的目录 | `<data-root>/workspaces/<uid>/` |
+| 配置目录 | `--agent-dir` | `<data-root>/agents/<uid>/`，从 `<data-root>/template` 播种 |
+| 凭据 | 命令行/环境 | 一把共用 key，按人记账并可设月度上限 |
+| 工具调用 | 不干预 | 白名单 + 危险命令闸门 + 审计日志 |
+| 页面 | 会话 | 会话 / 文件 / 用量 / 管理（成员、全局用量、审计） |
+
+三个必须知道的约束：
+
+- **单进程是硬约束**：会话状态在进程内存里，必须 `--workers 1`。横向扩展要先换掉注册表。
+- **一期没有沙盒**：白名单与审批能防误操作，防不住恶意用户。真正的边界是二期把执行面搬进容器
+  （`pi_coding_agent/sandbox/`，目前只有 `local`；设 `PI_SANDBOX_BACKEND=provisioner` 会**拒绝启动**，
+  而不是悄悄退化成不隔离）。
+- 用户自带的扩展在 team 模式下**不加载**：per-user 的 `extensions/` 等于给每个同事一个以服务进程
+  权限运行的入口。
+
+完整安装、systemd 硬化、Caddy、备份与排查见 [`docs/DEPLOY.md`](docs/DEPLOY.md)；
+设计取舍见 [`docs/plans/2026-09-14-team-saas-design.md`](docs/plans/2026-09-14-team-saas-design.md)。
+
+部署后自检（20 项，覆盖「是否真的在拦截」）：
+
+```bash
+python deploy/smoke.py https://pi.example.com --username admin --password '…'
+```
+
 ## 快速开始
 
 需要 Python 3.11+ 与 [uv](https://docs.astral.sh/uv/)。

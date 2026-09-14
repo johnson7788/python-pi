@@ -349,3 +349,44 @@ SandboxBackend（Protocol）
 | SQLite 单写者 | 本设计选型 | WAL + busy_timeout；进程数 >1 或人数 >50 换 PG |
 | 共用 key 的滥用面 | D3 选型 | 配额封顶 + 审计；环境净化防止直接读取 |
 | pi 会话文件与团队存储双写不一致 | JSONL 是权威 | 不做双写：会话只在磁盘，库里只存元数据与用量 |
+
+## 15. 实现状态（2026-09-14）
+
+M0–M6 已全部落地并提交，`uv run pytest -q` 与 `cd web && npm run verify` 均绿。
+
+| 里程碑 | 状态 | 主要产物 |
+|---|---|---|
+| M0 身份层 | ✅ | `pi_server/{config,auth,db}.py` |
+| M1 会话注册表 | ✅ | `pi_server/app.py` 的 `SessionWorker` / `SessionRegistry` |
+| M2 工作区文件 API | ✅ | `pi_server/workspace.py` |
+| M3 治理层 | ✅ | `pi_coding_agent/policy/{rules,extension}.py`；审计落库；子进程环境净化 |
+| M4 用量与配额 | ✅ | worker 的事件观测 + preflight 拦截；`/api/usage/me`、`/api/admin/usage` |
+| M5 前端 | ✅ | `web/src/{lib/useAuth,lib/router,pages/*}`、`components/TopBar` |
+| M6 部署 | ✅ | `deploy/{pi-server.service,Caddyfile,team.env.example,backup.sh,smoke.py}`、`docs/DEPLOY.md` |
+| §12 二期口子 | ✅（仅留口子） | `pi_coding_agent/sandbox/`：协议 + `LocalBackend` + `ProvisionerBackend` 占位 |
+
+### 实现过程中与原设计的偏离
+
+1. **每用户一个活跃 worker，不是每用户 N 个会话**。同用户的多标签页仍共享同一会话（与改造前一致）；
+   多 slot 需要按 session 寻址与路径校验，留到确有需要时再做。
+2. **`/files` 页面从 M2 挪到 M5**：在没有登录页之前，一个需要登录的文件页谁也到不了。
+3. **治理层建在扩展 seam 上**，`tools/*.py` 一行未改；代价是策略扩展必须先加载，
+   因此新增 `BootstrapOptions.builtin_extension_paths`（内置扩展在 `no_extensions` 下仍加载）。
+4. **`bootstrap` 的 `SystemExit` 收敛为 `BootstrapError`**：它不是 `Exception`，在服务端会击穿
+   请求处理（HTTP 503 / WS 错误帧）。
+5. **`bash` 子进程环境按变量名分段剔除凭据**，并把 key 从 argv 改到环境/文件：
+   `ps aux` 对同机所有账号可见。
+6. **策略新增通用路径扫描与 `protected_roots`**：原设计的正则只认写形状，挡不住
+   `cat ../data/agents/<他人 uid>/sessions/*.jsonl` 这类读。
+7. **压缩（compaction）单独记账**：它不发 `message_end`，不记的话用量最大的会话反而被低估。
+
+### 已知缺口（有意保留）
+
+- 工具越界只由策略扩展拦（同一挂点，但不如工具内自校验硬）；`cd /elsewhere && rm -rf *`
+  这类先改目录再操作无法静态识别。
+- 文件工具仍直连文件系统，未走 §12 的协议；二期一次性迁移，避免两条执行路径漂移。
+- `tool_execution_start` 在策略判断**之前**发出，因此不能当作「命令执行了」的证据；
+  服务端审计与 UI 都以 `tool_execution_end` 为准（已有测试钉住这一点）。
+- 自动压缩若走内部触发路径，可能只记到手动 `compact` 的那次。
+- 浏览器端的 team 模式登录流程由 `verify-dom.mjs --team`（jsdom + 假 transport）与
+  服务端 API 测试共同覆盖，没有真实浏览器的端到端测试。

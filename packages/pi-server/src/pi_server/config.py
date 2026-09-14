@@ -99,6 +99,12 @@ class ServerConfig:
     #: Caps that bound the blast radius of a single process holding every session.
     max_active_users: int = 20
     session_idle_minutes: int = 30
+    #: Which execution backend the sessions should use.  Only ``local`` exists in phase one;
+    #: anything else is refused at startup rather than silently ignored.
+    sandbox_backend: str = "local"
+    #: How long a confirmation dialog may stay unanswered before the call is refused.
+    #: A turn that waits forever on a closed browser tab is worse than a denied command.
+    confirm_timeout_seconds: float = 300.0
 
     # -- derived paths ---------------------------------------------------------------
 
@@ -184,6 +190,7 @@ class ServerConfig:
             "admin_username": os.environ.get("PI_ADMIN_USERNAME") or "admin",
             "api_key": _secret("PI_API_KEY"),
             "template_agent_dir": os.environ.get("PI_TEMPLATE_AGENT_DIR") or None,
+            "sandbox_backend": (os.environ.get("PI_SANDBOX_BACKEND") or "local").strip().lower(),
         }
         ttl = os.environ.get("PI_SESSION_TTL_HOURS")
         if ttl:
@@ -194,6 +201,9 @@ class ServerConfig:
         idle = os.environ.get("PI_SESSION_IDLE_MINUTES")
         if idle:
             values["session_idle_minutes"] = int(idle)
+        confirm = os.environ.get("PI_CONFIRM_TIMEOUT_SECONDS")
+        if confirm:
+            values["confirm_timeout_seconds"] = float(confirm)
         values.update(overrides)
         return cls(**values)  # type: ignore[arg-type]
 

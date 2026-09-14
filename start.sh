@@ -95,7 +95,14 @@ else
 fi
 
 ARGS=(--cwd "$PROJECT_DIR" --model "$MODEL" --agent-dir "$AGENT_DIR"
-      --host "$HOST" --port "$PORT" --api-key "$API_KEY")
+      --host "$HOST" --port "$PORT")
+
+# 凭据走环境变量，不走命令行参数。
+#
+# 命令行是公开的：同一台机器上任何账号 `ps aux` 都能看到全量 argv，key 会被完整打印出来
+# 并可能落进 shell history / 审计日志。环境变量只有进程属主和 root 能读（/proc/<pid>/environ）。
+# 团队部署更进一步，用 systemd 的 LoadCredential + PI_API_KEY_FILE，见 deploy/。
+export PI_API_KEY="$API_KEY"
 
 # skills 会整份列进每次请求的 system prompt，本机 ~/.agents/skills 下有 100 个
 # （来自其它 agent 工具），实测多出约 10k tokens，所以给一个开关。

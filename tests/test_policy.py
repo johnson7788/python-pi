@@ -10,10 +10,14 @@ pass.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import time
 from pathlib import Path
 
 import pytest
+import websockets
 from conftest import (
     TEAM_ADMIN_PASSWORD,
     TEAM_USER_PASSWORD,
@@ -356,3 +360,80 @@ def test_climbing_past_the_data_root_is_still_confirmed(workspace: Path, tmp_pat
     # A climb that happens to land on a system read root is ordinary work, not an escape.
     verdict = classify_command_with("cat /etc/hosts", config)
     assert verdict.decision is Decision.ALLOW
+
+
+# --------------------------------------------------------------------------------------
+# The approval round trip, over a real socket
+# --------------------------------------------------------------------------------------
+
+
+def _approval_turn(server, cookie: str, approve: bool) -> list[dict]:
+    """Prompt once, answer the confirmation dialog, and return every record produced.
+
+    Note what is *not* evidence here: ``tool_execution_start`` is emitted **before** the
+    policy is consulted, so its presence says nothing about whether the command ran. The
+    reason the assertions below read the tool result text instead, and why a consumer of
+    this stream must treat ``tool_execution_end`` as the only completion signal.
+    """
+    async def scenario() -> list[dict]:
+        async with websockets.connect(
+            server.ws_url, additional_headers={"Cookie": cookie}
+        ) as ws:
+            await ws.recv()  # ready
+            await ws.recv()  # initial state
+            await ws.send(json.dumps({"id": "p", "type": "prompt", "message": "do the thing"}))
+
+            seen: list[dict] = []
+            deadline = time.monotonic() + 40
+            while time.monotonic() < deadline:
+                record = json.loads(await asyncio.wait_for(ws.recv(), timeout=40))
+                seen.append(record)
+                if record.get("type") == "extension_ui_request" and record.get("method") == "confirm":
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "type": "extension_ui_response",
+                                "id": record["id"],
+                                "confirmed": approve,
+                            }
+                        )
+                    )
+                elif record.get("type") == "agent_end":
+                    return seen
+            raise AssertionError(f"no agent_end; saw {[r.get('type') for r in seen]}")
+
+    return asyncio.run(scenario())
+
+
+def test_a_confirmed_call_runs_and_a_refused_one_does_not(team_server):
+    admin = login(team_server, "admin", TEAM_ADMIN_PASSWORD)
+    try:
+        created = admin.post(
+            "/api/admin/users", json={"username": "ada", "password": TEAM_USER_PASSWORD}
+        )
+        assert created.status_code == 200, created.text
+        member = login(team_server, "ada", TEAM_USER_PASSWORD)
+        try:
+            # `git push` needs "publishing to a remote" confirmation, and in a workspace that
+            # is not a git repository it fails immediately — so the two outcomes are told
+            # apart by *what the shell printed*, not merely by whether it was started.
+            reset_fake_model(tool="bash", bash_command="git push")
+            refused = json.dumps(_approval_turn(team_server, cookie_header(member), approve=False))
+            assert "did not approve" in refused, "the refusal reason never reached the model"
+            assert "not a git repository" not in refused, "a refused command ran anyway"
+
+            reset_fake_model(tool="bash", bash_command="git push")
+            approved = json.dumps(_approval_turn(team_server, cookie_header(member), approve=True))
+            assert "not a git repository" in approved, "an approved command did not actually run"
+
+            decisions = [
+                row["decision"]
+                for row in admin.get("/api/admin/audit").json()["records"]
+                if row["tool_name"] == "bash"
+            ]
+            assert "denied" in decisions
+            assert "approved" in decisions
+        finally:
+            member.close()
+    finally:
+        admin.close()

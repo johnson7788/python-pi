@@ -89,6 +89,30 @@ def _server_config(args: argparse.Namespace) -> ServerConfig:
     return ServerConfig.from_env(**overrides)
 
 
+def _check_sandbox_backend(config: ServerConfig) -> None:
+    """Refuse to start when the requested execution backend does not exist.
+
+    The alternative — starting anyway and running every command in-process — would mean an
+    operator who asked for containment silently does not get it.
+    """
+    from pi_coding_agent.sandbox import assert_backend_usable, select_backend
+
+    try:
+        backend = select_backend(config.sandbox_backend)
+    except ValueError as error:
+        print(f"pi-py-web: {error}", file=sys.stderr)
+        raise SystemExit(2) from None
+    try:
+        assert_backend_usable(backend)
+    except NotImplementedError as error:
+        print(f"pi-py-web: {error}", file=sys.stderr)
+        print(
+            "pi-py-web: unset PI_SANDBOX_BACKEND to run in-process, or wait for phase two.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
+
+
 def _bootstrap_first_admin(config: ServerConfig, password: str | None) -> None:
     """Create the first superadmin, printing a generated password exactly once."""
     config.ensure_layout()
@@ -142,6 +166,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(1) from None
 
     config = _server_config(args)
+    _check_sandbox_backend(config)
     if config.requires_auth:
         _bootstrap_first_admin(config, args.admin_password)
 

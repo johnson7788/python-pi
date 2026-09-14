@@ -46,6 +46,10 @@ class FakeOpenAIHandler(BaseHTTPRequestHandler):
 
     calls = 0
     bodies: list[dict] = []
+    #: Which tool the first response asks for. `bash` exists so the approval round-trip can
+    #: be driven end to end instead of only through the extension's own unit tests.
+    tool = "write"
+    bash_command = "git push"
 
     def log_message(self, *args) -> None:  # keep test output clean
         pass
@@ -58,30 +62,52 @@ class FakeOpenAIHandler(BaseHTTPRequestHandler):
         type(self).calls += 1
         payload = b""
         if type(self).calls == 1:
-            payload += sse(
-                chunk(
-                    {
-                        "role": "assistant",
-                        "tool_calls": [
-                            {
-                                "index": 0,
-                                "id": "call_1",
-                                "type": "function",
-                                "function": {"name": "write", "arguments": '{"path": "e2e.txt", '},
-                            }
-                        ],
-                    }
+            if type(self).tool == "bash":
+                payload += sse(
+                    chunk(
+                        {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "bash",
+                                        "arguments": json.dumps(
+                                            {"command": type(self).bash_command}
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    )
                 )
-            )
-            payload += sse(
-                chunk(
-                    {
-                        "tool_calls": [
-                            {"index": 0, "function": {"arguments": '"content": "written by e2e"}'}}
-                        ]
-                    }
+            else:
+                payload += sse(
+                    chunk(
+                        {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "write", "arguments": '{"path": "e2e.txt", '},
+                                }
+                            ],
+                        }
+                    )
                 )
-            )
+                payload += sse(
+                    chunk(
+                        {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": '"content": "written by e2e"}'}}
+                            ]
+                        }
+                    )
+                )
             payload += sse(chunk({}, finish_reason="tool_calls"))
         else:
             payload += sse(chunk({"role": "assistant", "content": "All done."}))
@@ -119,8 +145,13 @@ class FakeOpenAIHandler(BaseHTTPRequestHandler):
 @pytest.fixture()
 def fake_openai():
     """A loopback OpenAI-compatible server; yields ``(server, base_url)``."""
+    # The handler's state is class-level (the server is threaded), so every test must start
+    # from the default: a test that selected the bash call would otherwise silently change
+    # what the *next* test's model returns.
     FakeOpenAIHandler.calls = 0
     FakeOpenAIHandler.bodies = []
+    FakeOpenAIHandler.tool = "write"
+    FakeOpenAIHandler.bash_command = "git push"
     server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenAIHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -303,14 +334,17 @@ def cookie_header(client: httpx.Client) -> str:
     return f"{COOKIE_NAME}={client.cookies[COOKIE_NAME]}"
 
 
-def reset_fake_model() -> None:
+def reset_fake_model(tool: str = "write", bash_command: str = "git push") -> None:
     """The fake model serves a tool call on its *first* request only.
 
     A test that prompts twice (or two users once each) would otherwise have the second
     turn receive plain text instead of a tool call, which silently makes assertions about
-    tool execution vacuous.
+    tool execution vacuous.  ``tool`` selects which call the first response makes, and the
+    default is restored on every reset so one test cannot leak into the next.
     """
     FakeOpenAIHandler.calls = 0
+    FakeOpenAIHandler.tool = tool
+    FakeOpenAIHandler.bash_command = bash_command
 
 
 def ws_prompt(

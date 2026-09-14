@@ -1,0 +1,89 @@
+# systemd unit for the team deployment of python-pi.
+#
+#   sudo cp deploy/pi-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now pi-server
+#
+# Two things here are not boilerplate:
+#
+# * The model credential is a systemd **credential**, read from a root-only file and handed
+#   to the process as `$CREDENTIALS_DIRECTORY/api_key`. It is never an argv element, because
+#   `ps` shows argv to every account on the box, and never in the environment file, which is
+#   world-readable unless someone remembers to chmod it.
+# * `ProtectSystem=strict` plus `ReadWritePaths=/var/lib/pi` means the service can write its
+#   own data and nothing else. That is what makes "the agent's shell runs as this process"
+#   survivable at all in phase one: the blast radius is the data root, not the machine.
+#
+# The unit deliberately does **not** set PI_SANDBOX_BACKEND: phase two adds it, and setting
+# it today makes the server refuse to start (by design — see docs/DEPLOY.md).
+
+[Unit]
+Description=python-pi team server (multi-tenant agent workspace)
+Documentation=file:/opt/python-pi/docs/DEPLOY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/python-pi
+
+EnvironmentFile=/etc/pi/pi.env
+Environment=PI_AUTH_MODE=team
+Environment=PI_DATA_ROOT=/var/lib/pi
+Environment=PI_COOKIE_SECURE=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+# The credential file made available by LoadCredential below.
+Environment=PI_API_KEY_FILE=%d/api_key
+
+# `--host 127.0.0.1` is not optional: TLS and the session cookie's Secure flag both assume
+# a reverse proxy in front. Append `--no-skills` to keep the system prompt small if the
+# template's skills are large. `--cwd` and `--agent-dir` are ignored in team mode: each
+# user's directories are derived from their uid under PI_DATA_ROOT.
+ExecStart=/opt/python-pi/.venv/bin/python -m pi_server.cli \
+    --host 127.0.0.1 \
+    --port 8787 \
+    --model deepseek/deepseek-v4-flash
+
+Restart=on-failure
+RestartSec=3
+
+# --- filesystem ---------------------------------------------------------------------
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/pi
+UMask=0077
+
+# --- kernel and namespace surface ---------------------------------------------------
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# --- resources ----------------------------------------------------------------------
+# One process serves every user, so a runaway session is a shared failure. These bounds and
+# PI_MAX_ACTIVE_USERS are the two reasons a bad turn stays a bad turn.
+MemoryMax=4G
+CPUQuota=200%
+TasksMax=512
+
+LoadCredential=api_key:/etc/pi/api_key
+
+[Install]
+WantedBy=multi-user.target

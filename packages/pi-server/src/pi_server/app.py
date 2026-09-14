@@ -647,6 +647,11 @@ def create_app(
     config: ServerConfig | None = None,
 ) -> FastAPI:
     server_config = config or ServerConfig.from_env()
+    # The credential can arrive as `--api-key` (legacy, visible in `ps`) or through
+    # `PI_API_KEY`/`PI_API_KEY_FILE`. Filling it in here is what lets the personal flow stop
+    # putting a secret in argv: the environment is readable only by the process owner.
+    if server_config.api_key and not options.api_key:
+        options = dataclasses.replace(options, api_key=server_config.api_key)
     # Accounts only exist in team mode, so single mode does not create a database (or a
     # data root) behind the user's back — the personal flow stays byte-for-byte what it was.
     database: Database | None = None
@@ -694,6 +699,7 @@ def create_app(
             # Every user's workspace and transcript lives under here, so an agent that can
             # read it can read a colleague's conversations.
             protected_roots=(server_config.data_root,),
+            confirm_timeout=server_config.confirm_timeout_seconds,
             record=worker.record_tool_decision,
         )
 
