@@ -224,12 +224,14 @@ SessionWorker = { options(per-uid cwd/agent_dir), AgentSession, RpcMode, Hub(use
 | 关注点 | 设计 |
 |---|---|
 | 启动 | 懒启动：第一次 `prompt`/`open` 才 `bootstrap(per-uid options)`，服务绑定瞬间完成 |
-| 回收 | 空闲回收（默认 30min 无活动）释放 `AgentSession`，会话文件留在磁盘，切回时重建 |
-| 并发 | 每用户活跃会话上限（默认 3）、全进程上限（默认 20）；超限返回明确错误而不是排队静默 |
-| 对话框路由 | 从「全局最近活跃」改为「**该会话的**最近活跃标签页」；`send_to_dialog_target` 需要带 session 作用域 |
+| 回收 | 空闲回收（默认 30min 无活动）释放 `AgentSession`；会话文件路径先写进 `session_pointers`，切回时按指针 `resume`，因此回收是无损的 |
+| 并发 | **每用户一个活跃 worker**（同一用户的多个标签页共享同一会话，与改造前行为一致）；全进程上限默认 20；超限返回明确错误而不是排队静默。多 slot（同一用户并发多个会话）延后到确有需要时再加，因为它需要按 session 寻址与路径校验 |
+| 对话框路由 | 从「全局最近活跃」改为「**该会话的**最近活跃标签页」；每个 worker 持有自己的 Hub，这是路由安全的实现方式 |
 | 事件广播 | 只广播给订阅了该 session 的连接 |
 | REST 作用域 | `/api/state`、`/api/sessions`、`/api/models` 全部按当前用户取；`/api/sessions` 传该用户的 `agent_dir` |
-| 故障隔离 | 一个 session 的异常不得影响其它 session：命令处理已按帧 try/except，需扩展为 worker 级 |
+| 凭据 | 共用 key 由 `ServerConfig.api_key` 注入每个用户的 bootstrap；per-user `auth.json` 不存在也无法覆盖 |
+| 目录模板 | 新用户的 agent 目录从 `<data_root>/template` 播种：复制 `models.json`/`settings.json`/`AGENTS.md`，`skills/` 用符号链接共享。**不复制 `auth.json`** |
+| 故障隔离 | 一个 worker 的启动失败（`bootstrap` 用 `SystemExit` 报错，不是 `Exception`）被转换成 `BootstrapError`，否则会击穿请求处理；HTTP 返回 503，WS 发一帧错误再关闭 |
 
 **单 worker 是硬约束**：会话状态在进程内，`uvicorn --workers 1`。要横向扩展就得把
 registry 换成 Redis 广播 + 无状态网关（届时一并换 PG）。

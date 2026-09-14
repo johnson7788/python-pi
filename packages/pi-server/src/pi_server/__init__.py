@@ -7,19 +7,31 @@ mode — the account, workspace and quota layer that makes one process safe to s
 
 from __future__ import annotations
 
-from .app import AgentServer, Connection, Hub, create_app, resolve_static_dir
+from .app import (
+    LOCAL_UID,
+    CapacityError,
+    Connection,
+    Hub,
+    SessionRegistry,
+    SessionWorker,
+    create_app,
+    resolve_static_dir,
+)
 from .config import COOKIE_NAME, ServerConfig
 from .db import Database
 
 __version__ = "0.1.0"
 
 __all__ = [
-    "AgentServer",
     "COOKIE_NAME",
+    "CapacityError",
     "Connection",
     "Database",
     "Hub",
+    "LOCAL_UID",
     "ServerConfig",
+    "SessionRegistry",
+    "SessionWorker",
     "create_app",
     "resolve_static_dir",
 ]

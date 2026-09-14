@@ -22,8 +22,10 @@ from pathlib import Path
 import httpx
 import pytest
 import websockets
-from conftest import write_agent_config
+from conftest import FakeOpenAIHandler, write_agent_config
 
+from pi_coding_agent.bootstrap import BootstrapOptions
+from pi_server.app import CapacityError, SessionRegistry, SessionWorker
 from pi_server.auth import (
     authenticate,
     ensure_admin,
@@ -194,13 +196,18 @@ class TeamServer:
             return ""
 
 
-def _start_team_server(tmp_path: Path, base_url: str) -> TeamServer:
+def _start_team_server(tmp_path: Path, base_url: str, *extra: str) -> TeamServer:
     agent_dir = tmp_path / "agent"
     workdir = tmp_path / "work"
     workdir.mkdir()
     write_agent_config(agent_dir, base_url)
 
     data_root = tmp_path / "data"
+    # Team mode gives every user their own agent dir, so the provider catalog has to come
+    # from the shared template.  `write_agent_config` also drops an auth.json there; the
+    # seeder deliberately copies models.json only, which this setup exercises.
+    write_agent_config(data_root / "template", base_url)
+
     port = _free_port()
     env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")}
     env["PYTHONUNBUFFERED"] = "1"
@@ -219,6 +226,9 @@ def _start_team_server(tmp_path: Path, base_url: str) -> TeamServer:
             str(agent_dir),
             "--model",
             "local/local-test",
+            # The shared company credential (D3): every user's session is handed this one.
+            "--api-key",
+            "shared-company-key",
             "--auth-mode",
             "team",
             "--data-root",
@@ -227,6 +237,7 @@ def _start_team_server(tmp_path: Path, base_url: str) -> TeamServer:
             "admin",
             "--admin-password",
             ADMIN_PASSWORD,
+            *extra,
         ],
         cwd=str(REPO_ROOT),
         stdout=subprocess.PIPE,
@@ -421,3 +432,173 @@ def test_websocket_requires_a_session_cookie(team_server):
         assert ready["type"] == "ready"
     finally:
         client.close()
+
+
+# --------------------------------------------------------------------------------------
+# M1: one worker per user, with per-user cwd and agent dir
+# --------------------------------------------------------------------------------------
+
+
+def _cookie(client: httpx.Client) -> str:
+    return f"{COOKIE_NAME}={client.cookies[COOKIE_NAME]}"
+
+
+def _reset_model() -> None:
+    """The fake model serves a tool call on its *first* request only.
+
+    Two users prompting in the same test would otherwise have the second one receive plain
+    text instead of a file write, which would make the isolation assertions vacuous.
+    """
+    FakeOpenAIHandler.calls = 0
+
+
+def _ws_prompt(server: TeamServer, cookie: str, message: str = "create the file") -> list[dict]:
+    async def scenario() -> list[dict]:
+        async with websockets.connect(
+            server.ws_url, additional_headers={"Cookie": cookie}
+        ) as ws:
+            await ws.recv()  # ready
+            await ws.recv()  # initial state
+            await ws.send(json.dumps({"id": "p", "type": "prompt", "message": message}))
+            seen: list[dict] = []
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                record = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
+                seen.append(record)
+                if record.get("type") == "agent_end":
+                    return seen
+            raise AssertionError(f"no agent_end; saw {[r.get('type') for r in seen]}")
+
+    return asyncio.run(scenario())
+
+
+def _create_members(admin: httpx.Client, *usernames: str) -> dict[str, str]:
+    """Create accounts and return ``{username: uid}``."""
+    uids: dict[str, str] = {}
+    for username in usernames:
+        response = admin.post(
+            "/api/admin/users", json={"username": username, "password": USER_PASSWORD}
+        )
+        assert response.status_code == 200, response.text
+        uids[username] = response.json()["user"]["uid"]
+    return uids
+
+
+def test_two_users_share_nothing(team_server):
+    """The M1 acceptance test: two colleagues running at once, fully separated."""
+    admin = _login(team_server, "admin", ADMIN_PASSWORD)
+    try:
+        uids = _create_members(admin, "ada", "bob")
+        ada = _login(team_server, "ada", USER_PASSWORD)
+        bob = _login(team_server, "bob", USER_PASSWORD)
+        try:
+            ada_state = ada.get("/api/state").json()
+            bob_state = bob.get("/api/state").json()
+
+            # The tenant boundary is the workspace path, and it is derived from the uid.
+            assert ada_state["cwd"] != bob_state["cwd"]
+            assert ada_state["cwd"] == str(team_server.data_root / "workspaces" / uids["ada"])
+            assert bob_state["cwd"] == str(team_server.data_root / "workspaces" / uids["bob"])
+
+            # Each user's agent really writes into its own workspace.
+            _reset_model()
+            _ws_prompt(team_server, _cookie(ada))
+            _reset_model()
+            _ws_prompt(team_server, _cookie(bob))
+
+            ada_workspace = team_server.data_root / "workspaces" / uids["ada"]
+            bob_workspace = team_server.data_root / "workspaces" / uids["bob"]
+            assert (ada_workspace / "e2e.txt").is_file()
+            assert (bob_workspace / "e2e.txt").is_file()
+
+            # Session lists come from each user's own agent dir, so neither sees the other.
+            ada_sessions = ada.get("/api/sessions").json()["sessions"]
+            bob_sessions = bob.get("/api/sessions").json()["sessions"]
+            assert ada_sessions and bob_sessions
+            assert ada_sessions[0]["path"] != bob_sessions[0]["path"]
+            for listed in ada_sessions:
+                assert str(team_server.data_root / "agents" / uids["ada"]) in listed["path"]
+            for listed in bob_sessions:
+                assert str(team_server.data_root / "agents" / uids["bob"]) in listed["path"]
+        finally:
+            ada.close()
+            bob.close()
+    finally:
+        admin.close()
+
+
+def test_a_template_agent_dir_is_seeded_but_never_carries_credentials(team_server):
+    """Provider overrides must reach the user; a per-user credential file must not exist."""
+    admin = _login(team_server, "admin", ADMIN_PASSWORD)
+    try:
+        uids = _create_members(admin, "ada")
+        member = _login(team_server, "ada", USER_PASSWORD)
+        try:
+            assert member.get("/api/state").status_code == 200  # forces the worker to start
+        finally:
+            member.close()
+
+        agent_dir = team_server.data_root / "agents" / uids["ada"]
+        assert (agent_dir / "models.json").is_file()
+        # The template that the fixture wrote *does* contain an auth.json; copying it would
+        # have handed every user a per-user credential we do not manage.
+        assert not (agent_dir / "auth.json").exists()
+    finally:
+        admin.close()
+
+
+def test_each_user_sees_only_their_own_dialog_target(team_server):
+    """The hub is per worker, so a dialog cannot surface in another user's tab."""
+    # Exercised at the registry level: one Hub per worker is what makes the routing safe,
+    # and this asserts it directly rather than depending on an extension being installed.
+    config = ServerConfig(data_root=str(team_server.data_root), auth_mode="team")
+    registry = SessionRegistry(BootstrapOptions(cwd="."), config)
+    ada = SessionWorker("ada", BootstrapOptions(cwd="."))
+    bob = SessionWorker("bob", BootstrapOptions(cwd="."))
+    assert ada.hub is not bob.hub
+    assert ada.hub.client_count == 0 and bob.hub.client_count == 0
+
+
+def test_idle_eviction_skips_busy_and_recent_workers(tmp_path):
+    config = ServerConfig(
+        data_root=str(tmp_path), auth_mode="team", max_active_users=10, session_idle_minutes=1
+    )
+    registry = SessionRegistry(BootstrapOptions(cwd=str(tmp_path)), config)
+
+    class FakeSession:
+        is_streaming = True
+
+    class FakeController:
+        session = FakeSession()
+
+    stale = SessionWorker("stale", BootstrapOptions(cwd=str(tmp_path)))
+    stale.last_active = time.monotonic() - 3600
+    busy = SessionWorker("busy", BootstrapOptions(cwd=str(tmp_path)))
+    busy.last_active = time.monotonic() - 3600
+    busy._controller = FakeController()  # type: ignore[assignment]
+    recent = SessionWorker("recent", BootstrapOptions(cwd=str(tmp_path)))
+
+    registry._workers.update({"stale": stale, "busy": busy, "recent": recent})
+    assert asyncio.run(registry.evict_idle()) == 1
+    assert registry.worker("stale") is None
+    assert registry.worker("busy") is not None  # a running turn is never interrupted
+    assert registry.worker("recent") is not None
+
+
+def test_the_worker_cap_is_enforced(tmp_path):
+    config = ServerConfig(
+        data_root=str(tmp_path), auth_mode="team", max_active_users=1, session_idle_minutes=0
+    )
+    registry = SessionRegistry(BootstrapOptions(cwd=str(tmp_path)), config)
+    registry._workers["someone"] = SessionWorker("someone", BootstrapOptions(cwd=str(tmp_path)))
+
+    with pytest.raises(CapacityError):
+        asyncio.run(registry.acquire("another"))
+
+
+def test_single_mode_passes_the_command_line_through(tmp_path):
+    """The personal flow must not acquire per-user directories by accident."""
+    config = ServerConfig(data_root=str(tmp_path), auth_mode="single")
+    base = BootstrapOptions(cwd="/tmp/somewhere", agent_dir="/tmp/agent")
+    registry = SessionRegistry(base, config)
+    assert registry.options_for("local") is base

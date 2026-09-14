@@ -94,8 +94,20 @@ CREATE INDEX idx_audit_uid_ts ON audit_records(uid, ts);
 CREATE INDEX idx_auth_sessions_uid ON auth_sessions(uid);
 """
 
+#: Which session file a user was last working in.  A worker is evicted when it goes
+#: idle, and without this pointer the next visit would silently start a *new* session
+#: instead of reopening the one they left.
+_SCHEMA_V2 = """
+CREATE TABLE session_pointers (
+  uid          TEXT PRIMARY KEY REFERENCES users(uid) ON DELETE CASCADE,
+  session_file TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+"""
+
 #: ``(version, sql)`` pairs, applied in order and never edited after release.
-MIGRATIONS: tuple[tuple[int, str], ...] = ((1, _SCHEMA_V1),)
+MIGRATIONS: tuple[tuple[int, str], ...] = ((1, _SCHEMA_V1), (2, _SCHEMA_V2))
+
 
 #: Columns an API may update on ``users``.  Anything else is rejected rather than
 #: silently interpolated into SQL.
@@ -345,6 +357,26 @@ class Database:
                 (utcnow(),),
             )
             return int(cursor.rowcount or 0)
+
+    # -- session pointers ------------------------------------------------------------
+
+    def remember_session(self, uid: str, session_file: str) -> None:
+        """Record which session file a user is working in, so eviction is lossless."""
+        if not session_file:
+            return
+        self._write(
+            "INSERT INTO session_pointers (uid, session_file, updated_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(uid) DO UPDATE SET session_file = excluded.session_file,"
+            " updated_at = excluded.updated_at",
+            (uid, session_file, utcnow()),
+        )
+
+    def recall_session(self, uid: str) -> str | None:
+        row = self._one("SELECT session_file FROM session_pointers WHERE uid = ?", (uid,))
+        return str(row["session_file"]) if row else None
+
+    def forget_session(self, uid: str) -> None:
+        self._write("DELETE FROM session_pointers WHERE uid = ?", (uid,))
 
     # -- usage -----------------------------------------------------------------------
 
