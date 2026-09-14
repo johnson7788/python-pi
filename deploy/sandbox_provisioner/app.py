@@ -60,6 +60,13 @@ _HEALTH_TIMEOUT = float(os.environ.get("SANDBOX_HEALTH_TIMEOUT_SECONDS", "60"))
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
+try:  # pragma: no cover - the SDK is only absent in a partial install
+    from docker.errors import NotFound
+except ImportError:  # pragma: no cover
+    class NotFound(Exception):  # type: ignore[no-redef]
+        """Placeholder so the module imports without the docker SDK."""
+
+
 class ProvisionerError(RuntimeError):
     """Local failure: docker unavailable, or the daemon refused."""
 
@@ -73,6 +80,7 @@ class Sandbox:
     thread: str
     workspace: str
     container_id: str
+    container_path: str = CONTAINER_WORKSPACE
     created_at: float = field(default_factory=time.monotonic)
     last_used: float = field(default_factory=time.monotonic)
 
@@ -141,7 +149,18 @@ class Registry:
 
             client = self.client()
             name = self.container_name(sandbox_id)
+            container_path = options.get("containerPath") or CONTAINER_WORKSPACE
             container = self._find(client, name)
+            if container is not None and not self._mount_matches(container, container_path):
+                # A container left over from an older configuration — mounted at /workspace
+                # when the client now expects its own path, or vice versa. Exec'ing into it
+                # would give the agent a directory layout that contradicts its tools, so it is
+                # replaced instead of reused.
+                try:
+                    container.remove(force=True)
+                except Exception:  # noqa: BLE001
+                    pass
+                container = None
             if container is None:
                 container = self._create(client, name, sandbox_id, uid, workspace, **options)
             sandbox = Sandbox(
@@ -150,6 +169,7 @@ class Registry:
                 thread=thread,
                 workspace=workspace,
                 container_id=container.id,
+                container_path=options.get("containerPath") or CONTAINER_WORKSPACE,
             )
             self._sandboxes[sandbox_id] = sandbox
             return sandbox
@@ -164,8 +184,33 @@ class Registry:
         except NotFound:
             return None
         if container.status != "running":
-            container.start()
+            try:
+                container.start()
+            except Exception as error:  # noqa: BLE001
+                # A container that exists but will not start is usually a leftover whose host
+                # path is no longer shared, or whose image vanished. Recreating is the fix, so
+                # say that instead of letting a daemon 500 escape as "internal server error".
+                raise ProvisionerError(
+                    f"the sandbox container {name!r} exists but cannot be started ({error}); "
+                    "remove it with `docker rm -f` and retry"
+                ) from error
         return container
+
+    @staticmethod
+    def _mount_matches(container: Any, container_path: str) -> bool:
+        """Whether the container mounts the workspace where the client expects it.
+
+        "Cannot tell" counts as a match: the client's mount probe is the authoritative check,
+        and refusing to reuse a container just because its attrs are unreadable would turn a
+        transient API hiccup into a recreate loop.
+        """
+        attrs = getattr(container, "attrs", None)
+        if not isinstance(attrs, dict):
+            return True
+        mounts = attrs.get("Mounts")
+        if not isinstance(mounts, list):
+            return True
+        return any(mount.get("Destination") == container_path for mount in mounts)
 
     def _is_running(self, sandbox: Sandbox) -> bool:
         try:
@@ -180,13 +225,14 @@ class Registry:
     ) -> Any:
         image = options.get("image") or _IMAGE
         run_as = options.get("runAs") or ""
+        container_path = options.get("containerPath") or CONTAINER_WORKSPACE
         kwargs: dict[str, Any] = {
             "image": image,
             "name": name,
             "command": ["sleep", "infinity"],
             "detach": True,
-            "working_dir": CONTAINER_WORKSPACE,
-            "volumes": {workspace: {"bind": CONTAINER_WORKSPACE, "mode": "rw"}},
+            "working_dir": container_path,
+            "volumes": {workspace: {"bind": container_path, "mode": "rw"}},
             "tmpfs": {"/tmp": "rw,exec,mode=1777"},
             "labels": {
                 "app": CONTAINER_PREFIX,
@@ -201,8 +247,8 @@ class Registry:
             "security_opt": ["no-new-privileges:true"],
             "environment": {
                 # A container-shaped environment. The host's is never forwarded.
-                "HOME": CONTAINER_WORKSPACE,
-                "PI_CWD": CONTAINER_WORKSPACE,
+                "HOME": container_path,
+                "PI_CWD": container_path,
                 "TERM": "dumb",
                 "LANG": "C.UTF-8",
                 "DEBIAN_FRONTEND": "noninteractive",
@@ -247,10 +293,10 @@ class Registry:
             raise ProvisionerError(f"unknown sandbox: {sandbox_id}")
         sandbox.touch()
 
-        if not cwd.startswith(CONTAINER_WORKSPACE):
+        if not cwd.startswith(sandbox.container_path):
             # The backend refuses this too; refusing here as well means the provisioner is
             # safe to call directly, not only through a client that behaves.
-            raise ProvisionerError(f"cwd must be inside {CONTAINER_WORKSPACE}: {cwd!r}")
+            raise ProvisionerError(f"cwd must be inside {sandbox.container_path}: {cwd!r}")
 
         limit = float(timeout_seconds or _EXEC_TIMEOUT)
         wrapped = f"timeout -s KILL {int(limit)} sh -lc {shlex.quote(command)}"
@@ -264,6 +310,27 @@ class Registry:
                 environment=dict(env or {}),
                 demux=False,
             )
+        except NotFound:
+            # The container went away under us — reaped while idle, removed by hand, or lost
+            # with the daemon. Recreate it and run the command once. Caching the id would turn
+            # a routine eviction into a permanently broken session.
+            fresh = self.ensure(
+                sandbox.sandbox_id,
+                sandbox.uid,
+                sandbox.thread,
+                sandbox.workspace,
+                containerPath=sandbox.container_path,
+            )
+            try:
+                container = self.client().containers.get(fresh.container_id)
+                exit_code, output = container.exec_run(
+                    ["sh", "-lc", wrapped],
+                    workdir=cwd,
+                    environment=dict(env or {}),
+                    demux=False,
+                )
+            except Exception as retry_error:  # noqa: BLE001
+                raise ProvisionerError(f"exec failed after recreating: {retry_error}") from None
         except Exception as error:  # noqa: BLE001
             raise ProvisionerError(f"exec failed: {error}") from error
 
@@ -294,6 +361,7 @@ class Registry:
                     "sandboxId": sandbox.sandbox_id,
                     "uid": sandbox.uid,
                     "thread": sandbox.thread,
+                    "containerPath": sandbox.container_path,
                     "idleSeconds": round(time.monotonic() - sandbox.last_used, 1),
                 }
                 for sandbox in self._sandboxes.values()
@@ -322,6 +390,10 @@ REGISTRY = Registry()
 
 class CreateSandbox(BaseModel):
     workspace: str = Field(..., description="Host path of the conversation's workspace")
+    #: Where it is mounted inside the container. The client sends its own view of the path so
+    #: the container agrees with what the agent is told and with what the file tools use;
+    #: ``/workspace`` remains the default for a client that does not care.
+    containerPath: str = CONTAINER_WORKSPACE
     uid: str = ""
     thread: str = ""
     image: str | None = None
@@ -403,6 +475,7 @@ async def create_sandbox(sandbox_id: str, payload: CreateSandbox, request: Reque
             payload.workspace,
             image=payload.image,
             network=payload.network,
+            containerPath=payload.containerPath,
             runAs=payload.runAs or request.headers.get("x-sandbox-run-as"),
         )
     except ProvisionerError as error:

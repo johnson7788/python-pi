@@ -1069,3 +1069,49 @@ async def test_register_faux_api_emits_text_deltas_in_order() -> None:
     assert [event.delta for event in events if event.type == "text_delta"] == ["abcdefgh", "ij"]
     # Deltas mutate the shared partial as they are emitted.
     assert events[0].partial.content[0].text == "abcdefghij"
+
+
+async def test_a_stalled_stream_can_still_be_aborted() -> None:
+    """`stop` must not have to wait for the read timeout.
+
+    The abort signal used to be checked only *inside* the chunk loop, so a stream that sent
+    nothing ignored the user for as long as httpx's read timeout — ten minutes by default,
+    which a person experiences as a hung turn they cannot cancel.
+    """
+    import asyncio
+
+    controller = AbortController()
+    first = openai_sse(
+        [{"id": "cc", "model": "test-model", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hel"}, "finish_reason": None}]}],
+        done=False,
+    )
+
+    async def stalled() -> Any:
+        yield first
+        await asyncio.sleep(3600)  # the socket stays open and stays silent
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=stalled(), headers=SSE_HEADERS)
+
+    model = make_model(api="openai-completions", provider="openai", base_url="https://api.openai.com/v1")
+    provider = OpenAiCompletionsProvider(client_factory=client_factory(handler))
+
+    async def abort_soon() -> None:
+        await asyncio.sleep(0.2)
+        controller.abort("user cancelled")
+
+    waiter = asyncio.create_task(abort_soon())
+    try:
+        result = await asyncio.wait_for(
+            provider.stream(
+                model,
+                assistant_user_context(),
+                StreamOptions(api_key="k", signal=controller.signal),
+            ).result(),
+            timeout=10,
+        )
+    finally:
+        await waiter
+
+    assert result.stop_reason == "aborted"
+    assert result.error_message == "user cancelled"

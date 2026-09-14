@@ -114,11 +114,14 @@ class FakeContainers:
         return container
 
     def get(self, name: str) -> FakeContainer:
-        if name not in self.created:
-            from docker.errors import NotFound
+        # The SDK accepts an id or a name; a fake that only knew names would make every
+        # lookup by id look like "the container is gone".
+        for container in self.created.values():
+            if container.name == name or container.id == name:
+                return container
+        from docker.errors import NotFound
 
-            raise NotFound(name)
-        return self.created[name]
+        raise NotFound(name)
 
 
 class FakeDocker:
@@ -285,22 +288,40 @@ def test_an_unset_token_refuses_every_request(provisioner: Any, monkeypatch: pyt
     assert client.post("/sandboxes/sb1", json={"workspace": "/tmp"}).status_code == 503
 
 
-def test_invalid_ids_and_empty_commands_are_rejected(client: TestClient, provisioner: Any):
-    """Validation happens before the daemon is touched, so nothing is left behind."""
+def test_invalid_ids_and_empty_commands_are_rejected(
+    client: TestClient, provisioner: Any, monkeypatch: pytest.MonkeyPatch
+):
+    """Validation happens before the daemon is touched, so nothing is left behind.
+
+    The registry is wired to the fake daemon: this test is about the HTTP contract, and a
+    real `docker run` would leave a container behind and depend on the host's file sharing.
+    """
+    daemon = FakeDocker()
+    monkeypatch.setattr(provisioner.REGISTRY, "client", lambda: daemon)
     headers = _auth(provisioner)
 
     # A path-shaped id would otherwise name a container outside the prefix.
     assert client.post("/sandboxes/..%2fescape", json={"workspace": "/tmp"}, headers=headers).status_code in (404, 422)
-    # A workspace that does not exist is refused rather than mounted empty.
+    # An empty command is refused before the daemon is asked to do anything.
     assert (
         client.post(
-            "/sandboxes/sb-validate", json={"workspace": "/no/such/workspace"}, headers=headers
+            "/sandboxes/sb-validate/exec", json={"command": "   ", "cwd": "/workspace"}, headers=headers
         ).status_code
-        == 502
+        == 422
     )
-    # No container was created for either: the daemon list stays empty.
-    listing = client.get("/sandboxes", headers=headers).json()["sandboxes"]
-    assert listing == []
+
+    # A create is allowed through to the (fake) daemon, and the recorded mount is the path the
+    # client asked for — not a fixed /workspace.
+    created = client.post(
+        "/sandboxes/sb-validate",
+        json={"workspace": "/host/ws", "containerPath": "/app/ws", "uid": "u", "thread": "t"},
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    assert daemon.containers.created["pi-sandbox-sb-validate"].kwargs["volumes"] == {
+        "/host/ws": {"bind": "/app/ws", "mode": "rw"}
+    }
+    assert client.get("/sandboxes", headers=headers).json()["sandboxes"][0]["containerPath"] == "/app/ws"
 
 
 # --------------------------------------------------------------------------------------
@@ -405,3 +426,45 @@ def test_the_container_does_not_run_as_root_when_told_not_to(real_sandbox: Any):
     registry, sandbox, _workspace = real_sandbox
     result = registry.exec(sandbox.sandbox_id, "id -u", "/workspace", 30, None)
     assert result["output"].strip() == str(os.getuid())
+
+
+def test_a_container_that_went_away_is_recreated_on_the_next_command(fake_daemon: Any):
+    """The bug that made an agent loop on "cannot run bash".
+
+    A container can vanish for ordinary reasons — the idle reaper, `docker rm`, a daemon
+    restart. Caching its id turns that into a permanently broken session: every command
+    answers "No such container" and the model retries forever.
+    """
+    registry, daemon, workspace = fake_daemon
+    # The client mounts the workspace at its own path, so cwd and container path are one string.
+    registry.ensure("sb1", "uid-1", "session", str(workspace), containerPath=str(workspace))
+    assert daemon.containers.created["pi-sandbox-sb1"].execs == [["sh", "-lc", "command -v timeout"]]
+
+    # It disappears without the provisioner being told.
+    daemon.containers.created.clear()
+
+    result = registry.exec("sb1", "ls", str(workspace), 5, None)
+
+    assert result["exitCode"] == 0
+    assert "pi-sandbox-sb1" in daemon.containers.created, "the container was not recreated"
+    assert registry._sandboxes["sb1"].container_id == "id-pi-sandbox-sb1"
+
+
+def test_a_container_mounted_at_the_wrong_path_is_replaced(fake_daemon: Any):
+    """Upgrading must not silently reuse a container whose layout contradicts the client.
+
+    The first version of this service mounted every workspace at ``/workspace``. A container
+    from that version still runs after an upgrade; reusing it would give the agent a
+    directory that its own read/write tools do not agree with.
+    """
+    registry, daemon, workspace = fake_daemon
+    stale = FakeContainer(name="pi-sandbox-sb1", image="x", volumes={str(workspace): {"bind": "/workspace", "mode": "rw"}})
+    stale.attrs = {"Mounts": [{"Destination": "/workspace"}]}
+    daemon.containers.created["pi-sandbox-sb1"] = stale
+
+    registry.ensure("sb1", "uid-1", "session", str(workspace), containerPath=str(workspace))
+
+    replacement = daemon.containers.created["pi-sandbox-sb1"]
+    assert replacement is not stale, "the stale container was reused"
+    assert stale.removed is True
+    assert replacement.kwargs["volumes"] == {str(workspace): {"bind": str(workspace), "mode": "rw"}}

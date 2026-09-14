@@ -31,7 +31,10 @@ from typing import Any, Callable
 
 import httpx
 
-from .types import CONTAINER_WORKSPACE, ExecResult, SandboxScope
+from .types import ExecResult, SandboxScope
+
+#: Substrings that mean "the sandbox no longer exists" in a provisioner/docker error.
+_GONE_MARKERS = ("no such container", "404", "not found")
 
 #: How long to wait on the provisioner itself (not the command inside the container).
 DEFAULT_REQUEST_TIMEOUT = 30.0
@@ -43,6 +46,11 @@ _PROBE_NAME = ".pi-sandbox-probe"
 
 class ProvisionerError(RuntimeError):
     """The provisioner refused, is unreachable, or is misconfigured."""
+
+
+def _says_the_container_is_gone(error: Exception) -> bool:
+    text = str(error).lower()
+    return any(marker in text for marker in _GONE_MARKERS)
 
 
 class ProvisionerBackend:
@@ -110,6 +118,11 @@ class ProvisionerBackend:
         workspace = self.scope.host_workspace or self.scope.workspace
         payload: dict[str, Any] = {
             "workspace": workspace,
+            # Mount it at the path *this process* uses, not at a fixed /workspace. The agent is
+            # told its working directory is the app-side path, and the file tools operate on
+            # that path; if the container disagreed, `ls <cwd>` would fail while `read <cwd>`
+            # succeeded — one path, two universes, and a model left guessing which is real.
+            "containerPath": self.scope.workspace,
             "uid": self.scope.uid,
             "thread": self.scope.thread,
         }
@@ -134,6 +147,10 @@ class ProvisionerBackend:
         from inside the container, and deleted.  If the two views disagree — the classic
         symptom of a ``PI_SANDBOX_HOST_DATA_ROOT`` that does not match the volume the server
         has mounted — the values differ and the sandbox is discarded rather than used.
+
+        With the workspace mounted at this process's own path, the probe also pins down path
+        parity: the container must see the file at the very same string the agent is told is
+        its working directory.
         """
         marker = secrets.token_hex(8)
         probe = os.path.join(self.scope.workspace, ".pi-sandbox-probe")
@@ -152,7 +169,7 @@ class ProvisionerBackend:
                 raise ProvisionerError(
                     "the sandbox is not mounting this workspace.\n"
                     f"  The server wrote the probe to {self.scope.workspace!r} and asked the "
-                    f"container for it at {CONTAINER_WORKSPACE!r}, and got "
+                    f"container for it at the same path, and got "
                     f"{result.output.strip()[:80]!r} back.\n"
                     "  The usual cause is PI_SANDBOX_HOST_DATA_ROOT: the daemon resolves bind "
                     "mounts on the *host*, so it must be the host path of the directory the "
@@ -169,7 +186,7 @@ class ProvisionerBackend:
         response = await self._request(
             "POST",
             f"/sandboxes/{self.scope.sandbox_id()}/exec",
-            json={"command": command, "cwd": CONTAINER_WORKSPACE},
+            json={"command": command, "cwd": self.scope.workspace},
         )
         body = response.json()
         output = str(body.get("output") or "")
@@ -227,6 +244,19 @@ class ProvisionerBackend:
             # Only the PI_* session variables travel; nothing from the host environment.
             payload["env"] = {str(k): str(v) for k, v in metadata.items()}
 
+        try:
+            return await self._exec_once(payload, signal)
+        except ProvisionerError as error:
+            if not _says_the_container_is_gone(error):
+                raise
+            # The container outlived its use — reaped while idle, removed by hand, or lost
+            # with the daemon. Caching "it exists" would turn that into a permanently broken
+            # session, so the cache is dropped and one replacement attempt is made.
+            self._ensured = False
+            await self.ensure()
+            return await self._exec_once(payload, signal)
+
+    async def _exec_once(self, payload: dict[str, Any], signal: Any) -> ExecResult:
         request = asyncio.ensure_future(
             self._request("POST", f"/sandboxes/{self.scope.sandbox_id()}/exec", json=payload)
         )
@@ -259,17 +289,20 @@ class ProvisionerBackend:
         )
 
     def _container_cwd(self, cwd: str) -> str:
-        """Map a host-side working directory into the container."""
+        """The working directory inside the container.
+
+        An identity mapping, because the workspace is mounted at this process's own path: what
+        the agent is told, what the file tools use, and what the shell sees are the same
+        string. The containment check stays — a command must not be run outside it.
+        """
         workspace = self.scope.workspace
         try:
             resolved = os.path.realpath(cwd)
             root = os.path.realpath(workspace)
         except OSError:  # pragma: no cover - realpath does not raise for plain strings
             resolved, root = cwd, workspace
-        if resolved == root:
-            return CONTAINER_WORKSPACE
-        if resolved.startswith(root + os.sep):
-            return CONTAINER_WORKSPACE + "/" + os.path.relpath(resolved, root)
+        if resolved == root or resolved.startswith(root + os.sep):
+            return cwd
         raise ProvisionerError(
             f"refusing to run outside the workspace: {cwd!r} is not inside {workspace!r}"
         )

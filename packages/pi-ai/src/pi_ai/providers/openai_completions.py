@@ -22,6 +22,8 @@ cached tokens, so the input count is a subtraction rather than a direct read.
 from __future__ import annotations
 
 import asyncio
+
+import asyncio
 import json
 import re
 import time
@@ -289,6 +291,15 @@ def _build_headers(model: Model, options: StreamOptions) -> dict[str, str]:
     if options.api_key:
         headers["authorization"] = f"Bearer {options.api_key}"
     return headers
+
+
+#: How often a streaming response is checked for an abort while waiting for the next chunk.
+#: Short enough that "stop" feels immediate, long enough to cost nothing.
+_STREAM_POLL_SECONDS = 0.5
+
+#: Give up if the model sends nothing for this long. The httpx read timeout (600s by default)
+#: is the backstop for a dead connection; this is the bound a person actually waits out.
+_STREAM_STALL_SECONDS = 180.0
 
 
 def _default_client_factory(model: Model, options: StreamOptions) -> httpx.AsyncClient:
@@ -795,9 +806,33 @@ class OpenAiCompletionsProvider:
                         if isinstance(chunk, dict):
                             self._handle_chunk(stream, output, state, chunk, model, compat)
 
-                async for text in response.aiter_text():
-                    if signal is not None and signal.aborted:
-                        raise ProviderError("Request was aborted", provider=model.provider)
+                # Abort and a stalled socket both have to be noticed *between* chunks.
+                # Polling only inside the loop body means a stream that stops sending ignores
+                # "stop" until the read timeout — ten minutes by default — which a user
+                # experiences as a hung turn they cannot cancel.
+                iterator = response.aiter_text().__aiter__()
+                idle = 0.0
+                while True:
+                    pending = asyncio.ensure_future(iterator.__anext__())
+                    while True:
+                        done, _ = await asyncio.wait({pending}, timeout=_STREAM_POLL_SECONDS)
+                        if done:
+                            break
+                        if signal is not None and signal.aborted:
+                            pending.cancel()
+                            raise ProviderError("Request was aborted", provider=model.provider)
+                        idle += _STREAM_POLL_SECONDS
+                        if idle >= _STREAM_STALL_SECONDS:
+                            pending.cancel()
+                            raise ProviderError(
+                                f"the model sent nothing for {int(idle)} seconds; giving up",
+                                provider=model.provider,
+                            )
+                    idle = 0.0
+                    try:
+                        text = pending.result()
+                    except StopAsyncIteration:
+                        break
                     handle_payloads(decoder.feed(text))
                 handle_payloads(decoder.flush())
 

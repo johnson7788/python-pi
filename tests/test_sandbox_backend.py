@@ -275,7 +275,13 @@ async def test_exec_creates_the_container_once_and_runs_the_command(tmp_path: Pa
     assert creates[0].headers["authorization"] == "Bearer secret-token"
 
 
-async def test_exec_translates_the_working_directory_into_the_container(tmp_path: Path):
+async def test_the_container_uses_the_same_paths_as_the_server(tmp_path: Path):
+    """Path parity: the string the agent is told is the string the container sees.
+
+    Mounting at a fixed ``/workspace`` would give the model two universes for one path —
+    ``read <cwd>/a.txt`` would work while ``ls <cwd>`` failed — which is precisely the
+    confusion that made an agent loop on "cannot run bash".
+    """
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/exec"):
             return httpx.Response(200, json={"output": "", "exitCode": 0})
@@ -286,8 +292,12 @@ async def test_exec_translates_the_working_directory_into_the_container(tmp_path
 
     await backend.exec("ls", cwd=str(tmp_path / "src"))
 
-    body = json.loads([r for r in seen if _is_exec(r) and not _is_probe(r)][0].content)
-    assert body["cwd"] == f"{CONTAINER_WORKSPACE}/src"
+    create = json.loads([r for r in seen if not _is_exec(r)][0].content)
+    command = json.loads([r for r in seen if _is_exec(r) and not _is_probe(r)][0].content)
+    # The mount point inside the container is the server's own view of the workspace...
+    assert create["containerPath"] == str(tmp_path)
+    # ...and the working directory is passed through unchanged.
+    assert command["cwd"] == str(tmp_path / "src")
 
 
 async def test_exec_refuses_a_directory_outside_the_workspace(tmp_path: Path):
@@ -428,3 +438,47 @@ def test_local_is_the_default_and_needs_no_docker(monkeypatch):
     backend = select_backend()
     assert backend.name == "local"
     assert_backend_usable(backend)
+
+
+async def test_a_reaped_container_is_recreated_rather_than_failing(tmp_path: Path):
+    """Same recovery on the client side, so a stale cache cannot outlive the container."""
+    creates: list[httpx.Request] = []
+    commands: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _is_exec(request):
+            commands.append(request)
+            if len(commands) == 1:
+                # What docker says about a container that is gone.
+                return httpx.Response(
+                    502, json={"detail": "exec failed: 404 ... No such container: deadbeef"}
+                )
+            return httpx.Response(200, json={"output": "recovered", "exitCode": 0})
+        creates.append(request)
+        return httpx.Response(200, json={"sandboxId": "x"})
+
+    backend, _seen = _provisioner(handler, tmp_path)
+    result = await backend.exec("ls", cwd=str(tmp_path))
+
+    assert result.output == "recovered"
+    # Two creates: the original, then the replacement the failure forced.
+    assert len(creates) == 2
+    assert len(commands) == 2
+    assert not (tmp_path / ".pi-sandbox-probe").exists()
+
+
+async def test_an_unrelated_provisioner_error_is_not_retried(tmp_path: Path):
+    """Only "the container is gone" is recoverable; a rejected token must not loop."""
+    commands: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _is_exec(request):
+            commands.append(request)
+            return httpx.Response(500, json={"detail": "the daemon is on fire"})
+        return httpx.Response(200, json={"sandboxId": "x"})
+
+    backend, _seen = _provisioner(handler, tmp_path)
+    with pytest.raises(ProvisionerError):
+        await backend.exec("ls", cwd=str(tmp_path))
+
+    assert len(commands) == 1, "a non-recoverable failure must be reported, not retried"

@@ -236,3 +236,93 @@ def test_sandboxed_commands_still_obey_the_policy_gate(sandboxed_server):
         assert "blocked" in decisions
     finally:
         admin.close()
+
+
+def _prompt_records(server, cookie: str, message: str) -> list[dict]:
+    async def scenario() -> list[dict]:
+        async with websockets.connect(
+            server.ws_url, additional_headers={"Cookie": cookie}
+        ) as ws:
+            await ws.recv()
+            await ws.recv()
+            await ws.send(json.dumps({"id": "p", "type": "prompt", "message": message}))
+            seen: list[dict] = []
+            deadline = time.monotonic() + 150
+            while time.monotonic() < deadline:
+                record = json.loads(await asyncio.wait_for(ws.recv(), timeout=150))
+                seen.append(record)
+                if record.get("type") == "agent_end":
+                    return seen
+            raise AssertionError(f"no agent_end; saw {[r.get('type') for r in seen]}")
+
+    return asyncio.run(scenario())
+
+
+def test_bash_works_with_the_same_paths_the_agent_is_told(sandboxed_server):
+    """The workspace is mounted at the server's own path, so one string means one directory.
+
+    Mounting at a fixed ``/workspace`` made the model loop: ``read <cwd>`` succeeded while
+    ``ls <cwd>`` failed, because the two tools disagreed about where the cwd was.
+    """
+    server, _provisioner_url = sandboxed_server
+    admin = login(server, "admin", TEAM_ADMIN_PASSWORD)
+    try:
+        created = admin.post(
+            "/api/admin/users", json={"username": "ada", "password": TEAM_USER_PASSWORD}
+        )
+        uid = created.json()["user"]["uid"]
+        member = login(server, "ada", TEAM_USER_PASSWORD)
+        try:
+            member.put(
+                "/api/workspace/file", params={"path": "/hello.txt"}, json={"content": "hi"}
+            )
+            reset_fake_model(tool="bash", bash_command="pwd && ls && cat hello.txt")
+            transcript = _prompt(server, cookie_header(member))
+
+            # `pwd` must print the path the read/write tools use, and `ls` must work there.
+            assert str(server.data_root / "workspaces" / uid) in transcript
+            assert "hi" in transcript
+            assert "No such container" not in transcript
+            assert "cannot access" not in transcript
+        finally:
+            member.close()
+    finally:
+        admin.close()
+
+
+def test_a_sandbox_that_vanished_is_recreated_for_the_next_command(sandboxed_server):
+    """Your bug, pinned: the idle reaper removes a container, and the next command 502s forever.
+
+    Deleting the container out from under the session reproduces a routine eviction; the next
+    command must transparently get a new one.
+    """
+    server, _provisioner_url = sandboxed_server
+    admin = login(server, "admin", TEAM_ADMIN_PASSWORD)
+    try:
+        created = admin.post(
+            "/api/admin/users", json={"username": "bob", "password": TEAM_USER_PASSWORD}
+        )
+        assert created.status_code == 200, created.text
+        member = login(server, "bob", TEAM_USER_PASSWORD)
+        try:
+            reset_fake_model(tool="bash", bash_command="echo first-run")
+            assert "first-run" in _prompt(server, cookie_header(member))
+
+            # Take the sandbox away, exactly as the reaper would.
+            names = subprocess.run(
+                ["docker", "ps", "-aq", "--filter", "label=app=pi-sandbox"],
+                capture_output=True,
+                text=True,
+            ).stdout.split()
+            assert names, "expected a sandbox container to exist"
+            subprocess.run(["docker", "rm", "-f", *names], capture_output=True, text=True)
+
+            reset_fake_model(tool="bash", bash_command="echo second-run")
+            transcript = _prompt(server, cookie_header(member))
+
+            assert "second-run" in transcript, "the command did not recover after eviction"
+            assert "No such container" not in transcript
+        finally:
+            member.close()
+    finally:
+        admin.close()
