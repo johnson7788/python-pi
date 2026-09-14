@@ -248,8 +248,14 @@ class TeamServer:
         return self.data_root / "workspaces" / uid
 
 
-def start_team_server(tmp_path: Path, base_url: str, *extra: str) -> TeamServer:
-    """Boot the server in team mode against a fake model and a fresh data root."""
+def start_team_server(
+    tmp_path: Path, base_url: str, *extra: str, extra_env: dict | None = None
+) -> TeamServer:
+    """Boot the server in team mode against a fake model and a fresh data root.
+
+    ``extra_env`` is how a test turns on a sandbox backend: those settings come from the
+    environment, not the command line, which is also how a deployment supplies them.
+    """
     agent_dir = tmp_path / "agent"
     workdir = tmp_path / "work"
     workdir.mkdir()
@@ -264,6 +270,7 @@ def start_team_server(tmp_path: Path, base_url: str, *extra: str) -> TeamServer:
     port = free_port()
     env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")}
     env["PYTHONUNBUFFERED"] = "1"
+    env.update(extra_env or {})
     proc = subprocess.Popen(
         [
             sys.executable,

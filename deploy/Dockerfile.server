@@ -1,0 +1,51 @@
+# The server image: the web bundle is built in a node stage, then shipped with the Python
+# workspace.  Two stages because node and the ModelScope-scale of a Python image have no
+# business being in the same layer set.
+
+FROM node:22-slim AS web
+
+WORKDIR /web
+# `package-lock.json` first: the dependency layer is only rebuilt when the lockfile changes.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY web/ ./
+RUN npm run build
+
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_LINK_MODE=copy \
+    # The server only hosts the SPA when it can find it; this is where the stage above put it.
+    PI_WEB_DIST=/app/web/dist
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl git \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && mv /root/.local/bin/uv /usr/local/bin/uv
+
+WORKDIR /app
+
+# The workspace layout matters: `uv sync` resolves the four packages from pyproject.toml.
+COPY pyproject.toml uv.lock ./
+COPY packages/ ./packages/
+RUN uv sync --frozen --no-dev
+
+COPY web/ ./web/
+COPY --from=web /web/dist ./web/dist
+COPY deploy/ ./deploy/
+COPY docs/ ./docs/
+COPY README.md ./
+
+# The venv is on the path uv created; calling `uv run` at runtime would re-resolve.
+ENV PATH="/app/.venv/bin:$PATH"
+
+# `--workers 1` is a hard requirement, not a default: sessions live in process memory, so a
+# second worker would give one user two different conversations depending on which worker
+# answered. Horizontal scaling needs the registry moved out of the process first.
+CMD ["python", "-m", "pi_server.cli", \
+     "--host", "0.0.0.0", \
+     "--port", "8787", \
+     "--model", "deepseek/deepseek-v4-flash"]

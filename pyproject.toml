@@ -24,6 +24,9 @@ pi-server = { workspace = true }
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    # Only for the sandbox provisioner's tests: they drive the docker daemon directly to
+    # prove a sandbox really is one. The server itself never imports it.
+    "docker>=7.1.0",
 ]
 
 [tool.pytest.ini_options]

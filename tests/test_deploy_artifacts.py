@@ -13,6 +13,7 @@ asked to parse a unit on macOS) the important properties are asserted directly.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -160,3 +161,81 @@ def test_the_operator_guide_exists_and_states_the_limits():
 def test_deploy_scripts_do_not_echo_secrets(script: str):
     """`set -x` would put a credential in the logs the moment a step fails."""
     assert "set -x" not in _read(script)
+
+
+# --------------------------------------------------------------------------------------
+# The sandbox provisioner
+# --------------------------------------------------------------------------------------
+
+
+def _compose_service(name: str) -> str:
+    """The text of one service block, so assertions cannot match another service's config."""
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert f"  {name}:" in compose, f"service {name} is missing from docker-compose.yml"
+    block = compose.split(f"  {name}:", 1)[1]
+    # Services are indented two spaces; the next one (or the top-level keys) ends this block.
+    lines: list[str] = []
+    for line in block.splitlines()[1:]:
+        if line.strip() and not line.startswith("    ") and re.match(r"^  [a-z]", line):
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def test_the_provisioner_is_the_only_service_with_the_docker_socket():
+    """The process that runs the agent's code must not be able to start containers."""
+    assert "/var/run/docker.sock" in _compose_service("sandbox-provisioner")
+    assert "/var/run/docker.sock" not in _compose_service("server")
+
+
+def test_the_compose_file_maps_host_paths_for_bind_mounts():
+    """The daemon resolves bind mounts on the host; the app only knows its own /data."""
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "PI_SANDBOX_HOST_DATA_ROOT" in compose
+    assert "PI_DATA_ROOT: /data" in compose
+    assert "PI_SANDBOX_BACKEND: provisioner" in compose
+
+
+def test_the_compose_file_keeps_the_credential_out_of_argv():
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "PI_API_KEY_FILE" in compose
+    assert "--api-key" not in compose
+
+
+def test_the_provisioner_refuses_to_run_without_a_token():
+    """An unauthenticated provisioner would let anything on the network start containers."""
+    source = (DEPLOY / "sandbox_provisioner" / "app.py").read_text(encoding="utf-8")
+
+    assert "SANDBOX_PROVISIONER_TOKEN is not set; refusing every request" in source
+    assert "def require_token" in source
+
+
+def test_the_provisioner_drops_privileges_on_every_container():
+    source = (DEPLOY / "sandbox_provisioner" / "app.py").read_text(encoding="utf-8")
+
+    for required in (
+        '"cap_drop": ["ALL"]',
+        '"no-new-privileges:true"',
+        '"pids_limit"',
+        '"mem_limit"',
+        '"nano_cpus"',
+    ):
+        assert required in source, f"{required} is missing from the container configuration"
+
+
+def test_the_sandbox_image_pins_the_tools_the_provisioner_assumes():
+    """`timeout` is what bounds every command; the image must be able to prove it has it."""
+    dockerfile = (DEPLOY / "sandbox_image" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "coreutils" in dockerfile or "timeout" in dockerfile
+
+    # No ENTRYPOINT *instruction*: the provisioner starts the container with `sleep infinity`
+    # and execs each command, so an entrypoint would replace that and the container would
+    # exit immediately. (Comments mentioning the word are fine.)
+    instructions = [
+        line.strip().split()[0].upper()
+        for line in dockerfile.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert "ENTRYPOINT" not in instructions

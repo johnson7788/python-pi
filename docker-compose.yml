@@ -1,0 +1,121 @@
+# Docker Compose deployment for the team server, with sandboxed command execution.
+#
+#   cp deploy/team.env.example .env.team   # then edit it
+#   docker build -t pi-sandbox:latest deploy/sandbox_image
+#   docker compose --env-file .env.team up -d --build
+#   python deploy/smoke.py http://127.0.0.1:8787 --username admin --password '…'
+#
+# Three things about this file are load-bearing.
+#
+# **The provisioner holds the docker socket; the server does not.**  Creating containers
+# requires root on the host, and the process that runs the agent's code is the one process
+# that must not have it.  The server can only ask for "a container with this one directory
+# mounted, running this string", over a token-authenticated HTTP call.
+#
+# **Paths are mapped twice, and both have to be right.**  The Docker daemon resolves bind
+# mounts on the *host*, so the path the provisioner hands the daemon must be a host path.
+# Inside the app container the same directory is at /data.  `PI_SANDBOX_HOST_DATA_ROOT`
+# bridges them; get it wrong and containers start with an empty workspace.
+#
+# **uid/gid must match on both sides.**  Files in the bind mount are written by the app
+# container and by sandbox containers, and read by both.  Everything runs as
+# ${PI_UID}:${PI_GID} so a file written in a sandbox is still editable by the server.
+# Find yours with `id -u` / `id -g`.
+
+services:
+  sandbox-provisioner:
+    build:
+      context: ./deploy/sandbox_provisioner
+    image: pi-sandbox-provisioner:${PI_VERSION:-0.1.0}
+    container_name: pi-sandbox-provisioner
+    restart: unless-stopped
+    # The socket, and nothing else. No data volume: the provisioner never reads the
+    # workspaces, it only tells the daemon to mount them.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      SANDBOX_PROVISIONER_TOKEN: ${SANDBOX_PROVISIONER_TOKEN:?set SANDBOX_PROVISIONER_TOKEN in your env file}
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-pi-sandbox:latest}
+      SANDBOX_NETWORK: ${SANDBOX_NETWORK:-bridge}
+      SANDBOX_IDLE_TIMEOUT_SECONDS: ${SANDBOX_IDLE_TIMEOUT_SECONDS:-900}
+      SANDBOX_EXEC_TIMEOUT_SECONDS: ${SANDBOX_EXEC_TIMEOUT_SECONDS:-180}
+      SANDBOX_MEMORY_LIMIT: ${SANDBOX_MEMORY_LIMIT:-2g}
+      SANDBOX_CPUS: ${SANDBOX_CPUS:-2}
+    networks:
+      - pi
+    # Not published: only the server talks to it, over the compose network.
+
+  server:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.server
+    image: pi-server:${PI_VERSION:-0.1.0}
+    container_name: pi-server
+    restart: unless-stopped
+    depends_on:
+      - sandbox-provisioner
+    user: "${PI_UID:-1000}:${PI_GID:-1000}"
+    ports:
+      # Loopback only. Put Caddy (or whatever terminates TLS) in front; `PI_COOKIE_SECURE=1`
+      # produces a cookie a browser will not send over plaintext, so exposing this directly
+      # would make login appear to succeed and then bounce back to the login page.
+      - "127.0.0.1:8787:8787"
+    volumes:
+      # The same host directory the provisioner will bind into sandbox containers. The app
+      # sees /data; the host sees ${PI_SANDBOX_HOST_DATA_ROOT}.
+      - ${PI_SANDBOX_HOST_DATA_ROOT:-/srv/pi}:/data
+    environment:
+      PI_AUTH_MODE: team
+      PI_DATA_ROOT: /data
+      PI_COOKIE_SECURE: ${PI_COOKIE_SECURE:-1}
+      PI_ADMIN_USERNAME: ${PI_ADMIN_USERNAME:-admin}
+      PI_SESSION_TTL_HOURS: ${PI_SESSION_TTL_HOURS:-336}
+      PI_MAX_ACTIVE_USERS: ${PI_MAX_ACTIVE_USERS:-20}
+      PI_SESSION_IDLE_MINUTES: ${PI_SESSION_IDLE_MINUTES:-30}
+      PI_TEMPLATE_AGENT_DIR: /data/template
+
+      # --- the sandbox -------------------------------------------------------------
+      PI_SANDBOX_BACKEND: provisioner
+      PI_SANDBOX_PROVISIONER_URL: http://sandbox-provisioner:8002
+      PI_SANDBOX_PROVISIONER_TOKEN: ${SANDBOX_PROVISIONER_TOKEN:?set SANDBOX_PROVISIONER_TOKEN in your env file}
+      PI_SANDBOX_IMAGE: ${SANDBOX_IMAGE:-pi-sandbox:latest}
+      # The data root as the *host* sees it. Without this the daemon is asked to mount
+      # /data/workspaces/<uid>, which exists only inside this container.
+      PI_SANDBOX_HOST_DATA_ROOT: ${PI_SANDBOX_HOST_DATA_ROOT:-/srv/pi}
+      # Sandbox containers run as the same ids as this container, so files stay manageable.
+      PI_SANDBOX_RUN_AS: "${PI_UID:-1000}:${PI_GID:-1000}"
+
+      # --- the model credential ----------------------------------------------------
+      # Read from a file so it is never an argv element (`ps` shows argv to everyone) and
+      # never in this file. Create it with:
+      #   install -m 0400 /dev/null secrets/api_key && printf %s 'sk-…' > secrets/api_key
+      PI_API_KEY_FILE: /run/secrets/api_key
+    secrets:
+      - api_key
+    # One process. See the note in deploy/Dockerfile.server.
+    networks:
+      - pi
+
+  # Terminates TLS and adds the security headers. Enable by setting PI_DOMAIN; leave it off
+  # while testing against http://127.0.0.1:8787 and set PI_COOKIE_SECURE=0 in that case.
+  #
+  # caddy:
+  #   image: caddy:2
+  #   restart: unless-stopped
+  #   depends_on: [server]
+  #   ports: ["80:80", "443:443"]
+  #   volumes:
+  #     - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy_data:/data
+  #   networks: [pi]
+
+secrets:
+  api_key:
+    file: ./secrets/api_key
+
+networks:
+  pi:
+    driver: bridge
+
+# volumes:
+#   caddy_data:

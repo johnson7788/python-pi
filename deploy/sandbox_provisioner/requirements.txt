@@ -1,0 +1,5 @@
+# The provisioner's own dependencies. Kept separate from the server's on purpose: this is
+# the one process that holds the docker socket, and it needs to do exactly one thing.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+docker>=7.1.0
