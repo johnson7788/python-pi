@@ -47,7 +47,7 @@ from pi_coding_agent.session_manager import SessionManager
 
 from . import auth
 from .config import COOKIE_NAME, ServerConfig
-from .db import Database, DuplicateUsername
+from .db import Database, DuplicateUsername, month_start
 from .workspace import Workspace, WorkspaceError
 
 __version__ = "0.1.0"
@@ -159,6 +159,7 @@ class SessionWorker:
         policy_factory: Callable[["SessionWorker"], Any] | None = None,
         on_audit: Callable[[dict[str, Any]], int | None] | None = None,
         on_audit_finish: Callable[[int, bool, int], None] | None = None,
+        on_usage: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.uid = uid
         self.options = options
@@ -170,6 +171,7 @@ class SessionWorker:
         self._policy_factory = policy_factory
         self._on_audit = on_audit
         self._on_audit_finish = on_audit_finish
+        self._on_usage = on_usage
         #: tool_call_id -> (audit row id, monotonic start), so an execution outcome can be
         #: attached to the decision that authorised it.
         self._pending_audit: dict[str, tuple[int, float]] = {}
@@ -250,22 +252,75 @@ class SessionWorker:
     # -- auditing ----------------------------------------------------------------------
 
     def _emit(self, payload: dict[str, Any]) -> None:
-        """Every outbound record, observed for audit and then routed to the user's tabs."""
+        """Every outbound record, observed for audit and usage, then routed to the tabs."""
         try:
-            self._observe_execution(payload)
-        except Exception:  # noqa: BLE001 - auditing must not be able to break the stream
+            self._observe(payload)
+        except Exception:  # noqa: BLE001 - bookkeeping must not be able to break the stream
             pass
         self.hub.emit_routed(payload)
 
-    def _observe_execution(self, payload: dict[str, Any]) -> None:
-        if payload.get("type") != "tool_execution_end":
+    def _observe(self, payload: dict[str, Any]) -> None:
+        kind = payload.get("type")
+        if kind == "tool_execution_end":
+            self._observe_tool_end(payload)
+        elif kind == "message_end":
+            self._observe_message_end(payload)
+
+    def _observe_message_end(self, payload: dict[str, Any]) -> None:
+        """Record one model response's usage.
+
+        ``message_end`` fires once per assistant message and carries that message's own
+        usage, so this is per-response accounting rather than a running total — which is
+        what makes the sum over a month meaningful.  ``turn_end`` carries the same message
+        again and is deliberately ignored, or every response would be counted twice.
+        """
+        if self._on_usage is None:
             return
+        message = payload.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            return
+        usage = message.get("usage")
+        if not isinstance(usage, dict):
+            return
+        input_tokens = int(usage.get("input") or 0)
+        output_tokens = int(usage.get("output") or 0)
+        cost = float((usage.get("cost") or {}).get("total") or 0.0)
+        if not (input_tokens or output_tokens or cost):
+            return
+        session_id = ""
+        provider = model_id = ""
+        try:
+            session = self.controller.session
+            session_id = session.state().get("session_id") or ""
+            model = getattr(session, "model", None)
+            provider = getattr(model, "provider", "") or ""
+            model_id = getattr(model, "id", "") or ""
+        except Exception:  # noqa: BLE001 - a torn-down session still gets billed
+            pass
+        self._on_usage(
+            {
+                "uid": self.uid,
+                "session_id": session_id,
+                "provider": provider,
+                "model_id": model_id,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_tokens": int(usage.get("cacheRead") or 0),
+                "cache_write_tokens": int(usage.get("cacheWrite") or 0),
+                "cost": cost,
+                "request_kind": "turn",
+            }
+        )
+
+    def _observe_tool_end(self, payload: dict[str, Any]) -> None:
         call_id = payload.get("toolCallId") or payload.get("tool_call_id") or ""
         pending = self._pending_audit.pop(str(call_id), None)
         if pending is None or self._on_audit_finish is None:
             return
         row_id, started = pending
-        self._on_audit_finish(row_id, bool(payload.get("isError")), int((time.monotonic() - started) * 1000))
+        self._on_audit_finish(
+            row_id, bool(payload.get("isError")), int((time.monotonic() - started) * 1000)
+        )
 
     def record_tool_decision(self, entry: dict[str, Any]) -> None:
         """The policy extension's audit sink.
@@ -355,6 +410,7 @@ class SessionRegistry:
         policy_factory: Callable[[SessionWorker], Any] | None = None,
         on_audit: Callable[[dict[str, Any]], int | None] | None = None,
         on_audit_finish: Callable[[int, bool, int], None] | None = None,
+        on_usage: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.base_options = base_options
         self.config = config
@@ -364,6 +420,7 @@ class SessionRegistry:
         self._policy_factory = policy_factory
         self._on_audit = on_audit
         self._on_audit_finish = on_audit_finish
+        self._on_usage = on_usage
         self._workers: dict[str, SessionWorker] = {}
         self._lock = asyncio.Lock()
 
@@ -429,6 +486,7 @@ class SessionRegistry:
                 policy_factory=self._policy_factory,
                 on_audit=self._on_audit,
                 on_audit_finish=self._on_audit_finish,
+                on_usage=self._on_usage,
             )
             self._workers[uid] = worker
 
@@ -623,6 +681,57 @@ def create_app(
             record=worker.record_tool_decision,
         )
 
+    def _usage_sink(entry: dict[str, Any]) -> None:
+        if database is None:
+            return
+        try:
+            database.record_usage(**entry)
+        except Exception:  # noqa: BLE001 - an accounting failure must not stop a turn
+            pass
+
+    #: Commands that make the model produce tokens, so all of them are quota-gated.
+    _BILLABLE_COMMANDS = frozenset({"prompt", "steer", "follow_up"})
+
+    def _quota_rejection(uid: str, text: str) -> dict[str, Any] | None:
+        """Refuse a billable command *before* it is accepted, or return ``None``.
+
+        Checking at preflight rather than after the model call is the difference between a
+        user seeing "out of quota" immediately and a user watching a whole turn run before
+        finding out it should not have.
+        """
+        if database is None:
+            return None
+        try:
+            command = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if not isinstance(command, dict) or command.get("type") not in _BILLABLE_COMMANDS:
+            return None
+        row = database.get_user(uid)
+        if row is None:
+            return None
+        token_quota = row["monthly_token_quota"]
+        cost_quota = row["monthly_cost_quota"]
+        if token_quota is None and cost_quota is None:
+            return None
+
+        used = database.usage_summary(uid, month_start())
+        total_tokens = int(used.get("total_tokens") or 0)
+        cost = float(used.get("cost") or 0.0)
+        if token_quota is not None and total_tokens >= int(token_quota):
+            reason = f"本月的 token 额度已用完（{total_tokens}/{int(token_quota)}），请联系管理员"
+        elif cost_quota is not None and cost >= float(cost_quota):
+            reason = f"本月的费用额度已用完（{cost:.4f}/{float(cost_quota)}），请联系管理员"
+        else:
+            return None
+        return {
+            "type": "response",
+            "id": command.get("id"),
+            "command": str(command.get("type")),
+            "success": False,
+            "error": reason,
+        }
+
     registry = SessionRegistry(
         options,
         server_config,
@@ -638,6 +747,7 @@ def create_app(
         policy_factory=_policy_for if database is not None else None,
         on_audit=_audit_sink if database is not None else None,
         on_audit_finish=_audit_finish if database is not None else None,
+        on_usage=_usage_sink if database is not None else None,
     )
 
     @asynccontextmanager
@@ -897,6 +1007,34 @@ def create_app(
         assert updated is not None
         return {"user": _user_row_to_json(updated)}
 
+    # -- usage and quota ---------------------------------------------------------------
+
+    @app.get("/api/usage/me")
+    async def usage_me(
+        user: auth.AuthUser = Depends(auth.get_required_user),
+    ) -> dict[str, Any]:
+        db = require_team_mode()
+        since = month_start()
+        row = db.get_user(user.uid)
+        return {
+            "windowStart": since,
+            "summary": db.usage_summary(user.uid, since),
+            "byDay": db.usage_by_day(user.uid, since),
+            "bySession": db.usage_by_session(user.uid, since),
+            "quota": {
+                "tokens": row["monthly_token_quota"] if row is not None else None,
+                "cost": row["monthly_cost_quota"] if row is not None else None,
+            },
+        }
+
+    @app.get("/api/admin/usage")
+    async def admin_usage(
+        _actor: auth.AuthUser = Depends(auth.get_admin_user),
+    ) -> dict[str, Any]:
+        db = require_team_mode()
+        since = month_start()
+        return {"windowStart": since, "users": db.usage_all_users(since)}
+
     @app.get("/api/admin/audit")
     async def admin_audit(
         _actor: auth.AuthUser = Depends(auth.get_admin_user),
@@ -1053,6 +1191,12 @@ def create_app(
                 text = await websocket.receive_text()
                 worker.touch()
                 worker.hub.touch(connection)
+                # Quota is enforced here, before the controller acknowledges the command,
+                # so a user over budget is told immediately instead of after a full turn.
+                rejected = _quota_rejection(uid, text)
+                if rejected is not None:
+                    connection.send(rejected)
+                    continue
                 await worker.controller.handle_line(text)
         except WebSocketDisconnect:
             pass

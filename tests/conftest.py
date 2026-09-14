@@ -86,6 +86,24 @@ class FakeOpenAIHandler(BaseHTTPRequestHandler):
         else:
             payload += sse(chunk({"role": "assistant", "content": "All done."}))
             payload += sse(chunk({}, finish_reason="stop"))
+        # Usage arrives in its own trailing chunk, which is what a real OpenAI-compatible
+        # endpoint does when the request asks for `stream_options.include_usage`.  Without
+        # it there is nothing for usage accounting to record and those tests would pass
+        # vacuously.
+        payload += sse(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "local-test",
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 1200,
+                    "completion_tokens": 300,
+                    "total_tokens": 1500,
+                },
+            }
+        )
         payload += b"data: [DONE]\n\n"
 
         self.send_response(200)
