@@ -390,3 +390,39 @@ M0–M6 已全部落地并提交，`uv run pytest -q` 与 `cd web && npm run ver
 - 自动压缩若走内部触发路径，可能只记到手动 `compact` 的那次。
 - 浏览器端的 team 模式登录流程由 `verify-dom.mjs --team`（jsdom + 假 transport）与
   服务端 API 测试共同覆盖，没有真实浏览器的端到端测试。
+
+## 16. §12 的落地（2026-09-14，二期执行面）
+
+设计文档 §12 原本写「一期只留口子，不实现」。口子留下之后紧接着就做实了，因为契约一旦
+写清楚，第二实现就是接线工作。
+
+| §12 的计划 | 实际做法 |
+|---|---|
+| `SandboxBackend` 协议 | `pi_coding_agent/sandbox/types.py`。`exec` 接收 `metadata` 而不是准备好的 env——这是实现时的一处修正：调用方不可能知道容器的 `PATH`/`HOME` 该是什么，把宿主环境转进容器既错又危险 |
+| `LocalBackend` | `sandbox/local.py`，仍是默认。没有 Docker 的个人部署不能被牺牲 |
+| `ProvisionerBackend` | `sandbox/provisioner.py`：HTTP 客户端。`cwd` 翻译进容器（工作区 → `/workspace`），工作区外的路径**拒绝**而不是猜 |
+| provisioner 服务 | `deploy/sandbox_provisioner/`：唯一挂 docker.sock 的进程；Bearer 认证；空闲回收；缺 `timeout` 的镜像在建容器时就失败 |
+| 容器形态 | 每用户一个（不是一个命令一个，也不是每用户一个实例）。空闲回收 + worker 退出时 release |
+
+**与原设计的偏离**
+
+1. **按 uid 而不是按 thread 建容器**。worker 在 bootstrap 之前就要拿到 backend，那时还没有
+   session id。一个用户同时只有一个活跃 worker，所以两者等价；代价是同一用户的两个历史会话
+   共用一个容器。id 从 uid 派生，因此空闲回收后的重建会复用同一个容器。
+2. **文件工具没有迁进容器**。它们由 server 进程直接读写工作区，被路径规则限制在工作区内。
+   一个容器里跑的是「命令」，不是「整个工具面」——这一点在 `docs/DEPLOY.md` 里明写，
+   不假装它是完整沙盒。
+3. **不再有 `truncated`/`full_output_path` 字段**。截断本来就是工具自己做的（它拿到文本后
+   再判断），放在 `ExecResult` 里是重复的真相。
+4. **abort 语义按后端如实描述**：本地后端真能杀掉进程组；远端后端只能取消 HTTP 请求，
+   容器里的进程可能还在跑到超时。这一点写在 docstring 里，并在返回值里如实标记。
+
+**验证强度**
+
+- `tests/test_sandbox_provisioner.py`：用假 docker 客户端断言容器配置（唯一挂载、`cap_drop=ALL`、
+  非 root、宿主环境不进容器），再用**真容器**证明工作区双向共享、看不到 docker.sock、超时生效。
+- `tests/test_sandbox_end_to_end.py`：provisioner 子进程 + team server + 假模型发出 `bash` 调用，
+  断言输出里有工作区文件、且 `hostname` 不是宿主——这是唯一能证明「agent 的命令确实进了容器」
+  的测试，也是接线出错时唯一会红的测试。
+- 环境限制：以上需要 Docker daemon，没有时整体 skip。systemd 单元与 Caddyfile 在本机
+  （macOS）无法真正加载，只断言其不变量。

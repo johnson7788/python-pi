@@ -214,17 +214,21 @@ PI_API_KEY=sk-xxx .venv/bin/python -m pi_server.cli \
 | 工具调用 | 不干预 | 白名单 + 危险命令闸门 + 审计日志 |
 | 页面 | 会话 | 会话 / 文件 / 用量 / 管理（成员、全局用量、审计） |
 
-三个必须知道的约束：
+四个必须知道的约束：
 
 - **单进程是硬约束**：会话状态在进程内存里，必须 `--workers 1`。横向扩展要先换掉注册表。
-- **一期没有沙盒**：白名单与审批能防误操作，防不住恶意用户。真正的边界是二期把执行面搬进容器
-  （`pi_coding_agent/sandbox/`，目前只有 `local`；设 `PI_SANDBOX_BACKEND=provisioner` 会**拒绝启动**，
-  而不是悄悄退化成不隔离）。
+- **沙盒是可选的，默认关闭**。`PI_SANDBOX_BACKEND=local`（默认）时命令就在服务进程里跑，靠策略
+  扩展拦——能防误操作，防不住恶意用户。改成 `provisioner` 后，agent 的每条命令都在一个只挂载
+  该用户工作区的容器里执行（见 `deploy/sandbox_provisioner/` 与 `docs/DEPLOY.md`）。
+  配置不全时服务端**拒绝启动**，而不是悄悄退回进程内执行。
+- **沙盒只覆盖命令执行**：`read`/`write`/`edit` 仍由服务进程读写工作区（受路径规则限制）。
 - 用户自带的扩展在 team 模式下**不加载**：per-user 的 `extensions/` 等于给每个同事一个以服务进程
   权限运行的入口。
 
-完整安装、systemd 硬化、Caddy、备份与排查见 [`docs/DEPLOY.md`](docs/DEPLOY.md)；
+部署用 Docker Compose（`docker-compose.yml`：server + sandbox provisioner），
+完整安装、沙盒开关、Caddy、备份与排查见 [`docs/DEPLOY.md`](docs/DEPLOY.md)；
 设计取舍见 [`docs/plans/2026-09-14-team-saas-design.md`](docs/plans/2026-09-14-team-saas-design.md)。
+不用 Docker 的部署方式见该文附录（没有沙盒）。
 
 部署后自检（20 项，覆盖「是否真的在拦截」）：
 

@@ -13,8 +13,10 @@
 #   own data and nothing else. That is what makes "the agent's shell runs as this process"
 #   survivable at all in phase one: the blast radius is the data root, not the machine.
 #
-# The unit deliberately does **not** set PI_SANDBOX_BACKEND: phase two adds it, and setting
-# it today makes the server refuse to start (by design — see docs/DEPLOY.md).
+# The unit deliberately does **not** set PI_SANDBOX_BACKEND. This deployment has no
+# provisioner to talk to, and asking for a sandbox that is not there makes the server refuse
+# to start rather than silently run commands in-process. Use docker-compose.yml for the
+# sandboxed deployment; this unit is the no-container fallback.
 
 [Unit]
 Description=python-pi team server (multi-tenant agent workspace)
