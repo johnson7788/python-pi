@@ -364,3 +364,71 @@ def test_the_smoke_password_can_come_from_stdin():
     source = (DEPLOY / "smoke.py").read_text(encoding="utf-8")
     assert "--password-stdin" in source
     assert "sys.stdin.readline()" in source
+
+
+def test_the_preset_admin_password_comes_from_env_or_file(tmp_path, monkeypatch):
+    """A deployment must be able to preset it without putting it on a command line."""
+    from pi_server.config import ServerConfig
+
+    monkeypatch.setenv("PI_ADMIN_PASSWORD", "preset-in-env")
+    monkeypatch.delenv("PI_ADMIN_PASSWORD_FILE", raising=False)
+    assert ServerConfig.from_env(data_root=str(tmp_path)).admin_password == "preset-in-env"
+
+    # The file form is what a docker secret / systemd credential provides, and it wins.
+    secret = tmp_path / "admin_password"
+    secret.write_text("preset-in-file\n", encoding="utf-8")
+    monkeypatch.delenv("PI_ADMIN_PASSWORD", raising=False)
+    monkeypatch.setenv("PI_ADMIN_PASSWORD_FILE", str(secret))
+    assert ServerConfig.from_env(data_root=str(tmp_path)).admin_password == "preset-in-file"
+
+    # An empty file means "not set", which is what lets the server generate one.
+    secret.write_text("", encoding="utf-8")
+    assert ServerConfig.from_env(data_root=str(tmp_path)).admin_password is None
+
+
+def test_compose_mounts_the_admin_password_as_a_secret():
+    """Never as an environment value: `docker inspect` shows those to anyone with the socket."""
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "PI_ADMIN_PASSWORD_FILE: /run/secrets/admin_password" in compose
+    assert "PI_ADMIN_PASSWORD:" not in compose, "the value itself must not be in compose"
+    assert "admin_password:" in compose.split("secrets:", 1)[1]
+
+
+def test_the_deploy_script_writes_the_password_as_a_secret(tmp_path, monkeypatch):
+    module = _deploy_module()
+    monkeypatch.setattr(module, "ADMIN_PASSWORD_FILE", tmp_path / "admin_password")
+    config = module.Config(
+        data_root=tmp_path,
+        port=8899,
+        uid=1000,
+        gid=1000,
+        sandbox=False,
+        cookie_secure=False,
+        admin_username="admin",
+        sandbox_image="x",
+        server_image="",
+        api_key=None,
+        admin_password="preset-admin",
+        token="t",
+    )
+
+    module.ensure_admin_password(config)
+    written = (tmp_path / "admin_password").read_text(encoding="utf-8")
+    assert written == "preset-admin"
+    assert (tmp_path / "admin_password").stat().st_mode & 0o777 == 0o400
+
+    # With nothing preset the file still has to exist: compose mounts it, and a missing file
+    # fails the whole `up` rather than falling back to a generated password.
+    config.admin_password = None
+    (tmp_path / "admin_password").unlink()
+    module.ensure_admin_password(config)
+    assert (tmp_path / "admin_password").read_text(encoding="utf-8") == ""
+
+
+def test_the_deploy_script_reads_the_local_env_file():
+    """A local deployment should need no flags: the repo's .env already has the credentials."""
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    assert 'LOCAL_ENV_FILE = REPO_ROOT / ".env"' in source
+    assert 'read_env_file(LOCAL_ENV_FILE).get("PI_ADMIN_PASSWORD")' in source
+    assert 'read_env_file(LOCAL_ENV_FILE).get("PI_API_KEY")' in source

@@ -93,8 +93,12 @@ services:
       # never in this file. Create it with:
       #   install -m 0400 /dev/null secrets/api_key && printf %s 'sk-…' > secrets/api_key
       PI_API_KEY_FILE: /run/secrets/api_key
+      # Preset admin password, used only on the very first start. Absent is fine: the server
+      # then generates one, prints it once, and requires a change at first login.
+      PI_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
     secrets:
       - api_key
+      - admin_password
     # One process. See the note in deploy/Dockerfile.server.
     networks:
       - pi
@@ -115,6 +119,10 @@ services:
 secrets:
   api_key:
     file: ./secrets/api_key
+  # `_FILE` is optional: compose mounts this only if the file exists, so a deployment that
+  # lets the server generate the password must create it empty or the mount fails.
+  admin_password:
+    file: ./secrets/admin_password
 
 networks:
   pi:

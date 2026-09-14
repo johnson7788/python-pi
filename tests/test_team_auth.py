@@ -488,3 +488,47 @@ def test_the_shell_is_public_but_the_data_is_not(team_server):
 
     for path in ("/api/state", "/api/sessions", "/api/workspace/tree", "/api/usage/me"):
         assert httpx.get(f"{team_server.base_url}{path}", timeout=10).status_code == 401, path
+
+
+# --------------------------------------------------------------------------------------
+# A preset admin password
+# --------------------------------------------------------------------------------------
+
+
+def test_a_preset_admin_password_is_used_and_not_forced_to_change(fake_openai, tmp_path):
+    """Presetting the password is only useful if it stays the one that was preset."""
+    from conftest import start_team_server
+
+    _, base_url = fake_openai
+    password = "preset-admin-password-1"
+    # No `--admin-password`: the point is the credential arriving from the environment.
+    server = start_team_server(
+        tmp_path, base_url, admin_password=None, extra_env={"PI_ADMIN_PASSWORD": password}
+    )
+    try:
+        client = login(server, "admin", password)
+        try:
+            me = client.get("/api/auth/me").json()["user"]
+            assert me["username"] == "admin"
+            # A generated password must be changed at first login; a preset one must not, or
+            # the operator's own credential would be refused on first use.
+            assert me["mustChangePassword"] is False
+            assert client.get("/api/state").status_code == 200
+        finally:
+            client.close()
+    finally:
+        server.stop()
+
+
+def test_the_generated_path_still_forces_a_change(fake_openai, tmp_path):
+    """The default must not change: with nothing preset, the printed password is one-time."""
+    from conftest import start_team_server
+
+    _, base_url = fake_openai
+    # Neither the flag nor the variable, so the server must generate one itself.
+    server = start_team_server(tmp_path, base_url, admin_password=None)
+    server.stop()
+    log = server.stderr()
+
+    assert "created the first superadmin" in log
+    assert "must be changed at first login" in log

@@ -49,6 +49,23 @@ python3 deploy/deploy_docker.py up --api-key sk-你的key
 | provisioner token | 写进 `.env.team`（0600）；重跑不会轮换，轮换会让运行中的服务端连不上 |
 | 模型 key | 写进 `secrets/api_key`（0400）并作为 docker secret 挂载——从不进 argv，`ps` 看不到 |
 
+### 预设管理员密码
+
+不想用随机生成的一次性密码，就在仓库根的 `.env` 里放一行：
+
+```bash
+PI_ADMIN_PASSWORD=你的密码
+```
+
+`deploy_docker.py up` 会读到它并写成 `secrets/admin_password`（0400，作为 docker secret 挂载，
+不进 argv 也不进环境变量），服务端首次启动就用它建 admin —— 而且**不会**强制首次登录改密
+（预设的意义就在于此）。也可以用 `--admin-password '…'` 或 `PI_ADMIN_PASSWORD_FILE` 指向一个文件。
+
+两点要注意：
+
+- **只在库里还没有任何账号时生效**。之后想改，走界面里的「修改密码」，或管理员重置。
+- 不预设就回到原来的行为：生成一个随机密码、在日志里打印一次、首次登录强制修改。
+
 常用命令：
 
 ```bash
@@ -69,6 +86,7 @@ python3 deploy/deploy_docker.py down        # 停服务；数据保留
 | `--no-sandbox` | 命令在 server 进程里跑，不需要 provisioner |
 | `--insecure-cookies` | **仅本机 HTTP 试用**：清掉 cookie 的 Secure 位，否则登录会跳回登录页 |
 | `--rebuild-sandbox` | 重建沙盒镜像 |
+| `--admin-password '…'` | 预设 admin 密码（等价于 `.env` 里的 `PI_ADMIN_PASSWORD`） |
 
 ### 手工步骤（不想用脚本时）
 

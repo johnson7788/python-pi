@@ -50,6 +50,10 @@ COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 ENV_FILE = REPO_ROOT / ".env.team"
 SECRETS_DIR = REPO_ROOT / "secrets"
 API_KEY_FILE = SECRETS_DIR / "api_key"
+ADMIN_PASSWORD_FILE = SECRETS_DIR / "admin_password"
+#: The personal-mode env file. Used as a *source* of credentials so a local deployment needs
+#: no flags at all, and never written to by this script.
+LOCAL_ENV_FILE = REPO_ROOT / ".env"
 SANDBOX_DOCKERFILE = REPO_ROOT / "deploy" / "sandbox_image"
 DEFAULT_SANDBOX_IMAGE = "pi-sandbox:latest"
 SERVER_SERVICE = "server"
@@ -69,6 +73,19 @@ class DeployError(RuntimeError):
 # --------------------------------------------------------------------------------------
 # Output
 # --------------------------------------------------------------------------------------
+
+
+def relative_to_repo(path: Path) -> str:
+    """A short path for logging, falling back to the absolute one.
+
+    ``Path.relative_to`` raises when the path is elsewhere, which would turn a log line into a
+    crash — and a secret file can legitimately live outside the repo (a mounted volume, a test
+    that points it at a temporary directory).
+    """
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 class Log:
@@ -114,6 +131,7 @@ class Config:
     sandbox_image: str
     server_image: str
     api_key: str | None
+    admin_password: str | None
     token: str
     extras: dict[str, str] = field(default_factory=dict)
 
@@ -314,7 +332,7 @@ def preflight(docker: Docker, config: Config) -> None:
 
     if not COMPOSE_FILE.is_file():
         raise DeployError(f"{COMPOSE_FILE} is missing")
-    Log.ok(f"compose file {COMPOSE_FILE.relative_to(REPO_ROOT)}")
+    Log.ok(f"compose file {relative_to_repo(COMPOSE_FILE)}")
 
     if config.sandbox and not docker.image_exists(config.sandbox_image):
         Log.warn(f"sandbox image {config.sandbox_image} is missing; it will be built")
@@ -386,11 +404,11 @@ def ensure_api_key(config: Config) -> None:
     Log.step("Model credential")
     if config.api_key:
         write_secret(API_KEY_FILE, config.api_key)
-        Log.ok(f"wrote {API_KEY_FILE.relative_to(REPO_ROOT)} (mode 0400) from --api-key/PI_API_KEY")
+        Log.ok(f"wrote {relative_to_repo(API_KEY_FILE)} (mode 0400) from --api-key/PI_API_KEY")
         return
 
     if API_KEY_FILE.is_file() and API_KEY_FILE.read_text(encoding="utf-8").strip():
-        Log.ok(f"reusing {API_KEY_FILE.relative_to(REPO_ROOT)}")
+        Log.ok(f"reusing {relative_to_repo(API_KEY_FILE)}")
         return
 
     existing = config.extras.get("PI_API_KEY")
@@ -405,6 +423,27 @@ def ensure_api_key(config: Config) -> None:
         f"    printf %s 'sk-…' > {API_KEY_FILE}\n"
         "  or pass --api-key once (it is written to that file, never to argv of the server)."
     )
+
+
+def ensure_admin_password(config: Config) -> None:
+    """Write the preset admin password, or an empty file.
+
+    The file must exist either way: compose mounts it as a secret, and a missing file is a
+    hard failure at `up` rather than a deployment that quietly generates a password. An empty
+    file reads as "not set", which is what makes the generated-password path work.
+    """
+    Log.step("Admin password")
+    if config.admin_password:
+        write_secret(ADMIN_PASSWORD_FILE, config.admin_password)
+        Log.ok(
+            f"preset, from --admin-password / PI_ADMIN_PASSWORD / "
+            f"{LOCAL_ENV_FILE.name}; written to {relative_to_repo(ADMIN_PASSWORD_FILE)} (0400)"
+        )
+        Log.info("the account is created with it and is NOT forced to change it at first login")
+        return
+    if not ADMIN_PASSWORD_FILE.exists():
+        write_secret(ADMIN_PASSWORD_FILE, "")
+    Log.info("none preset; the server will generate one and print it once")
 
 
 def ensure_token(config: Config) -> str:
@@ -477,19 +516,21 @@ def wait_for_health(config: Config, *, timeout: float = HEALTH_TIMEOUT_SECONDS) 
     )
 
 
-def generated_admin_password(docker: Docker) -> tuple[str, str] | None:
-    """The one-time credential from a first boot, if this was one.
+def first_boot_credentials(docker: Docker, config: Config) -> tuple[str, str] | None:
+    """``(username, password)`` when this start created the first admin, else ``None``.
 
-    Read out of the logs because that is the only place it exists — the server prints it once
-    and stores only a hash.  If it is gone, the operator resets it rather than us inventing a
-    way to recover it.
+    With a preset password we already know it.  Without one, the generated password exists
+    only in the log — the server prints it once and stores a hash — so it is read from there,
+    and if it has scrolled away the operator resets it rather than us inventing a recovery.
     """
     result = docker.run(["logs", SERVER_SERVICE], compose=True, check=False)
     text = (result.stdout or "") + (result.stderr or "")
+    if "created the first superadmin" not in text:
+        return None
+    if config.admin_password:
+        return config.admin_username, config.admin_password
     match = re.search(r"username:\s*(\S+)\s*\n.*?password:\s*(\S+)", text)
-    if match:
-        return match.group(1), match.group(2)
-    return None
+    return (match.group(1), match.group(2)) if match else None
 
 
 # --------------------------------------------------------------------------------------
@@ -600,7 +641,18 @@ def resolve_config(args: argparse.Namespace) -> Config:
         or persisted.get("SANDBOX_IMAGE")
         or DEFAULT_SANDBOX_IMAGE,
         server_image=getattr(args, "server_image", None) or "",
-        api_key=getattr(args, "api_key", None) or os.environ.get("PI_API_KEY"),
+        api_key=(
+            getattr(args, "api_key", None)
+            or os.environ.get("PI_API_KEY")
+            or read_env_file(LOCAL_ENV_FILE).get("PI_API_KEY")
+        )
+        or None,
+        admin_password=(
+            getattr(args, "admin_password", None)
+            or os.environ.get("PI_ADMIN_PASSWORD")
+            or read_env_file(LOCAL_ENV_FILE).get("PI_ADMIN_PASSWORD")
+        )
+        or None,
         token="",
     )
 
@@ -640,16 +692,19 @@ def command_up(args: argparse.Namespace) -> int:
     ensure_directories(config)
     write_env_file(ENV_FILE, config.as_env())
     Log.step("Configuration")
-    Log.ok(f"{ENV_FILE.relative_to(REPO_ROOT)} (mode 0600)")
+    Log.ok(f"{relative_to_repo(ENV_FILE)} (mode 0600)")
     ensure_api_key(config)
+    ensure_admin_password(config)
     build_sandbox_image(docker, config, force=args.rebuild_sandbox)
 
     compose_up(docker, config)
     health = wait_for_health(config)
 
     Log.step("Verification")
-    first_boot = health.get("activeUsers") == 0 and config.admin_username
-    credentials = generated_admin_password(docker)
+    credentials = first_boot_credentials(docker, config)
+    if config.admin_password and credentials is None:
+        Log.info("preset admin password is configured, but this was not a first boot")
+        Log.info("  (the account already exists; its password is whatever it was set to since)")
     failures = public_checks(config)
     if failures:
         for failure in failures:
@@ -662,8 +717,11 @@ def command_up(args: argparse.Namespace) -> int:
     Log.step("Next")
     if credentials is not None:
         username, password = credentials
-        print(f"    首次启动的管理员账号：{username} / {password}")
-        print("    这个密码只在这里出现过一次，登录后必须修改。")
+        if config.admin_password:
+            print(f"    管理员：{username}（用的是你在 .env 里预设的密码）")
+        else:
+            print(f"    首次启动的管理员账号：{username} / {password}")
+            print("    这个密码只在这里出现过一次，登录后必须修改。")
         if not failures:
             code = run_smoke(config, username, password, docker)
             Log.info(f"deploy/smoke.py exited {code}")
@@ -782,6 +840,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(up)
     up.add_argument("--api-key", help="model credential; written to secrets/api_key, never to argv of the server")
     up.add_argument("--admin-username", help="name of the first superadmin (default admin)")
+    up.add_argument(
+        "--admin-password",
+        help="preset password for the first superadmin (default: PI_ADMIN_PASSWORD, or the "
+        "repo's .env). Written to secrets/admin_password, never to argv",
+    )
     up.add_argument(
         "--insecure-cookies",
         action="store_true",

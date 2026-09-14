@@ -100,6 +100,11 @@ class ServerConfig:
     #: The shared model credential.  Team mode injects this into every user's session, so
     #: a per-user ``auth.json`` is never needed (and never allowed to shadow it).
     api_key: str | None = None
+    #: Password for the first superadmin, used only when the database has no accounts yet.
+    #: Supplying one means the account is created with it and is *not* forced to change it at
+    #: first login — which is the point of presetting it.  Read from ``PI_ADMIN_PASSWORD`` or,
+    #: preferably, ``PI_ADMIN_PASSWORD_FILE`` (a docker secret / systemd credential).
+    admin_password: str | None = None
     #: Model catalog and settings primed into a new user's agent dir.  Without this, a
     #: per-user agent dir would lose the provider overrides that live in
     #: ``~/.pi/agent/models.json`` — the agent would silently use the built-in catalog.
@@ -215,6 +220,7 @@ class ServerConfig:
             "cookie_secure": _bool_env("PI_COOKIE_SECURE"),
             "admin_username": os.environ.get("PI_ADMIN_USERNAME") or "admin",
             "api_key": _secret("PI_API_KEY"),
+            "admin_password": _secret("PI_ADMIN_PASSWORD"),
             "template_agent_dir": os.environ.get("PI_TEMPLATE_AGENT_DIR") or None,
             "sandbox_backend": (os.environ.get("PI_SANDBOX_BACKEND") or "local").strip().lower(),
             "provisioner_url": os.environ.get("PI_SANDBOX_PROVISIONER_URL") or None,

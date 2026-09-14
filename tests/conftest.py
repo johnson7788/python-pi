@@ -249,12 +249,20 @@ class TeamServer:
 
 
 def start_team_server(
-    tmp_path: Path, base_url: str, *extra: str, extra_env: dict | None = None
+    tmp_path: Path,
+    base_url: str,
+    *extra: str,
+    extra_env: dict | None = None,
+    admin_password: str | None = TEAM_ADMIN_PASSWORD,
 ) -> TeamServer:
     """Boot the server in team mode against a fake model and a fresh data root.
 
     ``extra_env`` is how a test turns on a sandbox backend: those settings come from the
     environment, not the command line, which is also how a deployment supplies them.
+
+    ``admin_password`` is passed as ``--admin-password``.  Pass ``None`` to omit the flag
+    entirely — needed to test the environment/file credential path, because the CLI flag
+    deliberately wins over ``PI_ADMIN_PASSWORD``.
     """
     agent_dir = tmp_path / "agent"
     workdir = tmp_path / "work"
@@ -295,8 +303,7 @@ def start_team_server(
             str(data_root),
             "--admin-username",
             "admin",
-            "--admin-password",
-            TEAM_ADMIN_PASSWORD,
+            *(("--admin-password", admin_password) if admin_password else ()),
             *extra,
         ],
         cwd=str(REPO_ROOT),

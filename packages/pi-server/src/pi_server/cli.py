@@ -122,7 +122,13 @@ def _check_sandbox_backend(config: ServerConfig) -> None:
 
 
 def _bootstrap_first_admin(config: ServerConfig, password: str | None) -> None:
-    """Create the first superadmin, printing a generated password exactly once."""
+    """Create the first superadmin.
+
+    A ``password`` provided by the operator is used as-is and the account is not forced to
+    change it — presetting a deployment's admin password only helps if it stays the one that
+    was preset.  With no password, one is generated and printed exactly once, and changing it
+    at first login is mandatory.
+    """
     config.ensure_layout()
     database = Database(config.db_path)
     try:
@@ -176,7 +182,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     config = _server_config(args)
     _check_sandbox_backend(config)
     if config.requires_auth:
-        _bootstrap_first_admin(config, args.admin_password)
+        _bootstrap_first_admin(config, args.admin_password or config.admin_password)
 
     app = create_app(
         options,
