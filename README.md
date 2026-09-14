@@ -241,6 +241,15 @@ python3 deploy/deploy_docker.py up --api-key sk-…
 python deploy/smoke.py https://pi.example.com --username admin --password '…'
 ```
 
+多人并发与容量：
+
+```bash
+python deploy/loadtest.py --url http://127.0.0.1:8787 -u admin --password-stdin \
+    --users 20 --turns 3 --create-users --verify-isolation
+```
+
+`uv run pytest tests/test_multi_user.py` 覆盖同一批性质但离线、确定性：并发互不干扰、每人只见自己的工作区与会话、用量与审计按 uid 归属、满员时拒绝而非降级、一个人的配额用尽不影响他人。
+
 ## 快速开始
 
 需要 Python 3.11+ 与 [uv](https://docs.astral.sh/uv/)。

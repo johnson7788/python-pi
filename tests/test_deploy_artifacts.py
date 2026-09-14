@@ -432,3 +432,71 @@ def test_the_deploy_script_reads_the_local_env_file():
     assert 'LOCAL_ENV_FILE = REPO_ROOT / ".env"' in source
     assert 'read_env_file(LOCAL_ENV_FILE).get("PI_ADMIN_PASSWORD")' in source
     assert 'read_env_file(LOCAL_ENV_FILE).get("PI_API_KEY")' in source
+
+
+# --------------------------------------------------------------------------------------
+# deploy/loadtest.py
+# --------------------------------------------------------------------------------------
+
+LOADTEST = DEPLOY / "loadtest.py"
+
+
+def _loadtest_module():
+    import importlib.util
+    import sys as _sys
+
+    spec = importlib.util.spec_from_file_location("pi_loadtest", LOADTEST)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    _sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_load_test_compiles_and_is_executable():
+    assert os.access(LOADTEST, os.X_OK), "deploy/loadtest.py is not executable"
+    result = subprocess.run(
+        [sys.executable, "-m", "py_compile", str(LOADTEST)], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert "subprocess" not in LOADTEST.read_text(encoding="utf-8"), (
+        "the load test should speak the protocol, not shell out"
+    )
+
+
+def test_the_load_test_reports_the_numbers_that_matter():
+    """A mean hides the slow tail, which is the number a user actually notices."""
+    source = LOADTEST.read_text(encoding="utf-8")
+    for wanted in ("p50", "p95", "p99", "throughput", "turns/s"):
+        assert wanted in source, f"{wanted} is not reported"
+
+
+def test_the_load_test_distinguishes_capacity_from_failure():
+    """Being refused at the ceiling is correct behaviour, not a crash — say so."""
+    source = LOADTEST.read_text(encoding="utf-8")
+    assert "4429" in source and "capacity" in source
+    assert "verdict: CAPACITY" in source
+    assert "PI_MAX_ACTIVE_USERS" in source, "the refusal message must name the setting"
+
+
+def test_the_load_test_prefers_stdin_for_the_password():
+    """Same rule as smoke.py: argv is readable by every account on the host."""
+    source = LOADTEST.read_text(encoding="utf-8")
+    assert "--password-stdin" in source
+    assert "PI_LOADTEST_PASSWORD" in source
+
+
+def test_the_load_test_verifies_isolation_by_uid():
+    """With several users on one process, 'who is where' is the property most likely to break."""
+    source = LOADTEST.read_text(encoding="utf-8")
+    assert "--verify-isolation" in source
+    assert "does not contain their own uid" in source
+    # And it must notice two users sharing one workspace, not just wrong paths.
+    assert "distinct cwds" in source
+
+
+def test_the_load_test_uses_a_separate_client_per_login():
+    """Logging in on one shared client would swap the admin cookie for a user's."""
+    source = LOADTEST.read_text(encoding="utf-8")
+    log_in = source.split("def log_in(")[1].split("\ndef ")[0]
+    assert "with httpx.Client(" in log_in
