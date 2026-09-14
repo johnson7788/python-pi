@@ -10,6 +10,9 @@ from typing import Sequence
 from pi_coding_agent.bootstrap import BootstrapOptions
 
 from .app import __version__, create_app
+from .auth import ensure_admin
+from .config import ServerConfig, resolve_data_root
+from .db import Database
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,7 +45,71 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reload", action="store_true", help="Auto-reload on code changes (development only)."
     )
+    # -- team mode -----------------------------------------------------------------
+    parser.add_argument(
+        "--auth-mode",
+        choices=("single", "team"),
+        help="'single' (default) is the original personal tool; 'team' requires accounts.",
+    )
+    parser.add_argument(
+        "--data-root",
+        help="Database, per-user workspaces and per-user agent dirs (default: ~/.pi/team).",
+    )
+    parser.add_argument(
+        "--admin-username", help="Username of the first superadmin (default: admin)."
+    )
+    parser.add_argument(
+        "--admin-password",
+        help="Password for the first superadmin; generated and printed once when omitted.",
+    )
+    parser.add_argument(
+        "--cookie-secure",
+        action="store_true",
+        help="Mark the session cookie Secure. Required when serving over HTTPS.",
+    )
+    parser.add_argument(
+        "--session-ttl-hours", type=int, help="Browser session lifetime (default: 336)."
+    )
     return parser
+
+
+def _server_config(args: argparse.Namespace) -> ServerConfig:
+    """Merge explicit flags over the ``PI_*`` environment defaults."""
+    overrides: dict[str, object] = {}
+    if args.data_root:
+        overrides["data_root"] = resolve_data_root(args.data_root)
+    if args.auth_mode:
+        overrides["auth_mode"] = args.auth_mode
+    if args.cookie_secure:
+        overrides["cookie_secure"] = True
+    if args.admin_username:
+        overrides["admin_username"] = args.admin_username
+    if args.session_ttl_hours:
+        overrides["session_ttl_hours"] = args.session_ttl_hours
+    return ServerConfig.from_env(**overrides)
+
+
+def _bootstrap_first_admin(config: ServerConfig, password: str | None) -> None:
+    """Create the first superadmin, printing a generated password exactly once."""
+    config.ensure_layout()
+    database = Database(config.db_path)
+    try:
+        created = ensure_admin(database, config.admin_username, password)
+    finally:
+        database.close()
+    if created is None:
+        return
+    username, generated = created
+    if password is not None:
+        print(f"[pi-py-web] created the first superadmin: {username}", file=sys.stderr)
+        return
+    print(
+        f"[pi-py-web] created the first superadmin\n"
+        f"[pi-py-web]   username: {username}\n"
+        f"[pi-py-web]   password: {generated}\n"
+        f"[pi-py-web] This password is shown once and must be changed at first login.",
+        file=sys.stderr,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -74,7 +141,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         print("pi-py-web: uvicorn is required (pip install pi-server)", file=sys.stderr)
         raise SystemExit(1) from None
 
-    app = create_app(options, on_warning=lambda message: print(f"pi-py: {message}", file=sys.stderr))
+    config = _server_config(args)
+    if config.requires_auth:
+        _bootstrap_first_admin(config, args.admin_password)
+
+    app = create_app(
+        options,
+        on_warning=lambda message: print(f"pi-py: {message}", file=sys.stderr),
+        config=config,
+    )
 
     from .app import resolve_static_dir
 
@@ -86,6 +161,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         )
 
     print(f"pi-py-web {__version__} serving {cwd} at http://{args.host}:{args.port}", file=sys.stderr)
+    if config.requires_auth:
+        print(
+            f"pi-py-web: auth mode 'team' — accounts in {config.db_path},\n"
+            f"           workspaces under {config.workspace_root} (per-user cwd lands in M1)",
+            file=sys.stderr,
+        )
+    else:
+        print("pi-py-web: auth mode 'single' — no accounts, one shared session", file=sys.stderr)
 
     uvicorn.run(
         app,

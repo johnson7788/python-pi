@@ -29,16 +29,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from pi_coding_agent.bootstrap import BootstrapOptions, bootstrap
 from pi_coding_agent.modes.jsonl import serialize_json_line
 from pi_coding_agent.modes.rpc_mode import RpcMode, model_to_json
 from pi_coding_agent.session_manager import SessionManager
 
+from . import auth
+from .config import COOKIE_NAME, ServerConfig
+from .db import Database, DuplicateUsername
+
 __version__ = "0.1.0"
+
+#: Shortest password the account endpoints will accept.  Length beats composition rules.
+_MIN_PASSWORD_LENGTH = 8
 
 #: Dialog methods that block a handler until a client answers.
 BLOCKING_DIALOG_METHODS = frozenset({"select", "confirm", "input", "editor"})
@@ -215,8 +223,69 @@ def resolve_static_dir() -> Path | None:
 # --------------------------------------------------------------------------------------
 
 
-def create_app(options: BootstrapOptions, *, on_warning: Any = None) -> FastAPI:
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class PasswordChangeRequest(BaseModel):
+    currentPassword: str
+    newPassword: str
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    displayName: str = ""
+    role: str = "user"
+    mustChangePassword: bool = True
+    monthlyTokenQuota: int | None = None
+    monthlyCostQuota: float | None = None
+
+
+class UpdateUserRequest(BaseModel):
+    """Every field is optional; only what the client sent is applied."""
+
+    displayName: str | None = None
+    role: str | None = None
+    status: str | None = None
+    password: str | None = None
+    mustChangePassword: bool | None = None
+    monthlyTokenQuota: int | None = None
+    monthlyCostQuota: float | None = None
+
+
+def _user_row_to_json(row: Any) -> dict[str, Any]:
+    """The admin-facing shape of an account.  Never includes the password hash."""
+    return {
+        "uid": row["uid"],
+        "username": row["username"],
+        "displayName": row["display_name"],
+        "role": row["role"],
+        "status": row["status"],
+        "mustChangePassword": bool(row["must_change_password"]),
+        "monthlyTokenQuota": row["monthly_token_quota"],
+        "monthlyCostQuota": row["monthly_cost_quota"],
+        "createdAt": row["created_at"],
+        "lastLoginAt": row["last_login_at"],
+    }
+
+
+def create_app(
+    options: BootstrapOptions,
+    *,
+    on_warning: Any = None,
+    config: ServerConfig | None = None,
+) -> FastAPI:
     server = AgentServer(options, on_warning=on_warning)
+    server_config = config or ServerConfig.from_env()
+    # Accounts only exist in team mode, so single mode does not create a database (or a
+    # data root) behind the user's back — the personal flow stays byte-for-byte what it was.
+    database: Database | None = None
+    if server_config.requires_auth:
+        server_config.ensure_layout()
+        database = Database(server_config.db_path)
+        database.purge_expired_sessions()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> Any:
@@ -224,9 +293,37 @@ def create_app(options: BootstrapOptions, *, on_warning: Any = None) -> FastAPI:
             yield
         finally:
             await server.shutdown()
+            if database is not None:
+                database.close()
 
     app = FastAPI(title="python-pi", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.server = server
+    app.state.server_config = server_config
+    app.state.db = database
+
+    def require_team_mode() -> Database:
+        if database is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "accounts are disabled (auth mode is 'single')"},
+            )
+        return database
+
+    # Fail closed: in team mode everything under /api/ needs a live session, except the
+    # two endpoints a browser must reach before it has one.  Enumerating protected paths
+    # instead would mean a new endpoint is public until someone remembers to list it.
+    _PUBLIC_PATHS = frozenset({"/api/health", "/api/auth/login"})
+
+    @app.middleware("http")
+    async def _require_authentication(request: Request, call_next: Any) -> Any:
+        if database is None:
+            return await call_next(request)
+        path = request.url.path
+        if not path.startswith("/api/") or path in _PUBLIC_PATHS:
+            return await call_next(request)
+        if auth.current_user(request) is None:
+            return JSONResponse(status_code=401, content={"error": "unauthenticated"})
+        return await call_next(request)
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
@@ -235,7 +332,177 @@ def create_app(options: BootstrapOptions, *, on_warning: Any = None) -> FastAPI:
             "version": __version__,
             "cwd": options.cwd,
             "clients": server.hub.client_count,
+            "authMode": server_config.auth_mode,
         }
+
+    # -- accounts ----------------------------------------------------------------------
+
+    @app.post("/api/auth/login")
+    async def login(payload: LoginRequest, request: Request) -> JSONResponse:
+        db = require_team_mode()
+        user = auth.authenticate(db, payload.username, payload.password)
+        if user is None:
+            # One message for every failure mode: never reveal whether a name exists.
+            raise HTTPException(status_code=401, detail={"error": "invalid username or password"})
+        token = auth.start_session(
+            db, user, server_config, user_agent=request.headers.get("user-agent", "")
+        )
+        response = JSONResponse({"user": user.to_json()})
+        auth.set_cookie(response, token, server_config)
+        return response
+
+    @app.post("/api/auth/logout")
+    async def logout(request: Request) -> JSONResponse:
+        db = require_team_mode()
+        token = request.cookies.get(COOKIE_NAME)
+        if token:
+            db.revoke_auth_session(auth.hash_token(token))
+        response = JSONResponse({"ok": True})
+        auth.clear_cookie(response)
+        return response
+
+    @app.get("/api/auth/me")
+    async def me(request: Request) -> dict[str, Any]:
+        user = auth.current_user(request)
+        return {
+            "authMode": server_config.auth_mode,
+            "user": user.to_json() if user is not None else None,
+        }
+
+    @app.post("/api/auth/password")
+    async def change_password(
+        payload: PasswordChangeRequest,
+        user: auth.AuthUser = Depends(auth.get_required_user),
+    ) -> JSONResponse:
+        """Change your own password.  Other devices are signed out; this one is not."""
+        db = require_team_mode()
+        row = db.get_user(user.uid)
+        if row is None:
+            raise HTTPException(status_code=404, detail={"error": "account not found"})
+        if not auth.verify_password(payload.currentPassword, row["password_hash"]):
+            raise HTTPException(status_code=403, detail={"error": "current password is incorrect"})
+        if len(payload.newPassword) < _MIN_PASSWORD_LENGTH:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": f"password must be at least {_MIN_PASSWORD_LENGTH} characters"},
+            )
+        db.set_password(user.uid, auth.hash_password(payload.newPassword), must_change=False)
+        db.revoke_user_sessions(user.uid)
+        token = auth.start_session(db, user, server_config)
+        refreshed = db.get_user(user.uid)
+        response = JSONResponse(
+            {"user": _user_row_to_json(refreshed) if refreshed is not None else user.to_json()}
+        )
+        auth.set_cookie(response, token, server_config)
+        return response
+
+    # -- administration ----------------------------------------------------------------
+
+    @app.get("/api/admin/users")
+    async def admin_list_users(
+        _actor: auth.AuthUser = Depends(auth.get_admin_user),
+    ) -> dict[str, Any]:
+        db = require_team_mode()
+        return {"users": [_user_row_to_json(row) for row in db.list_users()]}
+
+    @app.post("/api/admin/users")
+    async def admin_create_user(
+        payload: CreateUserRequest,
+        actor: auth.AuthUser = Depends(auth.get_admin_user),
+    ) -> dict[str, Any]:
+        db = require_team_mode()
+        auth.validate_role(payload.role)
+        if payload.role != "user" and not actor.is_superadmin:
+            raise HTTPException(
+                status_code=403, detail={"error": "only a superadmin can create administrators"}
+            )
+        if len(payload.password) < _MIN_PASSWORD_LENGTH:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": f"password must be at least {_MIN_PASSWORD_LENGTH} characters"},
+            )
+        try:
+            uid = db.create_user(
+                username=payload.username,
+                password_hash=auth.hash_password(payload.password),
+                display_name=payload.displayName or payload.username,
+                role=payload.role,
+                must_change_password=payload.mustChangePassword,
+                monthly_token_quota=payload.monthlyTokenQuota,
+                monthly_cost_quota=payload.monthlyCostQuota,
+            )
+        except DuplicateUsername:
+            raise HTTPException(
+                status_code=409, detail={"error": f"username already exists: {payload.username}"}
+            ) from None
+        created = db.get_user(uid)
+        assert created is not None
+        return {"user": _user_row_to_json(created)}
+
+    @app.patch("/api/admin/users/{uid}")
+    async def admin_update_user(
+        uid: str,
+        payload: UpdateUserRequest,
+        actor: auth.AuthUser = Depends(auth.get_admin_user),
+    ) -> dict[str, Any]:
+        db = require_team_mode()
+        target = db.get_user(uid)
+        if target is None:
+            raise HTTPException(status_code=404, detail={"error": "account not found"})
+
+        sent = payload.model_dump(exclude_unset=True)
+        if "role" in sent:
+            auth.validate_role(sent["role"])
+            if not actor.is_superadmin:
+                raise HTTPException(
+                    status_code=403, detail={"error": "only a superadmin can change roles"}
+                )
+        if "status" in sent and sent["status"] not in {"active", "disabled"}:
+            raise HTTPException(status_code=422, detail={"error": "status must be active or disabled"})
+        if uid == actor.uid and ("role" in sent or "status" in sent):
+            raise HTTPException(
+                status_code=400, detail={"error": "you cannot change your own role or status"}
+            )
+        if len(sent.get("password") or "") and len(sent["password"]) < _MIN_PASSWORD_LENGTH:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": f"password must be at least {_MIN_PASSWORD_LENGTH} characters"},
+            )
+        # Never let the last usable administrator lock everyone out.
+        removes_admin = sent.get("status") == "disabled" or sent.get("role") == "user"
+        if target["role"] in auth.ADMIN_ROLES and target["status"] == "active" and removes_admin:
+            if db.count_active_admins() <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": "the last active administrator cannot be demoted or disabled"},
+                )
+
+        fields: dict[str, Any] = {}
+        if "displayName" in sent:
+            fields["display_name"] = sent["displayName"] or target["username"]
+        if "role" in sent:
+            fields["role"] = sent["role"]
+        if "status" in sent:
+            fields["status"] = sent["status"]
+        if "monthlyTokenQuota" in sent:
+            fields["monthly_token_quota"] = sent["monthlyTokenQuota"]
+        if "monthlyCostQuota" in sent:
+            fields["monthly_cost_quota"] = sent["monthlyCostQuota"]
+        if "mustChangePassword" in sent:
+            fields["must_change_password"] = bool(sent["mustChangePassword"])
+        if "password" in sent:
+            fields["password_hash"] = auth.hash_password(sent["password"])
+            fields["must_change_password"] = bool(sent.get("mustChangePassword", True))
+        if fields:
+            db.update_user(uid, **fields)
+
+        # A credential or account change must invalidate existing browser sessions.
+        if "password" in sent or sent.get("status") == "disabled":
+            db.revoke_user_sessions(uid)
+
+        updated = db.get_user(uid)
+        assert updated is not None
+        return {"user": _user_row_to_json(updated)}
 
     @app.get("/api/models")
     async def models() -> dict[str, Any]:
@@ -269,6 +536,13 @@ def create_app(options: BootstrapOptions, *, on_warning: Any = None) -> FastAPI:
     @app.websocket("/api/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:
         await websocket.accept()
+        # The handshake is a same-origin request, so the session cookie is already here;
+        # no credential needs to travel in the query string (where it would be logged).
+        if database is not None:
+            user = auth.resolve_session(database, websocket.cookies.get(COOKIE_NAME))
+            if user is None:
+                await websocket.close(code=4401, reason="unauthenticated")
+                return
         connection = server.hub.add(websocket)
         # A single writer per connection keeps frames from interleaving.
         connection.sender = asyncio.create_task(_pump(connection))
