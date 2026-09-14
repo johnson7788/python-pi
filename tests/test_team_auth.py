@@ -474,3 +474,17 @@ def test_team_mode_scrubs_the_shell_environment(tmp_path):
     assert options.scrub_shell_env is True
     assert options.no_extensions is True
     assert options.api_key is None  # no shared key configured in this unit test
+
+
+def test_the_shell_is_public_but_the_data_is_not(team_server):
+    """A logged-out browser must be able to load the page that asks it to log in.
+
+    The SPA is served outside `/api/`, so it is reachable anonymously by design; every
+    endpoint that carries a session, a file or an account is not. Getting this backwards
+    would either break the login page or leak data.
+    """
+    shell = httpx.get(f"{team_server.base_url}/", timeout=10)
+    assert shell.status_code in (200, 503)  # 503 only when the SPA was never built
+
+    for path in ("/api/state", "/api/sessions", "/api/workspace/tree", "/api/usage/me"):
+        assert httpx.get(f"{team_server.base_url}{path}", timeout=10).status_code == 401, path

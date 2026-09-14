@@ -12,8 +12,9 @@
     "mock": "node mock-server.mjs",
     "verify:mock": "node scripts/verify-mock.mjs",
     "verify:dom": "node scripts/verify-dom.mjs",
-    "verify": "npm run typecheck && npm run verify:dom && npm run verify:transcript",
-    "verify:transcript": "node scripts/verify-transcript.mjs"
+    "verify": "npm run typecheck && npm run verify:dom && npm run verify:dom:team && npm run verify:transcript",
+    "verify:transcript": "node scripts/verify-transcript.mjs",
+    "verify:dom:team": "node scripts/verify-dom.mjs --team"
   },
   "dependencies": {
     "dompurify": "^3.2.4",

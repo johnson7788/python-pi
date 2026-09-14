@@ -10,7 +10,14 @@
  * `index.html` we install the DOM globals and import the built bundle directly,
  * exactly as the browser would.
  *
- * Usage: node scripts/verify-dom.mjs
+ * Two scenarios run from this file, because the app has two entry states:
+ *
+ *   node scripts/verify-dom.mjs          single mode — no accounts, workspace renders
+ *   node scripts/verify-dom.mjs --team   team mode   — no session, login form renders
+ *
+ * The team case also asserts that **no WebSocket is opened**, since a socket that is
+ * certain to be refused should never be created. Both are separate processes because
+ * `import()` caches the bundle and it can only mount once per process.
  */
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -18,6 +25,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { JSDOM, VirtualConsole } from "jsdom";
+
+const TEAM_MODE = process.argv.includes("--team");
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dist = resolve(here, "..", "dist");
@@ -85,6 +94,11 @@ const { window } = dom;
 
 class FakeWebSocket {
   constructor() {
+    if (TEAM_MODE) {
+      // The whole point of the gate: a signed-out browser must not open a socket that
+      // the server would refuse with 4401.
+      throw new Error("no WebSocket may be opened before authentication");
+    }
     this.readyState = 1;
     setTimeout(() => {
       this.onopen?.();
@@ -100,13 +114,25 @@ class FakeWebSocket {
 window.WebSocket = FakeWebSocket;
 window.fetch = async (input) => {
   const url = String(input);
-  const body = url.includes("/api/models")
-    ? { models: [model] }
-    : url.includes("/api/sessions")
-      ? { sessions: [] }
-      : url.includes("/api/state")
-        ? frames[1].data
-        : { status: "ok", version: "test", cwd: "/tmp/demo" };
+  if (TEAM_MODE) {
+    // Every request is anonymous, which is exactly what a fresh browser sees.
+    const payload = { detail: { error: "unauthenticated" } };
+    return {
+      ok: false,
+      status: 401,
+      json: async () => payload,
+      text: async () => JSON.stringify(payload),
+    };
+  }
+  const body = url.includes("/api/auth/me")
+    ? { authMode: "single", user: null }
+    : url.includes("/api/models")
+      ? { models: [model] }
+      : url.includes("/api/sessions")
+        ? { sessions: [] }
+        : url.includes("/api/state")
+          ? frames[1].data
+          : { status: "ok", version: "test", cwd: "/tmp/demo" };
   return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
 };
 window.matchMedia ??= () => ({
@@ -190,6 +216,24 @@ const text = () => window.document.body.textContent ?? "";
 try {
   await import(pathToFileURL(resolve(assets, bundleName)).href);
 
+  if (TEAM_MODE) {
+    // No session: the login form, and nothing that looks like a workspace.
+    await waitFor(() => window.document.querySelector('input[type="password"]'));
+    if (window.document.querySelector("textarea")) {
+      throw new Error("the composer must not render before authentication");
+    }
+    if (!text().includes("登录")) throw new Error("login page copy is missing");
+
+    console.log("DOM verification PASS (team mode)");
+    console.log("  bundle:", bundleName);
+    console.log("  login form present: true");
+    console.log("  composer present: false");
+    console.log("  WebSocket opened: false");
+    console.log("  console errors:", errors.length);
+    for (const error of errors.slice(0, 5)) console.log("   !", error);
+    process.exit(errors.length === 0 ? 0 : 1);
+  }
+
   await waitFor(() => window.document.querySelector("textarea") || text().length > 40);
   await waitFor(() => text().includes("Pi") || text().includes("会话"));
 
@@ -198,7 +242,7 @@ try {
 
   await waitFor(() => text().includes("demo") || text().includes("Demo"), { timeout: 5000 });
 
-  console.log("DOM verification PASS");
+  console.log("DOM verification PASS (single mode)");
   console.log("  bundle:", bundleName);
   console.log("  rendered text length:", text().length);
   console.log("  elements rendered:", window.document.querySelectorAll("*").length);

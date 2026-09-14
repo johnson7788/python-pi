@@ -521,6 +521,11 @@ const server = createServer((request, response) => {
   }
 
   switch (url.pathname) {
+    case '/api/auth/me':
+      // The mock replays the personal, account-less deployment, so the SPA renders the
+      // workspace straight away instead of a login form.
+      json({ authMode: 'single', user: null })
+      return
     case '/api/health':
       json({ status: 'ok', version: VERSION })
       return

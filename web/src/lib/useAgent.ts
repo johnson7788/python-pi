@@ -19,6 +19,7 @@ import type {
   ToolResultPayload,
 } from './protocol'
 import { asRecord, isAssistantMessage, isTextBlock, isToolCallBlock } from './protocol'
+import { resolveApiBase, resolveWsUrl } from './endpoints'
 
 /* -------------------------------------------------------------------------- */
 /* Public view-model types                                                     */
@@ -789,18 +790,6 @@ function reducer(state: AgentStore, action: Action): AgentStore {
 /* Transport                                                                   */
 /* -------------------------------------------------------------------------- */
 
-export function resolveWsUrl(): string {
-  const configured = import.meta.env.VITE_WS_URL
-  if (typeof configured === 'string' && configured.length > 0) return configured
-  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${scheme}//${window.location.host}/api/ws`
-}
-
-function resolveApiBase(): string {
-  const configured = import.meta.env.VITE_API_BASE
-  return typeof configured === 'string' && configured.length > 0 ? configured : ''
-}
-
 let commandSeq = 0
 function nextCommandId(): string {
   commandSeq += 1
@@ -865,16 +854,30 @@ export interface AgentApi {
   reconnectNow: () => void
 }
 
-export function useAgent(): AgentApi {
+export interface UseAgentOptions {
+  /**
+   * Whether to hold a socket at all. The app only enables the agent once a session is
+   * known to exist, so a logged-out or still-checking browser does not open a connection
+   * that is certain to be refused.
+   */
+  enabled?: boolean
+  /** Called when the server reports the session is gone (HTTP 401 or socket close 4401). */
+  onUnauthorized?: () => void
+}
+
+export function useAgent(options: UseAgentOptions = {}): AgentApi {
+  const { enabled = true } = options
   const [store, dispatch] = useReducer(reducer, INITIAL_STORE)
   const socketRef = useRef<WebSocket | null>(null)
   const retryTimerRef = useRef<number | null>(null)
   const attemptRef = useRef(0)
   const closedByUsRef = useRef(false)
-  // Kept in a ref so `connect` can stay mount-stable while still being able to
+  // Held in a ref so `connect` can stay mount-stable while still being able to
   // reconcile after a reconnect.
   const dispatchRef = useRef(dispatch)
   dispatchRef.current = dispatch
+  const unauthorizedRef = useRef(options.onUnauthorized)
+  unauthorizedRef.current = options.onUnauthorized
 
   const send = useCallback((command: ClientCommandInput) => {
     const socket = socketRef.current
@@ -892,7 +895,11 @@ export function useAgent(): AgentApi {
 
   const loadSessions = useCallback(async () => {
     try {
-      const response = await fetch(`${resolveApiBase()}/api/sessions`)
+      const response = await fetch(`${resolveApiBase()}/api/sessions`, { credentials: 'same-origin' })
+      if (response.status === 401) {
+        unauthorizedRef.current?.()
+        return
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const payload = (await response.json()) as { sessions?: SessionInfo[] }
       dispatchRef.current({ type: 'sessions', sessions: payload.sessions ?? [] })
@@ -960,12 +967,19 @@ export function useAgent(): AgentApi {
       dispatchRef.current({ type: 'server_event', event: parsed as ServerEvent })
     }
 
-    socket.onclose = () => {
+    socket.onclose = (event: CloseEvent) => {
       // Only the live socket may schedule a retry; otherwise the deliberate close
       // of a replaced socket would spawn a duplicate connection.
       if (socketRef.current !== socket) return
       socketRef.current = null
       if (closedByUsRef.current) return
+      // 4401 is the server saying "there is no session behind this socket". Retrying
+      // would hammer a login wall forever, so the app is told to ask for credentials.
+      if (event.code === 4401) {
+        unauthorizedRef.current?.()
+        dispatchRef.current({ type: 'connection', status: 'reconnecting' })
+        return
+      }
       const attempt = attemptRef.current
       attemptRef.current += 1
       dispatchRef.current({ type: 'connection', status: 'reconnecting' })
@@ -978,6 +992,7 @@ export function useAgent(): AgentApi {
   }, [loadSessions, syncState])
 
   useEffect(() => {
+    if (!enabled) return
     closedByUsRef.current = false
     connect()
     return () => {
@@ -986,17 +1001,18 @@ export function useAgent(): AgentApi {
       socketRef.current?.close()
       socketRef.current = null
     }
-  }, [connect])
+  }, [connect, enabled])
 
   // Sessions and health are cheap; polling them keeps the sidebar honest when a
   // session is created by another client.
   useEffect(() => {
+    if (!enabled) return
     void loadSessions()
     const timer = window.setInterval(() => {
       void loadSessions()
     }, 15_000)
     return () => window.clearInterval(timer)
-  }, [loadSessions])
+  }, [loadSessions, enabled])
 
   // Stable across renders: the Composer depends on it in an effect, and a new
   // identity on every store update would re-run the injection logic.
