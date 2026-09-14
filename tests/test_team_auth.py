@@ -12,17 +12,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import socket
-import subprocess
-import sys
 import time
-from pathlib import Path
 
 import httpx
 import pytest
 import websockets
-from conftest import FakeOpenAIHandler, write_agent_config
+from conftest import (
+    TEAM_ADMIN_PASSWORD,
+    TEAM_USER_PASSWORD,
+    FakeOpenAIHandler,
+    TeamServer,
+    cookie_header,
+    login,
+    team_server,  # noqa: F401 - re-exported so pytest can see the fixture
+)
 
 from pi_coding_agent.bootstrap import BootstrapOptions
 from pi_server.app import CapacityError, SessionRegistry, SessionWorker
@@ -39,10 +42,8 @@ from pi_server.auth import (
 from pi_server.config import COOKIE_NAME, ServerConfig
 from pi_server.db import Database, DuplicateUsername
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-ADMIN_PASSWORD = "admin-password-1"
-USER_PASSWORD = "user-password-1"
+ADMIN_PASSWORD = TEAM_ADMIN_PASSWORD
+USER_PASSWORD = TEAM_USER_PASSWORD
 
 # --------------------------------------------------------------------------------------
 # Database and primitives
@@ -162,119 +163,8 @@ def test_ensure_admin_generates_a_password_that_must_be_changed(db):
 # --------------------------------------------------------------------------------------
 
 
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
-class TeamServer:
-    """A running ``pi-py-web`` in team mode, plus its data root."""
-
-    def __init__(self, proc: subprocess.Popen, port: int, data_root: Path) -> None:
-        self.proc = proc
-        self.port = port
-        self.data_root = data_root
-        self.base_url = f"http://127.0.0.1:{port}"
-        self.ws_url = f"ws://127.0.0.1:{port}/api/ws"
-
-    def stop(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait(timeout=10)
-
-    def stderr(self) -> str:
-        if self.proc.stderr is None:
-            return ""
-        try:
-            return self.proc.stderr.read().decode("utf-8", "replace")
-        except Exception:  # noqa: BLE001
-            return ""
-
-
-def _start_team_server(tmp_path: Path, base_url: str, *extra: str) -> TeamServer:
-    agent_dir = tmp_path / "agent"
-    workdir = tmp_path / "work"
-    workdir.mkdir()
-    write_agent_config(agent_dir, base_url)
-
-    data_root = tmp_path / "data"
-    # Team mode gives every user their own agent dir, so the provider catalog has to come
-    # from the shared template.  `write_agent_config` also drops an auth.json there; the
-    # seeder deliberately copies models.json only, which this setup exercises.
-    write_agent_config(data_root / "template", base_url)
-
-    port = _free_port()
-    env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")}
-    env["PYTHONUNBUFFERED"] = "1"
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "pi_server.cli",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--cwd",
-            str(workdir),
-            "--agent-dir",
-            str(agent_dir),
-            "--model",
-            "local/local-test",
-            # The shared company credential (D3): every user's session is handed this one.
-            "--api-key",
-            "shared-company-key",
-            "--auth-mode",
-            "team",
-            "--data-root",
-            str(data_root),
-            "--admin-username",
-            "admin",
-            "--admin-password",
-            ADMIN_PASSWORD,
-            *extra,
-        ],
-        cwd=str(REPO_ROOT),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-    )
-    server = TeamServer(proc, port, data_root)
-
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise AssertionError(f"server exited early:\n{server.stderr()}")
-        try:
-            if httpx.get(f"{server.base_url}/api/health", timeout=1.0).status_code == 200:
-                return server
-        except Exception:  # noqa: BLE001 - not up yet
-            time.sleep(0.1)
-    server.stop()
-    raise AssertionError(f"server never became healthy:\n{server.stderr()}")
-
-
-@pytest.fixture()
-def team_server(fake_openai, tmp_path):
-    _, base_url = fake_openai
-    server = _start_team_server(tmp_path, base_url)
-    try:
-        yield server
-    finally:
-        server.stop()
-
-
 def _login(server: TeamServer, username: str, password: str) -> httpx.Client:
-    """A client that keeps the session cookie, like a browser."""
-    client = httpx.Client(base_url=server.base_url, timeout=10)
-    response = client.post("/api/auth/login", json={"username": username, "password": password})
-    assert response.status_code == 200, response.text
-    return client
+    return login(server, username, password)
 
 
 def test_health_is_public_and_reports_the_mode(team_server):
@@ -427,7 +317,7 @@ def test_websocket_requires_a_session_cookie(team_server):
     try:
         assert asyncio.run(anonymous()) == 4401
 
-        cookie = f"{COOKIE_NAME}={client.cookies[COOKIE_NAME]}"
+        cookie = cookie_header(client)
         ready = asyncio.run(authenticated(cookie))
         assert ready["type"] == "ready"
     finally:
@@ -440,7 +330,7 @@ def test_websocket_requires_a_session_cookie(team_server):
 
 
 def _cookie(client: httpx.Client) -> str:
-    return f"{COOKIE_NAME}={client.cookies[COOKIE_NAME]}"
+    return cookie_header(client)
 
 
 def _reset_model() -> None:

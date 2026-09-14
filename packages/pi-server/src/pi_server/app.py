@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -33,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -46,6 +47,7 @@ from pi_coding_agent.session_manager import SessionManager
 from . import auth
 from .config import COOKIE_NAME, ServerConfig
 from .db import Database, DuplicateUsername
+from .workspace import Workspace, WorkspaceError
 
 __version__ = "0.1.0"
 
@@ -461,6 +463,17 @@ class UpdateUserRequest(BaseModel):
     monthlyCostQuota: float | None = None
 
 
+class WriteFileRequest(BaseModel):
+    """The JSON half of ``PUT /api/workspace/file``; raw bytes are the other half."""
+
+    content: str
+
+
+class CreateDirectoryRequest(BaseModel):
+    parentPath: str = "/"
+    name: str
+
+
 def _user_row_to_json(row: Any) -> dict[str, Any]:
     """The admin-facing shape of an account.  Never includes the password hash."""
     return {
@@ -541,6 +554,10 @@ def create_app(
             status_code=503,
             content={"error": "session could not be started", "detail": str(error)},
         )
+
+    @app.exception_handler(WorkspaceError)
+    async def _workspace_failed(_request: Request, error: WorkspaceError) -> JSONResponse:
+        return JSONResponse(status_code=error.status_code, content={"error": error.message})
 
     def require_team_mode() -> Database:
         if database is None:
@@ -789,6 +806,76 @@ def create_app(
     async def state(request: Request) -> dict[str, Any]:
         worker = await worker_for(request)
         return worker.state_payload()
+
+    # -- workspace files ---------------------------------------------------------------
+
+    def workspace_for(request: Request) -> Workspace:
+        """The caller's workspace.
+
+        Deliberately does **not** start an agent session: browsing files should not cost a
+        bootstrap, and it must keep working while a session is being evicted.
+        """
+        if database is None:
+            return Workspace(options.cwd, create=False)
+        user = auth.current_user(request)
+        if user is None:
+            raise auth.reject_unauthenticated()
+        root, _ = server_config.ensure_user_layout(user.uid)
+        return Workspace(root)
+
+    @app.get("/api/workspace/tree")
+    async def workspace_tree(
+        request: Request,
+        path: str = Query("/", description="Workspace-relative directory"),
+        recursive: bool = Query(False),
+        files_only: bool = Query(False),
+    ) -> dict[str, Any]:
+        return workspace_for(request).tree(path, recursive=recursive, files_only=files_only)
+
+    @app.get("/api/workspace/file")
+    async def workspace_read(request: Request, path: str = Query(...)) -> dict[str, Any]:
+        return workspace_for(request).read(path)
+
+    @app.put("/api/workspace/file")
+    async def workspace_write(request: Request, path: str = Query(...)) -> dict[str, Any]:
+        """Write a file from either JSON (text edits) or raw bytes (uploads).
+
+        One endpoint serves both so that a binary upload needs no multipart parser, and so
+        the size cap and the path rules are applied exactly once.
+        """
+        body = await request.body()
+        media_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        if media_type in ("application/json", "text/json"):
+            try:
+                payload = json.loads(body or b"{}")
+            except json.JSONDecodeError as error:
+                raise HTTPException(
+                    status_code=422, detail={"error": f"invalid JSON body: {error}"}
+                ) from None
+            content = payload.get("content") if isinstance(payload, dict) else None
+            if not isinstance(content, str):
+                raise HTTPException(
+                    status_code=422, detail={"error": "JSON body must be {\"content\": \"...\"}"}
+                )
+            data = content.encode("utf-8")
+        else:
+            data = body
+        return workspace_for(request).write(path, data)
+
+    @app.delete("/api/workspace/file")
+    async def workspace_delete(request: Request, path: str = Query(...)) -> dict[str, Any]:
+        return workspace_for(request).delete(path)
+
+    @app.post("/api/workspace/directory")
+    async def workspace_mkdir(
+        request: Request, payload: CreateDirectoryRequest
+    ) -> dict[str, Any]:
+        return workspace_for(request).create_directory(payload.parentPath, payload.name)
+
+    @app.get("/api/workspace/download")
+    async def workspace_download(request: Request, path: str = Query(...)) -> FileResponse:
+        target, filename = workspace_for(request).download_target(path)
+        return FileResponse(target, filename=filename)
 
     @app.websocket("/api/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:
