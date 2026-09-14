@@ -617,6 +617,9 @@ def create_app(
         return PolicyConfig(
             workspace_root=worker.options.cwd,
             uid=worker.uid,
+            # Every user's workspace and transcript lives under here, so an agent that can
+            # read it can read a colleague's conversations.
+            protected_roots=(server_config.data_root,),
             record=worker.record_tool_decision,
         )
 

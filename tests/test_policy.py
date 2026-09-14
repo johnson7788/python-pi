@@ -30,6 +30,7 @@ from pi_coding_agent.policy.rules import (
     Decision,
     PolicyConfig,
     classify_command,
+    classify_command_with,
     classify_tool_call,
     escapes_workspace,
     summarize_call,
@@ -300,3 +301,58 @@ def test_an_ordinary_member_cannot_read_the_audit_log(team_server):
             member.close()
     finally:
         admin.close()
+
+
+# --------------------------------------------------------------------------------------
+# Reading another tenant's data
+# --------------------------------------------------------------------------------------
+
+
+def test_reading_the_deployments_own_data_is_refused(workspace: Path, tmp_path: Path):
+    """The read side of the escape: no write shape, but the payload is someone else's."""
+    data_root = tmp_path / "data"
+    (data_root / "agents" / "someone-else" / "sessions").mkdir(parents=True)
+    transcript = data_root / "agents" / "someone-else" / "sessions" / "s.jsonl"
+    transcript.write_text("private conversation", encoding="utf-8")
+
+    config = PolicyConfig(workspace_root=str(workspace), protected_roots=(str(data_root),))
+
+    # The relative forms are the ones a regex could never catch: no absolute path, no
+    # write shape, just a climb out of the workspace.
+    for command in (
+        f"cat {transcript}",
+        "cat ../data/agents/someone-else/sessions/s.jsonl",
+        "cat ./../data/agents/someone-else/sessions/s.jsonl",
+        "cat ../data/agents/someone-else/sessions/../sessions/s.jsonl",
+        f"grep -r . {data_root}",
+    ):
+        verdict = classify_command_with(command, config)
+        assert verdict.decision is Decision.DENY, (command, verdict)
+        assert "deployment's own data" in verdict.reason
+
+
+def test_reading_ordinary_system_files_still_works(config: PolicyConfig):
+    """Reading a compiler or a CA bundle is normal work, not an escape."""
+    for command in ("cat /etc/hosts", "python3 --version", "ls /usr/bin | head", "cat /dev/null"):
+        assert classify_command_with(command, config).decision is Decision.ALLOW, command
+
+
+def test_reaching_into_another_home_is_confirmed(config: PolicyConfig):
+    verdict = classify_command_with("cat /home/someone/notes.txt", config)
+    assert verdict.decision is Decision.CONFIRM
+    assert "outside your workspace" in verdict.reason
+
+
+def test_climbing_past_the_data_root_is_still_confirmed(workspace: Path, tmp_path: Path):
+    """Falling off the protected tree is not a free pass: it lands somewhere else."""
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    config = PolicyConfig(workspace_root=str(workspace), protected_roots=(str(data_root),))
+
+    verdict = classify_command_with("cat ../../../elsewhere/notes.txt", config)
+    assert verdict.decision is Decision.CONFIRM
+    assert "outside your workspace" in verdict.reason
+
+    # A climb that happens to land on a system read root is ordinary work, not an escape.
+    verdict = classify_command_with("cat /etc/hosts", config)
+    assert verdict.decision is Decision.ALLOW
