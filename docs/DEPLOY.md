@@ -30,45 +30,69 @@
 
 不用 Docker 也可以：Python ≥ 3.11 + [uv](https://docs.astral.sh/uv/) 直接跑，见文末附录。那种部署没有沙盒。
 
-## 安装（Docker Compose）
+## 安装
 
 ```bash
-# 1. 取代码
 git clone <repo> /opt/python-pi && cd /opt/python-pi
 
-# 2. 宿主上的数据目录 —— 它会被挂进 server，也会被挂进沙盒容器
-#    uid/gid 要和后面 compose 里的 PI_UID/PI_GID 一致（id -u / id -g）
-sudo install -d -m 0750 -o "$(id -u)" -g "$(id -g)" /srv/pi
-sudo install -d -m 0750 -o "$(id -u)" -g "$(id -g)" /srv/pi/template
+# 一条命令做完：预检 → 生成配置 → 建镜像 → 起服务 → 自检
+python3 deploy/deploy_docker.py up --api-key sk-你的key
+```
+
+脚本会自己算那些"错了不会报错、只会悄悄不对"的东西：
+
+| 它会处理 | 为什么不能靠人手 |
+|---|---|
+| `PI_SANDBOX_HOST_DATA_ROOT` | daemon 在**宿主**上解析 bind mount，而 server 容器里那份数据叫 `/data`。对不上时沙盒会带着空工作区启动，命令照样"成功" |
+| `uid:gid` | 沙盒写的文件属主必须和 server 一致，否则服务端改不动 agent 自己的产出 |
+| 端口占用 | 8787 可能已经被一个 `start.sh` 实例占着；不查就会在 compose 里炸得很晚才看见 |
+| provisioner token | 写进 `.env.team`（0600）；重跑不会轮换，轮换会让运行中的服务端连不上 |
+| 模型 key | 写进 `secrets/api_key`（0400）并作为 docker secret 挂载——从不进 argv，`ps` 看不到 |
+
+常用命令：
+
+```bash
+python3 deploy/deploy_docker.py doctor      # 只看环境与解析出的配置，不动任何东西
+python3 deploy/deploy_docker.py up          # 重复执行 = 升级/重建，数据不动
+python3 deploy/deploy_docker.py status
+python3 deploy/deploy_docker.py logs -f
+python3 deploy/deploy_docker.py smoke --username admin --password '…'
+python3 deploy/deploy_docker.py down        # 停服务；数据保留
+```
+
+`up` 结束时会打印首次启动的管理员密码（只出现这一次），并自动在容器里跑一遍完整的 20 项自检。几个有用的开关：
+
+| 开关 | 用途 |
+|---|---|
+| `--port 8899` | 换发布端口（默认 8787） |
+| `--data-root ~/pi-data` | 换宿主数据目录（默认 `/srv/pi`，不可写时退到 `~/pi-data`） |
+| `--no-sandbox` | 命令在 server 进程里跑，不需要 provisioner |
+| `--insecure-cookies` | **仅本机 HTTP 试用**：清掉 cookie 的 Secure 位，否则登录会跳回登录页 |
+| `--rebuild-sandbox` | 重建沙盒镜像 |
+
+### 手工步骤（不想用脚本时）
+
+```bash
+sudo install -d -m 0750 -o "$(id -u)" -g "$(id -g)" /srv/pi /srv/pi/template
 cp ~/.pi/agent/models.json /srv/pi/template/models.json   # 见下
 
-# 3. 模型目录模板 —— 每个新用户的 agent 目录从这里播种
-#    如果你的 provider 需要覆盖 baseUrl（例如百炼），这一步是必须的，
-#    否则用户侧只会拿到内置目录，模型可能选不出来。
-
-# 4. 两个密钥
-python -c 'import secrets; print(secrets.token_urlsafe(32))'   # provisioner token
 install -d -m 0700 secrets
 install -m 0400 /dev/null secrets/api_key && printf %s 'sk-你的key' > secrets/api_key
 
-# 5. 环境文件
-cat > .env.team <<'EOF'
-PI_UID=1000
-PI_GID=1000
+cat > .env.team <<EOF
+PI_UID=$(id -u)
+PI_GID=$(id -g)
 PI_SANDBOX_HOST_DATA_ROOT=/srv/pi
-SANDBOX_PROVISIONER_TOKEN=上一步生成的
+SANDBOX_PROVISIONER_TOKEN=$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')
 SANDBOX_IMAGE=pi-sandbox:latest
 EOF
 
-# 6. 沙盒镜像（用官方 python:3.12-slim 也能跑，但缺 git/node/rg）
 docker build -t pi-sandbox:latest deploy/sandbox_image
-
-# 7. 起服务
 docker compose --env-file .env.team up -d --build
 docker compose --env-file .env.team logs -f server   # 首次启动会打印一次性管理员密码
 ```
 
-`PI_SANDBOX_HOST_DATA_ROOT` 是最容易错的一项：Docker daemon 在**宿主**上解析 bind mount，而 server 容器里那份数据叫 `/data`。两者对不上时容器会带着一个空的工作区启动，而命令照样"成功"。
+**模型目录模板**：每个新用户的 agent 目录从 `<data-root>/template` 播种。如果你的 provider 需要覆盖 `baseUrl`（例如百炼），这一步是必须的，否则用户侧只会拿到内置目录，模型可能选不出来。
 
 可选：把团队的 skills 放进模板的 `skills/`，会以软链方式共享给所有人。
 
@@ -127,7 +151,9 @@ docker compose --env-file .env.team logs server | grep -A3 superadmin
 ## 部署后自检
 
 ```bash
-python deploy/smoke.py https://pi.example.com --username admin --password '…'
+python3 deploy/deploy_docker.py smoke --username admin --password '…'
+# 或对任意地址（含 HTTPS 反代之后）：
+python3 deploy/smoke.py https://pi.example.com --username admin --password-stdin <<< '…'
 ```
 
 20 项检查，覆盖的是「这个部署是否真的在拦截」：健康检查报告 `authMode: team`、匿名访问所有数据端点必须 401、错误密码被拒、登录后能读自己的状态、登出立即失效。**每次改配置后都跑一遍**——尤其是反向代理与鉴权中间件。
@@ -201,7 +227,9 @@ python deploy/smoke.py https://pi.example.com --username admin --password '…'
 | 服务端起不来，日志说 provisioner needs … | 设了 `PI_SANDBOX_BACKEND=provisioner` 但缺 URL 或 token。这是有意的：宁可不起，也不要悄悄退回进程内执行 |
 | 沙盒容器起不来，报 image has no timeout | 镜像里没有 coreutils。用 `deploy/sandbox_image/Dockerfile` 构建，或自己装 `coreutils` |
 | 沙盒写出来的文件在宿主上是 root 所有 | `PI_UID`/`PI_GID` 与宿主数据目录的属主不一致。`id -u` / `id -g` 对一下 |
-| `docker ps` 里堆着 pi-sandbox-* | provisioner 的空闲回收没生效（它被杀过）。`docker rm -f $(docker ps -aq --filter label=app=pi-sandbox)` |
+| `docker ps` 里堆着 pi-sandbox-* | provisioner 的空闲回收没生效（它被杀过）。跑 `deploy_docker.py down` 会按 label 精确清理，也可以手动 `docker rm -f $(docker ps -aq --filter label=app=pi-sandbox)` |
+| 报「the sandbox is not mounting this workspace」 | 探针发现的：`PI_SANDBOX_HOST_DATA_ROOT` 与 server 实际挂载的卷不是同一个目录。这是探针存在的意义——否则沙盒会带着空工作区静默"成功" |
+| `up` 说端口被占 | 8787 上可能有个 `start.sh` 实例在跑。换 `--port`，或先停掉它 |
 
 ## 附录：不用 Docker / 不用沙盒的部署
 

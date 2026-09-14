@@ -59,7 +59,8 @@ services:
       # Loopback only. Put Caddy (or whatever terminates TLS) in front; `PI_COOKIE_SECURE=1`
       # produces a cookie a browser will not send over plaintext, so exposing this directly
       # would make login appear to succeed and then bounce back to the login page.
-      - "127.0.0.1:8787:8787"
+      # PI_PORT lets a second deployment coexist with one already on 8787.
+      - "127.0.0.1:${PI_PORT:-8787}:8787"
     volumes:
       # The same host directory the provisioner will bind into sandbox containers. The app
       # sees /data; the host sees ${PI_SANDBOX_HOST_DATA_ROOT}.
@@ -75,7 +76,9 @@ services:
       PI_TEMPLATE_AGENT_DIR: /data/template
 
       # --- the sandbox -------------------------------------------------------------
-      PI_SANDBOX_BACKEND: provisioner
+      # `local` runs commands in this container instead (no containment, no provisioner
+      # needed). The default is the sandboxed one.
+      PI_SANDBOX_BACKEND: ${PI_SANDBOX_BACKEND:-provisioner}
       PI_SANDBOX_PROVISIONER_URL: http://sandbox-provisioner:8002
       PI_SANDBOX_PROVISIONER_TOKEN: ${SANDBOX_PROVISIONER_TOKEN:?set SANDBOX_PROVISIONER_TOKEN in your env file}
       PI_SANDBOX_IMAGE: ${SANDBOX_IMAGE:-pi-sandbox:latest}

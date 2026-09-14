@@ -42,6 +42,12 @@ COPY README.md ./
 # The venv is on the path uv created; calling `uv run` at runtime would re-resolve.
 ENV PATH="/app/.venv/bin:$PATH"
 
+# The checkout's own file modes are not a deployment concern. This repository is full of
+# 0600 files (`.env.example`, `pyproject.toml`, `README.md`, and the sources themselves), and
+# the container runs as an unmapped uid — pids from the host — which then cannot read the code
+# it was built from. Normalising the tree is more honest than depending on how it was cloned.
+RUN chmod -R a+rX /app
+
 # `--workers 1` is a hard requirement, not a default: sessions live in process memory, so a
 # second worker would give one user two different conversations depending on which worker
 # answered. Horizontal scaling needs the registry moved out of the process first.

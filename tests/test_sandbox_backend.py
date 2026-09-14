@@ -205,11 +205,36 @@ async def test_the_abort_signal_reaches_the_backend(tmp_path: Path):
 # --------------------------------------------------------------------------------------
 
 
-def _provisioner(handler, workspace: Path, **kwargs) -> tuple[ProvisionerBackend, list[httpx.Request]]:
+def _is_probe(request: httpx.Request) -> bool:
+    return b"pi-sandbox-probe" in request.content
+
+
+def _is_exec(request: httpx.Request) -> bool:
+    return request.url.path.endswith("/exec")
+
+
+def _provisioner(
+    handler, workspace: Path, *, answer_probe: bool = True, **kwargs
+) -> tuple[ProvisionerBackend, list[httpx.Request]]:
+    """A client wired to a fake provisioner.
+
+    By default the mount probe is answered from the real workspace directory, so it succeeds
+    exactly when the fake's "host" view matches — which is what the probe is for. Pass
+    ``answer_probe=False`` to let a test answer it itself and simulate a broken mount.
+    """
     seen: list[httpx.Request] = []
 
     def wrapped(request: httpx.Request) -> httpx.Response:
         seen.append(request)
+        if answer_probe and _is_exec(request) and _is_probe(request):
+            probe = workspace / ".pi-sandbox-probe"
+            return httpx.Response(
+                200,
+                json={
+                    "output": probe.read_text(encoding="utf-8") if probe.exists() else "",
+                    "exitCode": 0,
+                },
+            )
         return handler(request)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(wrapped), base_url="http://provisioner")
@@ -237,10 +262,12 @@ async def test_exec_creates_the_container_once_and_runs_the_command(tmp_path: Pa
 
     assert first.output == "42\n" and first.exit_code == 0
     assert second.exit_code == 0
-    # One create, two execs: the container is per conversation, not per command.
-    creates = [r for r in seen if not r.url.path.endswith("/exec")]
+    # One create, two *command* execs: the container is per conversation, not per command.
+    # (The mount probe accounts for one more exec, at creation only.)
+    creates = [r for r in seen if not _is_exec(r)]
+    commands = [r for r in seen if _is_exec(r) and not _is_probe(r)]
     assert len(creates) == 1
-    assert len(seen) == 3
+    assert len(commands) == 2
 
     create_body = json.loads(creates[0].content)
     # The daemon resolves the bind mount on the host, so it must receive the host path.
@@ -259,7 +286,7 @@ async def test_exec_translates_the_working_directory_into_the_container(tmp_path
 
     await backend.exec("ls", cwd=str(tmp_path / "src"))
 
-    body = json.loads([r for r in seen if r.url.path.endswith("/exec")][0].content)
+    body = json.loads([r for r in seen if _is_exec(r) and not _is_probe(r)][0].content)
     assert body["cwd"] == f"{CONTAINER_WORKSPACE}/src"
 
 
@@ -271,7 +298,9 @@ async def test_exec_refuses_a_directory_outside_the_workspace(tmp_path: Path):
         await backend.exec("ls", cwd="/etc")
 
     assert "outside the workspace" in str(info.value)
-    assert not [r for r in seen if r.url.path.endswith("/exec")], "nothing should have been sent"
+    assert not [r for r in seen if _is_exec(r) and not _is_probe(r)], (
+        "no command should have been sent"
+    )
 
 
 async def test_only_session_variables_travel_to_the_container(tmp_path: Path):
@@ -283,7 +312,7 @@ async def test_only_session_variables_travel_to_the_container(tmp_path: Path):
     backend, seen = _provisioner(handler, tmp_path)
     await backend.exec("env", cwd=str(tmp_path), metadata={"PI_SESSION_ID": "s-1"})
 
-    body = json.loads([r for r in seen if r.url.path.endswith("/exec")][0].content)
+    body = json.loads([r for r in seen if _is_exec(r) and not _is_probe(r)][0].content)
     assert body["env"] == {"PI_SESSION_ID": "s-1"}
 
 
@@ -323,6 +352,46 @@ async def test_release_drops_the_container_and_swallows_a_missing_one(tmp_path: 
     await backend.release()  # a container that is already gone must not raise
 
     assert any(call.startswith("DELETE") for call in calls)
+
+
+async def test_a_shared_workspace_is_proven_before_the_sandbox_is_used(tmp_path: Path):
+    """The probe file must not be left behind, and a matching mount must not raise."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _is_exec(request):
+            return httpx.Response(200, json={"output": "", "exitCode": 0})
+        return httpx.Response(200, json={"sandboxId": "x"})
+
+    backend, _seen = _provisioner(handler, tmp_path)
+    await backend.exec("ls", cwd=str(tmp_path))
+
+    assert not (tmp_path / ".pi-sandbox-probe").exists()
+
+
+async def test_a_wrong_host_path_is_caught_instead_of_silently_mounting_nothing(tmp_path: Path):
+    """The failure this exists for: an empty workspace where every command still succeeds."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _is_probe(request):
+            # The container sees a different (empty) directory than the server does.
+            return httpx.Response(200, json={"output": "", "exitCode": 1})
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"ok": True})
+        if _is_exec(request):
+            return httpx.Response(200, json={"output": "", "exitCode": 0})
+        return httpx.Response(200, json={"sandboxId": "x"})
+
+    backend, seen = _provisioner(handler, tmp_path, answer_probe=False)
+    with pytest.raises(ProvisionerError) as info:
+        await backend.exec("ls", cwd=str(tmp_path))
+
+    message = str(info.value)
+    assert "not mounting this workspace" in message
+    # The message has to name the setting that is wrong, or it is just an error.
+    assert "PI_SANDBOX_HOST_DATA_ROOT" in message
+    # And the unusable sandbox is thrown away rather than left running.
+    assert any(r.method == "DELETE" for r in seen)
+    assert not (tmp_path / ".pi-sandbox-probe").exists()
 
 
 # --------------------------------------------------------------------------------------

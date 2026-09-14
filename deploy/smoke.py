@@ -158,9 +158,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Smoke-test a team deployment of python-pi.")
     parser.add_argument("base_url", help="e.g. https://pi.example.com")
     parser.add_argument("--username", default="admin")
-    parser.add_argument("--password", required=True, help="Prefer passing this via a secret store.")
+    parser.add_argument("--password", help="Read from --password-stdin instead when possible.")
+    parser.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="read the password from the first line of stdin (keeps it out of `ps`)",
+    )
     args = parser.parse_args()
-    return Smoke(args.base_url).run(args.username, args.password)
+
+    password = args.password
+    if args.password_stdin:
+        password = sys.stdin.readline().rstrip("\n")
+    if not password:
+        parser.error("pass --password or --password-stdin")
+
+    return Smoke(args.base_url).run(args.username, password)
 
 
 if __name__ == "__main__":

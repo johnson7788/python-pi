@@ -216,11 +216,22 @@ def test_an_image_without_timeout_is_refused(provisioner: Any, monkeypatch: pyte
     assert "timeout" in str(info.value)
 
 
-def test_a_missing_workspace_is_refused(fake_daemon: Any, provisioner: Any, tmp_path: Path):
-    registry, _daemon, _workspace = fake_daemon
-    with pytest.raises(provisioner.ProvisionerError) as info:
-        registry.ensure("sb1", "uid-1", "session", str(tmp_path / "nope"))
-    assert "does not exist" in str(info.value)
+def test_the_provisioner_does_not_validate_host_paths(fake_daemon: Any, tmp_path: Path):
+    """A path this service cannot see proves nothing about the host.
+
+    The provisioner runs in its own container and only talks to the daemon, so "not found
+    here" and "does not exist" are indistinguishable. Rejecting on that basis would refuse
+    every legitimate deployment; the client catches the mistake that actually matters — a
+    host path that resolves to a different, empty directory — with a mount probe.
+
+    The daemon does create a missing host path, which is precisely why the probe, and not
+    this service, is the check that counts.
+    """
+    registry, daemon, _workspace = fake_daemon
+
+    registry.ensure("sb1", "uid-1", "session", str(tmp_path / "nope"))
+
+    assert "pi-sandbox-sb1" in daemon.containers.created
 
 
 def test_a_directory_outside_the_workspace_is_refused(fake_daemon: Any, provisioner: Any):

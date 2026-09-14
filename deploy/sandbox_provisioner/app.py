@@ -121,10 +121,17 @@ class Registry:
     # -- lifecycle ---------------------------------------------------------------------
 
     def ensure(self, sandbox_id: str, uid: str, thread: str, workspace: str, **options: Any) -> Sandbox:
-        """Return the conversation's container, creating it if the daemon has none."""
+        """Return the conversation's container, creating it if the daemon has none.
+
+        Note what is **not** validated here: whether ``workspace`` exists.  This service runs
+        in its own container and only talks to the daemon — it has no view of the host
+        filesystem, so it cannot tell "that path is not mounted here" from "that path does not
+        exist".  A check that rejected both would refuse every legitimate deployment.  The
+        client verifies the mount after creation instead (``ProvisionerBackend._verify_mount``),
+        which catches the mistake that actually matters: a host path that resolves to a
+        different, empty directory.
+        """
         _validate_id(sandbox_id, "sandbox id")
-        if not os.path.isdir(workspace):
-            raise ProvisionerError(f"workspace does not exist on the host: {workspace}")
 
         with self._lock:
             existing = self._sandboxes.get(sandbox_id)

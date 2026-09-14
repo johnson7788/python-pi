@@ -194,7 +194,9 @@ def test_the_compose_file_maps_host_paths_for_bind_mounts():
 
     assert "PI_SANDBOX_HOST_DATA_ROOT" in compose
     assert "PI_DATA_ROOT: /data" in compose
-    assert "PI_SANDBOX_BACKEND: provisioner" in compose
+    # The default must be the sandboxed one; the script may override it to `local` for a
+    # deployment that has no provisioner.
+    assert "PI_SANDBOX_BACKEND: ${PI_SANDBOX_BACKEND:-provisioner}" in compose
 
 
 def test_the_compose_file_keeps_the_credential_out_of_argv():
@@ -239,3 +241,126 @@ def test_the_sandbox_image_pins_the_tools_the_provisioner_assumes():
         if line.strip() and not line.lstrip().startswith("#")
     ]
     assert "ENTRYPOINT" not in instructions
+
+
+# --------------------------------------------------------------------------------------
+# deploy_docker.py
+# --------------------------------------------------------------------------------------
+
+DEPLOY_SCRIPT = DEPLOY / "deploy_docker.py"
+
+
+def _deploy_module():
+    """Import the deployment script as a module, the way its own tests need it."""
+    import importlib.util
+    import sys as _sys
+
+    spec = importlib.util.spec_from_file_location("pi_deploy_docker", DEPLOY_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    _sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_deploy_script_compiles_and_is_executable():
+    assert os.access(DEPLOY_SCRIPT, os.X_OK), "deploy/deploy_docker.py is not executable"
+    result = subprocess.run(
+        [sys.executable, "-m", "py_compile", str(DEPLOY_SCRIPT)], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_every_subcommand_an_operator_needs_exists():
+    """These are the verbs the docs use; renaming one silently breaks the guide."""
+    module = _deploy_module()
+    parser = module.build_parser()
+    actions = [
+        action for action in parser._actions if isinstance(action, type(parser._subparsers))
+    ]
+    names: set[str] = set()
+    for action in parser._actions:
+        choices = getattr(action, "choices", None)
+        if isinstance(choices, dict):
+            names |= set(choices)
+    assert {"up", "down", "status", "logs", "smoke", "doctor"} <= names
+
+
+def test_the_managed_container_names_match_the_compose_file():
+    """The port guard decides "ours vs someone else's" by name; a drift would refuse our own."""
+    module = _deploy_module()
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    for name in module.MANAGED_CONTAINERS:
+        assert f"container_name: {name}" in compose, f"{name} is not a container_name in compose"
+
+
+def test_the_deploy_script_never_puts_a_secret_on_a_command_line():
+    """argv is readable by every account on the host; env files and stdin are not."""
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    # The model credential is written to a file that compose mounts as a docker secret.
+    assert "write_secret(API_KEY_FILE, config.api_key)" in source
+    # `--api-key` appears exactly once: the argparse definition a human uses. It is never an
+    # argument to a docker command, which is where `ps` would expose it.
+    assert source.count('"--api-key"') == 1
+    # The smoke password is piped in: the function that shells out to docker must not name it.
+    run_smoke = source.split("def run_smoke(")[1].split("\ndef ")[0]
+    assert '"--password-stdin"' in run_smoke
+    assert '"--password"' not in run_smoke
+    assert "input=password" in run_smoke
+
+
+def test_down_keeps_the_data():
+    """`down -v` would delete volumes; there are none, and adding one must not change that."""
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    assert '"down", "--remove-orphans"' in source
+    assert '"down", "-v"' not in source
+
+
+def test_secure_cookies_are_the_default(tmp_path, monkeypatch):
+    """Turning Secure off has to be an explicit, named decision."""
+    module = _deploy_module()
+    # Point the script at an env file that does not exist, so nothing is persisted yet.
+    monkeypatch.setattr(module, "ENV_FILE", tmp_path / ".env.team")
+    monkeypatch.delenv("PI_API_KEY", raising=False)
+
+    default = module.resolve_config(module.build_parser().parse_args(["doctor"]))
+    assert default.cookie_secure is True, "Secure must be the default, not the opt-in"
+
+    insecure = module.resolve_config(
+        module.build_parser().parse_args(["up", "--insecure-cookies"])
+    )
+    assert insecure.cookie_secure is False
+
+
+def test_the_env_file_is_written_private(tmp_path):
+    module = _deploy_module()
+    target = tmp_path / ".env.team"
+    module.write_env_file(target, {"PI_UID": "1000", "SANDBOX_PROVISIONER_TOKEN": "t"})
+
+    assert target.stat().st_mode & 0o777 == 0o600
+    # Unmanaged keys survive a rewrite, so an operator's own overrides are not lost.
+    target.write_text(target.read_text() + "MY_OVERRIDE=1\n")
+    module.write_env_file(target, {"PI_UID": "1001", "SANDBOX_PROVISIONER_TOKEN": "t"})
+    assert "MY_OVERRIDE=1" in target.read_text()
+    assert "PI_UID=1001" in target.read_text()
+
+
+def test_rewriting_a_read_only_secret_works(tmp_path):
+    """The file is 0400 by design, so a second run has to widen it before writing."""
+    module = _deploy_module()
+    secret = tmp_path / "api_key"
+    module.write_secret(secret, "first")
+    assert secret.read_text() == "first"
+    assert secret.stat().st_mode & 0o777 == 0o400
+
+    module.write_secret(secret, "second")
+    assert secret.read_text() == "second"
+    assert secret.stat().st_mode & 0o777 == 0o400
+
+
+def test_the_smoke_password_can_come_from_stdin():
+    source = (DEPLOY / "smoke.py").read_text(encoding="utf-8")
+    assert "--password-stdin" in source
+    assert "sys.stdin.readline()" in source

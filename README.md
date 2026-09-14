@@ -225,7 +225,12 @@ PI_API_KEY=sk-xxx .venv/bin/python -m pi_server.cli \
 - 用户自带的扩展在 team 模式下**不加载**：per-user 的 `extensions/` 等于给每个同事一个以服务进程
   权限运行的入口。
 
-部署用 Docker Compose（`docker-compose.yml`：server + sandbox provisioner），
+部署用 Docker Compose（`docker-compose.yml`：server + sandbox provisioner），一条命令：
+
+```bash
+python3 deploy/deploy_docker.py up --api-key sk-…
+```
+
 完整安装、沙盒开关、Caddy、备份与排查见 [`docs/DEPLOY.md`](docs/DEPLOY.md)；
 设计取舍见 [`docs/plans/2026-09-14-team-saas-design.md`](docs/plans/2026-09-14-team-saas-design.md)。
 不用 Docker 的部署方式见该文附录（没有沙盒）。

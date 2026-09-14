@@ -19,6 +19,9 @@ htmlcov/
 .env.*
 !.env.example
 
+# Credentials written by deploy/deploy_docker.py
+secrets/
+
 # Editors / OS
 .DS_Store
 .idea/

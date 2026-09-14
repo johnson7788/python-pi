@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 from typing import Any, Callable
 
 import httpx
@@ -34,6 +35,10 @@ from .types import CONTAINER_WORKSPACE, ExecResult, SandboxScope
 
 #: How long to wait on the provisioner itself (not the command inside the container).
 DEFAULT_REQUEST_TIMEOUT = 30.0
+
+#: The file the mount probe writes and reads back. Hidden and constant so the same name works
+#: for the write (host side) and the read (container side).
+_PROBE_NAME = ".pi-sandbox-probe"
 
 
 class ProvisionerError(RuntimeError):
@@ -94,7 +99,12 @@ class ProvisionerBackend:
     # -- lifecycle ---------------------------------------------------------------------
 
     async def ensure(self) -> dict[str, Any]:
-        """Create the conversation's container if it does not exist yet."""
+        """Create the conversation's container if it does not exist yet.
+
+        Creation is followed by :meth:`_verify_mount`, because the one mistake that matters
+        here is silent: the daemon resolves bind mounts on the host, so a wrong host path
+        produces a container with an *empty* workspace and every command still "succeeds".
+        """
         if self._ensured:
             return {"sandboxId": self.scope.sandbox_id(), "status": "running"}
         workspace = self.scope.host_workspace or self.scope.workspace
@@ -114,7 +124,56 @@ class ProvisionerBackend:
             "POST", f"/sandboxes/{self.scope.sandbox_id()}", json=payload
         )
         self._ensured = True
+        await self._verify_mount()
         return response.json()
+
+    async def _verify_mount(self) -> None:
+        """Prove the container sees the same directory this process does.
+
+        A marker file is written here (to the workspace as *this* process sees it), read back
+        from inside the container, and deleted.  If the two views disagree — the classic
+        symptom of a ``PI_SANDBOX_HOST_DATA_ROOT`` that does not match the volume the server
+        has mounted — the values differ and the sandbox is discarded rather than used.
+        """
+        marker = secrets.token_hex(8)
+        probe = os.path.join(self.scope.workspace, ".pi-sandbox-probe")
+        try:
+            with open(probe, "w", encoding="utf-8") as handle:
+                handle.write(marker)
+        except OSError as error:
+            raise ProvisionerError(
+                f"cannot write a probe into the workspace {self.scope.workspace!r}: {error}"
+            ) from error
+
+        try:
+            result = await self._exec_raw(f"cat {_PROBE_NAME}")
+            if result.output.strip() != marker:
+                await self.release()
+                raise ProvisionerError(
+                    "the sandbox is not mounting this workspace.\n"
+                    f"  The server wrote the probe to {self.scope.workspace!r} and asked the "
+                    f"container for it at {CONTAINER_WORKSPACE!r}, and got "
+                    f"{result.output.strip()[:80]!r} back.\n"
+                    "  The usual cause is PI_SANDBOX_HOST_DATA_ROOT: the daemon resolves bind "
+                    "mounts on the *host*, so it must be the host path of the directory the "
+                    "server has mounted (see docker-compose.yml)."
+                )
+        finally:
+            try:
+                os.unlink(probe)
+            except OSError:
+                pass
+
+    async def _exec_raw(self, command: str) -> ExecResult:
+        """One exec, without the ensure()/verify recursion."""
+        response = await self._request(
+            "POST",
+            f"/sandboxes/{self.scope.sandbox_id()}/exec",
+            json={"command": command, "cwd": CONTAINER_WORKSPACE},
+        )
+        body = response.json()
+        output = str(body.get("output") or "")
+        return ExecResult(output=output, exit_code=body.get("exitCode"))
 
     async def release(self) -> None:
         """Drop the container. Called when a session goes away."""
