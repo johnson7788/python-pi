@@ -1,0 +1,26 @@
+flowchart TB
+  subgraph shared["全进程共用（单 worker 硬约束）"]
+    SR["SessionRegistry<br/>每用户一个活跃 worker<br/>上限默认 20"]
+    KEY["一把共用 API key<br/>按 uid 记账"]
+  end
+
+  subgraph boundaries["每个用户独立的边界"]
+    direction LR
+    W["workspaces/&lt;uid&gt;/<br/>工作区"]
+    D["agents/&lt;uid&gt;/<br/>配置目录"]
+    SS["该用户的会话<br/>互不可见"]
+    C["沙盒容器<br/>只挂载本工作区"]
+    Q["用量与配额"]
+    AU["审计记录"]
+  end
+
+  SR --> W
+  SR --> D
+  SR --> SS
+  SR --> C
+  KEY --> Q
+  SR --> AU
+
+  P["内置 policy 扩展（强制加载、用户不可关）<br/>路径越界拒绝 · 危险命令硬拒绝 · 需审批命令走 ctx.confirm"]
+  SR -.->|"每次工具调用前"| P
+  P -.->|"bash"| C

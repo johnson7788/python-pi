@@ -5,6 +5,7 @@
 
 - 调研结论与架构设计：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - 逐层深度调研笔记：[`docs/research/`](docs/research/)（pi-ai / pi-agent / coding-agent core / modes & extensions / surrounding packages）
+- **第一次接触这个项目先看**：[`docs/TECH-SHARE.md`](docs/TECH-SHARE.md)（30 分钟技术分享：分层架构、一次请求的链路、四个关键决策）
 
 ## 当前状态
 

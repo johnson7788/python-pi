@@ -1,0 +1,4 @@
+flowchart LR
+  H["header · version 3"] --> U1["user"] --> A1["assistant"] --> U2["user"] --> A2["assistant"]
+  A1 -.->|"分支：仍在同一个文件<br/>后续 entry 的 parentId 指回 A1"| B1["user"] --> B2["assistant"]
+  A1 ==>|"fork(entryId)：把 root→A1 复制进新文件"| N1["新文件 B.jsonl<br/>header → user → assistant"]

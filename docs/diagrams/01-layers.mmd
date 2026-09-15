@@ -1,0 +1,26 @@
+flowchart TB
+  subgraph client["客户端"]
+    B["浏览器 SPA<br/>React + TS · 5k 行"]
+    CLI["pi-py CLI<br/>print / json / rpc"]
+  end
+
+  S["pi-server · 3.1k 行<br/>WebSocket · REST<br/>认证 · 多租户 · 配额 · 审计"]
+
+  subgraph core["核心框架库（可单独作为 SDK 嵌入）"]
+    CA["pi-coding-agent · 14.7k 行<br/>AgentSession · JSONL v3 会话树<br/>工具 · 提示词 · 扩展 · 策略"]
+    AG["pi-agent-core · 1.8k 行<br/>agent 循环 · Agent 状态机"]
+    AI["pi-ai · 5.6k 行<br/>provider 适配 · 事件流<br/>类型 · 工具校验 · 成本"]
+  end
+
+  P["模型 provider<br/>Anthropic / OpenAI<br/>兼容端点 / 百炼"]
+  FS["会话文件 JSONL v3<br/>与上游 pi 双向互通"]
+  SB["沙盒执行面<br/>provisioner<br/>每用户一个容器"]
+
+  B -->|"WebSocket /api/ws<br/>与 --mode rpc 同一套协议"| S
+  CLI --> CA
+  S --> CA
+  CA --> AG
+  AG --> AI
+  AI --> P
+  CA --> FS
+  AG -.->|"bash 工具"| SB

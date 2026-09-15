@@ -1,0 +1,29 @@
+sequenceDiagram
+  autonumber
+  participant U as 浏览器
+  participant S as pi-server
+  participant R as RpcMode
+  participant A as AgentSession
+  participant L as agent 循环
+  participant AI as pi-ai → provider
+  participant FS as 会话文件
+
+  U->>S: prompt
+  S->>R: handle_line()
+  Note over R: preflight：配额 / 工具白名单 / 危险命令闸门
+  R-->>U: response —— 「已接受、已排队」
+  R->>A: prompt()
+  A->>L: run_agent_loop()
+
+  loop 内层循环：直到没有工具调用
+    L->>AI: stream(model, context)
+    AI-->>L: start → text_delta… → done
+    Note over AI,L: partial 是同一个可变对象，原地修改
+    L-->>U: message_update（只发增量）
+    L->>A: tool_call
+    A-->>U: tool_execution_end（按完成顺序）
+    A->>L: toolResult（按源顺序装配）
+  end
+
+  A->>FS: 落盘 JSONL v3
+  A-->>U: turn_end / 统计
