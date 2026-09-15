@@ -175,6 +175,22 @@ Markdown 渲染的对话流、实时流式输出、工具调用卡片（含运�
 斜杠命令自动补全、会话列表与切换/新建/克隆、模型与思考等级选择、扩展弹出的对话框
 （**可在流式输出过程中作答**）、断线自动重连。
 
+![会话界面：用户提问、工具调用卡片与 Markdown 回答](docs/screenshot-session.png)
+
+深色外观（默认跟随系统，也可以在右上角手动锁定——选择在首次渲染前落盘，不会闪一帧浅色）：
+
+![深色外观](docs/screenshot-dark.png)
+
+| 登录 | 文件 |
+|---|---|
+| <img src="docs/screenshot-login.png" alt="登录" width="420"> | <img src="docs/screenshot-files.png" alt="工作区文件" width="420"> |
+
+| 用量（团队模式） | 管理（团队模式） |
+|---|---|
+| <img src="docs/screenshot-usage.png" alt="用量" width="420"> | <img src="docs/screenshot-admin.png" alt="账号管理" width="420"> |
+
+<sub>以上截图取自本机 `docker compose` 部署出来的真实实例（团队模式，含沙盒执行），不是设计稿。</sub>
+
 **它没有另造一套 API**：浏览器说的就是 `--mode rpc` 那套命令协议，只是把传输从 stdio 换成
 WebSocket。所以任何为 pi 的 RPC 模式写的客户端，改一下地址就能用；反过来，这里验证过的协议行为
 对 stdio 同样成立。**pi 本身没有浏览器 UI**（它只有终端 TUI + RPC/JSON 模式），这层是本移植版
