@@ -39,14 +39,32 @@ npm run preview        # serve dist/ (no API proxy: point VITE_WS_URL at the bac
 npm run verify:mock    # headless smoke test of the mock server over /api/ws
 ```
 
+## Appearance
+
+One stylesheet, one set of tokens. Light is the default; dark follows
+`prefers-color-scheme`, and the sun/moon button in the toolbar writes
+`html[data-theme]` (plus `localStorage`) to override it. `applyTheme(readStoredTheme())`
+runs in `main.tsx` *before* the first render, so a forced theme never flashes the
+other one on load. Below 900px the sidebar slides in from the left, driven by the
+menu button in the toolbar.
+
 ## Configuration
 
-Both are read at build/dev time from the environment:
+The first two are read at build/dev time from the environment:
 
 | Variable       | Default                          | Meaning                                  |
 | -------------- | -------------------------------- | ---------------------------------------- |
 | `VITE_WS_URL`  | same origin, `ws(s)://host/api/ws` | WebSocket endpoint                       |
 | `VITE_API_BASE`| `''` (same origin)               | prefix for `/api/health` and friends     |
+| `PI_API_TARGET`| `http://127.0.0.1:8787`          | dev server only: where `/api` is proxied |
+
+`PI_API_TARGET` matters when 8787 is already taken by a real deployment and you want
+to develop against the bundled mock instead:
+
+```bash
+MOCK_PORT=8899 npm run mock                       # terminal 1
+PI_API_TARGET=http://127.0.0.1:8899 npm run dev   # terminal 2
+```
 
 `mock-server.mjs` also honours `MOCK_HOST`, `MOCK_PORT` and `MOCK_AUTOPLAY=0`
 (connect only, do not replay the scripted turn until a `prompt` arrives).
@@ -61,6 +79,7 @@ src/
   lib/protocol.ts          TS types for every command, event and REST payload
   lib/useAgent.ts          the WebSocket client hook: connect, send, reduce, reconnect
   lib/markdown.ts          marked + DOMPurify (sanitized HTML)
+  lib/useTheme.ts          light / dark: follow the system, or a stored override
   components/
     Sidebar.tsx            sessions, 新会话, model / thinking pickers, stats, statuses
     Transcript.tsx         scrolling list + auto-follow

@@ -168,16 +168,26 @@ export function Composer({
           )}
 
           <div className="composer__actions">
-            {streaming ? (
-              <>
-                <span className="composer__streaming">正在生成…</span>
-                <button type="button" className="button button--danger" onClick={onAbort}>
-                  停止
-                </button>
-              </>
-            ) : null}
-            <button type="button" className="button button--primary" onClick={submit} disabled={disabled || !draft.trim()}>
-              发送
+            {streaming ? <span className="composer__streaming">正在生成…</span> : null}
+            {/* 一个圆钮承担发送/停止两件事：流式时它变成停止键。 */}
+            <button
+              type="button"
+              className={`button button--primary button--send${streaming ? ' is-stop' : ''}`}
+              onClick={streaming ? onAbort : submit}
+              disabled={!streaming && (disabled || !draft.trim())}
+              aria-label={streaming ? '停止生成' : '发送'}
+              title={streaming ? '停止生成' : '发送'}
+            >
+              {streaming ? (
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <rect x="4.5" y="4.5" width="7" height="7" rx="1.6" fill="currentColor" stroke="none" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M8 13V3.6" />
+                  <path d="M4 7.4 8 3.4l4 4" />
+                </svg>
+              )}
             </button>
           </div>
         </div>

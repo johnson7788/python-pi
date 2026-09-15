@@ -22,6 +22,13 @@ htmlcov/
 # Credentials written by deploy/deploy_docker.py
 secrets/
 
+# Node (web/ has its own .gitignore; this covers any future root-level install)
+node_modules/
+
+# Logs
+*.log
+logs/
+
 # Editors / OS
 .DS_Store
 .idea/
