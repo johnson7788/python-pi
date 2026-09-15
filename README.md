@@ -385,4 +385,10 @@ docs/research/                            上游逐层调研笔记
 
 ## 许可
 
-上游 `pi` 为 MIT。本移植版沿用 MIT。
+上游 `pi` 为 MIT。本移植版沿用 MIT，见 [`LICENSE`](LICENSE)。
+
+## 联系
+
+有问题、想交流移植细节，或者只是想催一下进度，都欢迎加微信（扫码时注明来意）。
+
+<img src="docs/weichat.png" alt="微信二维码" width="240">
