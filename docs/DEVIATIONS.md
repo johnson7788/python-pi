@@ -111,6 +111,19 @@
 部署取舍：服务端**不鉴权**，默认只绑 `127.0.0.1`。要暴露到网络必须自己加认证/反代——
 和 pi 一致，这不是一个带权限系统的产品。
 
+### 后台 subagent（上游没有）
+
+上游 pi 只能由用户手动开新会话；本移植版新增了模型可调用的后台委派：`subagent`（spawn）与
+`subagent_fork`（fork）两个工具，设计参照 DeepSeek Harness 的 subagent seam，只实现进程内后端。
+
+- 子 agent 是独立 Session：同一 sessions 目录、header `parentSession` 指向父会话；
+- fork 的种子截到父"最后一条 user 消息之前"，即只含已完成轮次；
+- 完成通知是持久化的 `custom` message（`customType: "subagent"`），父在流式中走 steering，
+  空闲时自动续一轮；
+- 深度/并发上限快速失败（`SUBAGENT_DEPTH_LIMIT` / `SUBAGENT_CAPACITY`），不排队。
+
+完整语义与限制见 [`SUBAGENTS.md`](SUBAGENTS.md)。
+
 ### 扩展系统
 
 Python 原生扩展协议已实现，**详细设计、事件表、合并语义与差异清单见

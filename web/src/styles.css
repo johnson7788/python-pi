@@ -863,6 +863,21 @@ h1, h2, h3 { letter-spacing: -.018em; }
 .message--system .message__body { color: var(--label-2); font-size: 13.5px; }
 .message--system .message__meta > span:first-child { display: inline; }
 
+/* 子 agent 的完成通知：等宽、可换行，像一条回执而不是聊天 */
+.message__notice {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--bg-inset);
+  border-radius: var(--r);
+  color: var(--label-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+.message--subagent .message__meta > span:first-child { color: var(--blue); }
+
 /* 正在流式输出的那一条：卡片边缘给一点光晕，不用 spinner 抢注意力 */
 .message--streaming .message__body {
   box-shadow: 0 0 0 1.5px var(--blue-soft), var(--shadow);

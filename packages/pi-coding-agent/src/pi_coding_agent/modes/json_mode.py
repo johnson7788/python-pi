@@ -56,6 +56,9 @@ async def run_json_mode(session: AgentSession, prompt: str, *, output: TextIO | 
     try:
         await session.prompt(prompt)
         await session.wait_for_idle()
+        # Keep the event stream open until background subagents settle.
+        await session.wait_for_background_work()
+        await session.wait_for_idle()
     except Exception as error:  # noqa: BLE001 - reported, never raised out of a mode
         print(f"pi-py: {error}", file=sys.stderr)
         return 1

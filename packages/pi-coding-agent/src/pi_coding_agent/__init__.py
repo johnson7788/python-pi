@@ -54,6 +54,10 @@ _LAZY_EXPORTS = {
     "run_json_mode": "pi_coding_agent.modes.json_mode",
     "run_rpc_mode": "pi_coding_agent.modes.rpc_mode",
     "RpcMode": "pi_coding_agent.modes.rpc_mode",
+    "SubagentError": "pi_coding_agent.subagents",
+    "SubagentManager": "pi_coding_agent.subagents",
+    "SubagentRecord": "pi_coding_agent.subagents",
+    "SubagentResult": "pi_coding_agent.subagents",
 }
 
 __version__ = "0.1.0"
@@ -74,6 +78,10 @@ __all__ = [
     "SettingsManager",
     "SettingsValidationError",
     "Skill",
+    "SubagentError",
+    "SubagentManager",
+    "SubagentRecord",
+    "SubagentResult",
     "agent_message_from_json",
     "agent_message_to_json",
     "build_session_context",

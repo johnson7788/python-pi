@@ -205,9 +205,16 @@ class SessionWorker:
 
     @property
     def busy(self) -> bool:
-        """True while a turn is running — an idle-timeout must never interrupt one."""
+        """True while a turn or a delegated child is running.
+
+        An idle timeout must never interrupt a turn, and a background subagent is
+        exactly the kind of work a user expects to survive a quiet minute.
+        """
         if self._controller is None:
             return False
+        manager = getattr(self._state, "subagent_manager", None)
+        if manager is not None and manager.has_running():
+            return True
         try:
             session = self._controller.session
         except Exception:  # noqa: BLE001 - a torn-down session is simply not busy

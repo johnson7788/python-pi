@@ -54,6 +54,7 @@ from pi_agent import (
     AgentLoopTurnUpdate,
     AgentMessage,
     AgentTool,
+    MessageEndEvent,
     PrepareNextTurnContext,
     StreamFn,
 )
@@ -469,6 +470,12 @@ class AgentSession:
         self._auto_retry_override: bool | None = None
         self._is_compacting = False
         self._disposed = False
+        #: Callbacks run by :meth:`dispose` (used by the subagent manager to cancel
+        #: children owned by this session).  They must not raise.
+        self._dispose_callbacks: list[Callable[[], Any]] = []
+        #: Awaited by :meth:`wait_for_background_work`; the subagent manager installs
+        #: one so one-shot modes do not exit while a child is still running.
+        self._background_work: Callable[[], Any] | None = None
 
         self._agent = Agent(
             model,
@@ -688,21 +695,74 @@ class AgentSession:
         await asyncio.shield(future)
 
     def dispose(self) -> None:
-        """Detach from the agent and drop listeners."""
+        """Detach from the agent, cancel owned work, and drop listeners."""
         if self._disposed:
             return
         self._disposed = True
         if self._is_agent_run_active:
             self._agent.abort()
+        for callback in list(self._dispose_callbacks):
+            try:
+                callback()
+            except Exception:  # noqa: BLE001 - teardown is best effort
+                pass
+        self._dispose_callbacks.clear()
+        self._background_work = None
         self._unsubscribe_agent()
         self._listeners.clear()
 
+    def add_dispose_callback(self, callback: Callable[[], Any]) -> None:
+        """Run ``callback`` when this session is disposed (already-disposed: runs now)."""
+        if self._disposed:
+            callback()
+            return
+        self._dispose_callbacks.append(callback)
+
+    def set_background_work(self, callback: Callable[[], Any] | None) -> None:
+        """Install the drain hook used by ``wait_for_background_work``."""
+        self._background_work = callback
+
+    async def wait_for_background_work(self) -> None:
+        """Wait until work started on this session's behalf has settled.
+
+        One-shot modes (``print``/``json``) call this before returning so a
+        background subagent can still deliver its result; the hook itself decides
+        what "settled" means and returns ``True`` while it made progress.
+        """
+        for _ in range(10_000):
+            callback = self._background_work
+            if callback is None:
+                return
+            progressed = callback()
+            if inspect.isawaitable(progressed):
+                progressed = await progressed
+            if not progressed:
+                return
+            await self.wait_for_idle()
+
     async def _run_agent_prompt(self, messages: list[AgentMessage]) -> None:
+        await self._run_agent_call(lambda: self._agent.prompt(messages))
+
+    async def continue_turn(self) -> None:
+        """Run one more turn from the current transcript, adding no user message.
+
+        This is what a background completion notice uses: the notice is already in
+        the transcript (as a ``custom`` message), so the session only needs to let
+        the model react to it.
+        """
+        if self._disposed:
+            raise RuntimeError("AgentSession has been disposed")
+        if self._is_agent_run_active:
+            raise RuntimeError("Agent is already processing. Wait for completion before continuing.")
+        self._assert_usable_auth()
+        await self._run_agent_call(self._agent.continue_)
+
+    async def _run_agent_call(self, start: Callable[[], Any]) -> None:
         self._is_agent_run_active = True
         idle_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._idle_future = idle_future
         try:
-            await self._agent.prompt(messages)
+            await start()
             while await self._handle_post_agent_run():
                 await self._agent.continue_()
         finally:
@@ -919,16 +979,23 @@ class AgentSession:
         message list at turn boundaries.
         """
         message = _custom_message(custom_type, content, display, details)
+        # Custom notices are not queued *prompts*: the pending-text lists are
+        # reported as ``pendingMessageCount`` and cleared only when the matching
+        # user message starts, which a custom message never does.  Tracking one
+        # here would leave the counter permanently non-zero.
         if deliver_as == "steer":
-            self._steering_texts.append(_content_text(content))
             self._agent.steer(message)
             return
         if deliver_as == "followUp":
-            self._follow_up_texts.append(_content_text(content))
             self._agent.follow_up(message)
             return
         await self._session_manager.append_custom_message(custom_type, content, display, details)
         self._agent.state.messages.append(message)
+        # The agent loop is not running, so no event announced this message.  Emit
+        # ``message_end`` ourselves: every attached client (RPC, WebSocket) appends
+        # the transcript entry from that event, and a notice nobody can see until a
+        # refresh is not a notice.
+        await self._emit(MessageEndEvent(message=message))
 
     async def append_custom_entry(self, custom_type: str, data: Any = None) -> str:
         return await self._session_manager.append_custom(custom_type, data)
@@ -969,6 +1036,30 @@ class AgentSession:
 
     def get_all_tools(self) -> list[AgentTool]:
         return list(self._tools)
+
+    def add_tools(self, tools: Sequence[AgentTool]) -> None:
+        """Merge tools into the session, enabling them and rebuilding the prompt.
+
+        Used by features that contribute tools after construction (the subagent
+        manager does).  A name that is already registered is left untouched.
+        """
+        if self._disposed:
+            raise RuntimeError("AgentSession has been disposed")
+        added = False
+        for tool in tools:
+            if any(existing.name == tool.name for existing in self._tools):
+                continue
+            self._tools.append(tool)
+            if tool.name not in self._active_tool_names:
+                self._active_tool_names.append(tool.name)
+            added = True
+        if not added:
+            return
+        self._agent.set_tools(
+            [tool for tool in self._tools if tool.name in self._active_tool_names]
+        )
+        self._base_system_prompt = self._build_system_prompt()
+        self._agent.state.system_prompt = self._base_system_prompt
 
     async def set_active_tools(self, names: Sequence[str]) -> None:
         unknown = [name for name in names if all(tool.name != name for tool in self._tools)]

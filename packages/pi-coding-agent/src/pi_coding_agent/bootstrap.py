@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from pi_ai import AuthStorage, FileCredentialStore, Model, ModelRegistry
 
@@ -24,6 +24,7 @@ from .agent_session import AgentSession
 from .resource_loader import ResourceLoader
 from .session_manager import SessionManager
 from .settings import ProjectTrustStore, SettingsManager
+from .subagents import DEFAULT_MAX_ACTIVE, DEFAULT_MAX_DEPTH, SubagentManager
 
 
 @dataclass
@@ -77,6 +78,7 @@ class Bootstrapped:
     runtime: Any = None
     session: AgentSession | None = None
     host_mode: str = "print"
+    subagent_manager: SubagentManager | None = None
     warnings: list[str] = field(default_factory=list)
 
     async def start(self) -> None:
@@ -98,6 +100,8 @@ class Bootstrapped:
         await self.session.emit_session_start("startup")
 
     async def shutdown(self, reason: str = "quit") -> None:
+        if self.subagent_manager is not None:
+            await self.subagent_manager.dispose_all()
         if self.extension_runner is not None and self.session is not None:
             await self.session.emit_session_shutdown(reason)
         if self.runtime is not None:
@@ -137,6 +141,17 @@ def resolve_project_trust(cwd: str, agent_dir: str, settings: SettingsManager) -
         file=sys.stderr,
     )
     return False
+
+
+def _positive_int(value: Any, default: int) -> int:
+    """Read a non-negative int setting, falling back on garbage instead of crashing."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return default
 
 
 def _ancestors(path: str) -> list[str]:
@@ -333,8 +348,23 @@ async def bootstrap(
     else:
         session_manager = SessionManager.create(cwd, effective_agent_dir)
 
-    def build_session(manager: SessionManager) -> AgentSession:
-        return AgentSession(
+    # One subagent manager per bootstrapped tree: it owns the delegation tools,
+    # capacity and depth limits, and the background drain hook that keeps one-shot
+    # modes alive until children settle.
+    subagent_settings = settings.get("subagent")
+    if not isinstance(subagent_settings, Mapping):
+        subagent_settings = {}
+    subagent_manager = SubagentManager(
+        max_depth=_positive_int(subagent_settings.get("maxDepth"), DEFAULT_MAX_DEPTH),
+        # At least one slot, or the manager would be unable to admit anything.
+        max_active=max(
+            1, _positive_int(subagent_settings.get("maxActiveSubagents"), DEFAULT_MAX_ACTIVE)
+        ),
+        auto_continue=bool(subagent_settings.get("autoContinue", True)),
+    )
+
+    def build_session(manager: SessionManager, *, depth: int = 0) -> AgentSession:
+        session = AgentSession(
             model=model,
             cwd=cwd,
             session_manager=manager,
@@ -346,6 +376,29 @@ async def bootstrap(
             scrub_shell_env=options.scrub_shell_env,
             sandbox_backend=options.sandbox_backend,
         )
+        subagent_manager.attach(session, depth=depth)
+        return session
+
+    async def child_session_factory(
+        manager: SessionManager, depth: int, parent: AgentSession
+    ) -> AgentSession:
+        # Children inherit the parent's live model / thinking level and the same
+        # tools, settings, resources and governance extension.  They get their own
+        # session store and their own pending queues.
+        return AgentSession(
+            model=parent.model,
+            cwd=parent.cwd,
+            session_manager=manager,
+            settings_manager=settings,
+            resource_loader=loader,
+            auth_storage=auth,
+            thinking_level=parent.thinking_level,
+            extension_runner=extension_runner,
+            scrub_shell_env=options.scrub_shell_env,
+            sandbox_backend=options.sandbox_backend,
+        )
+
+    subagent_manager.set_child_factory(child_session_factory)
 
     runtime = None
     if options.with_runtime:
@@ -384,6 +437,7 @@ async def bootstrap(
         runtime=runtime,
         session=session,
         host_mode=options.host_mode,
+        subagent_manager=subagent_manager,
         warnings=[str(diagnostic) for diagnostic in loader.diagnostics()],
     )
     await result.start()

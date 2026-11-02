@@ -15,11 +15,26 @@
 |---|---|---|
 | `pi-ai` | `@earendil-works/pi-ai` | 消息/内容块/Usage/Model 类型与 JSON 互转、12 种流式事件的 `EventStream`、provider 注册表、Anthropic 与 OpenAI 兼容适配器、faux 测试 provider、工具参数校验、凭据存储、模型目录、成本计算 |
 | `pi-agent-core` | `@earendil-works/pi-agent-core` | agent 循环（含 steering / follow-up / 工具批 / 中止语义）、`Agent` 类（状态归约、队列、生命周期） |
-| `pi-coding-agent` | `@earendil-works/pi-coding-agent` | JSONL v3 会话树、内置工具（read/write/edit/bash/grep/find/ls）、系统提示词组装、skills、资源发现、settings、`AgentSession` 编排、print/json/rpc 三种模式、扩展协议、会话替换 |
+| `pi-coding-agent` | `@earendil-works/pi-coding-agent` | JSONL v3 会话树、内置工具（read/write/edit/bash/grep/find/ls）、系统提示词组装、skills、资源发现、settings、`AgentSession` 编排、print/json/rpc 三种模式、扩展协议、会话替换、**后台 subagent（spawn/fork）** |
 | `pi-server` | *（无对应上游包）* | 浏览器 UI 的服务端：把同一套命令协议架在 WebSocket 上，并托管 React 单页应用 |
 
 **明确不在 v0.1**：终端 TUI、跨语言（TypeScript）扩展兼容、CBOR 协议栈、SQLite 会话后端、telemetry、evals。
 理由见架构文档第 3 节。
+
+## 后台 subagent
+
+模型可以把任务委派给后台子 agent，自己继续干活；子 agent 完成后结果以一条通知回到父对话。
+两个后端：`spawn`（子 agent 从空对话开始）与 `fork`（子 agent 继承父对话**已完成**的轮次，
+不含正在进行的一轮）。
+
+```bash
+# 模型自己决定何时调用 subagent / subagent_fork；这里只是普通的一次对话
+pi-py "把这三份资料的调研拆给子 agent 并行做，最后汇总"
+```
+
+每个子 agent 是一个真正的 Session：独立的 JSONL 文件、header 里记录 `parentSession`、在 Web
+会话列表里可见。委派工具**立即返回**，不阻塞父；上限（默认深度 1、并发 8）是快速失败而不是
+排队。完整语义、配置与已知限制见 [`docs/SUBAGENTS.md`](docs/SUBAGENTS.md)。
 
 ## 扩展
 

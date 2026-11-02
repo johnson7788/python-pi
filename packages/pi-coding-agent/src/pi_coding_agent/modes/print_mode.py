@@ -55,6 +55,10 @@ async def run_print_mode(
     try:
         await session.prompt(prompt)
         await session.wait_for_idle()
+        # A background subagent may still be running; wait for it (and for the
+        # continuation its notice triggers) so one-shot mode does not exit early.
+        await session.wait_for_background_work()
+        await session.wait_for_idle()
     except Exception as error:  # noqa: BLE001 - reported, never raised out of a mode
         print(f"pi-py: {error}", file=sys.stderr)
         return 1

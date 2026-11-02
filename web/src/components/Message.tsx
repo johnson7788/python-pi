@@ -1,4 +1,4 @@
-import type { AssistantMessage, ContentBlock, Message, Usage } from '../lib/protocol'
+import type { AssistantMessage, ContentBlock, CustomMessage, Message, Usage } from '../lib/protocol'
 import { asRecord, isTextBlock, isThinkingBlock, isToolCallBlock } from '../lib/protocol'
 import { renderMarkdown } from '../lib/markdown'
 import type { ToolExecution } from '../lib/useAgent'
@@ -121,6 +121,24 @@ export function MessageView({ message, streaming, toolExecutions }: MessageViewP
           fallbackText={message.content.filter(isTextBlock).map((part) => part.text).join('\n')}
           fallbackIsError={message.isError}
         />
+      </article>
+    )
+  }
+
+  if (message.role === 'custom') {
+    const custom = message as CustomMessage
+    const text =
+      typeof custom.content === 'string'
+        ? custom.content
+        : (custom.content ?? []).filter(isTextBlock).map((part) => part.text).join('\n')
+    const isSubagent = custom.customType === 'subagent'
+    return (
+      <article className={`message message--system message--custom${isSubagent ? ' message--subagent' : ''}`}>
+        <div className="message__meta">
+          <span>{isSubagent ? '子 agent' : '系统记录'}</span>
+          {time ? <span className="message__time">{time}</span> : null}
+        </div>
+        {text ? <pre className="message__notice">{text}</pre> : null}
       </article>
     )
   }
