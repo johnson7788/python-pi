@@ -1,0 +1,2365 @@
+<!doctype html>
+<!--
+  Pi 工作台 · 设计规范基线（单文件，无外部依赖）
+  视觉基线：主色 #3B5FBA / 表面 #F5F7FB / 边框 #E6E6E9 / PingFang SC / Lucide
+  用法：直接用浏览器打开本文件；或 python3 -m http.server 后访问。
+  交互：新建任务 · 工作空间切换（⌘K / 搜索 / 新建）· 办公/开发/设计模式
+        权限与模型选择 · 发送后进入会话（工作记录、交付物卡片、可中断）· 右侧产物预览与编辑 · 定时任务 · 资料库
+  说明：数据均为演示用假数据；图标来自 Lucide，产物编辑器为前端模拟。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pi — 工作台原型</title>
+<link rel="icon" href="prototype-pi-icon.png" />
+<style>
+  :root{
+    --bg:#f4f4f1;
+    --panel:#fafaf7;
+    --card:#ffffff;
+    --ink:#1b1b19;
+    --ink-2:#3d3d38;
+    --muted:#8c8c83;
+    --muted-2:#b0b0a7;
+    --line:#e9e9e2;
+    --line-2:#efefe9;
+    --hover:#f0f0ea;
+    --active:#ebebe4;
+    --green:#2f7d55;
+    --red:#d64545;
+    --amber:#b26a2b;
+    --shadow-xs:0 1px 2px rgba(24,24,18,.05);
+    --shadow-sm:0 2px 8px rgba(24,24,18,.06);
+    --shadow-md:0 10px 30px rgba(24,24,18,.09);
+    --shadow-lg:0 24px 70px rgba(24,24,18,.18);
+    --sidebar-w:300px;
+    --ease:cubic-bezier(.22,.61,.36,1);
+  }
+  *{box-sizing:border-box}
+  [hidden]{display:none !important}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  }
+  button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+  input,textarea{font:inherit;color:inherit}
+  ::selection{background:#d9d9cf}
+  .icon{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  .icon.sm{width:16px;height:16px}
+  .icon.xs{width:14px;height:14px}
+  :focus-visible{outline:2px solid #9a9a8e;outline-offset:2px;border-radius:8px}
+
+  .app{display:flex;height:100vh;height:100dvh;overflow:hidden}
+
+  /* ───────────────── sidebar ───────────────── */
+  .sidebar{
+    width:var(--sidebar-w);flex:none;background:var(--panel);
+    border-right:1px solid rgba(24,24,18,.055);
+    display:flex;flex-direction:column;min-height:0;
+    padding:14px 12px 12px;position:relative;z-index:20;
+    transition:margin-left .32s var(--ease), transform .32s var(--ease);
+  }
+  .window-row{display:flex;align-items:center;gap:8px;padding:2px 6px 0;height:26px}
+  .lights{display:flex;gap:8px;align-items:center}
+  .light{width:12px;height:12px;border-radius:50%;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.12)}
+  .light.red{background:#ff5f57}.light.yellow{background:#febc2e}.light.green{background:#28c840}
+  .window-tools{margin-left:auto;display:flex;gap:2px}
+  .icon-btn{
+    width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#6e6e66;
+    transition:background .16s,color .16s;
+  }
+  .icon-btn:hover{background:var(--hover);color:var(--ink)}
+
+  .brand{margin-top:20px;padding:0 8px}
+  .brand h1{margin:0;font-size:20px;font-weight:720;letter-spacing:-.02em;line-height:1.15}
+  .brand-row{display:flex;align-items:center;gap:10px;margin-top:6px}
+  .version{font-size:11.5px;color:var(--muted-2);letter-spacing:.02em}
+
+  .new-task{
+    margin:18px 6px 12px;height:42px;border-radius:11px;background:#f1f1ea;
+    display:flex;align-items:center;gap:10px;padding:0 12px;font-size:14px;font-weight:600;
+    transition:background .16s,transform .16s;width:calc(100% - 12px);
+  }
+  .new-task:hover{background:#eaeae2}
+  .new-task:active{transform:scale(.995)}
+  .new-task .round{
+    width:20px;height:20px;border-radius:50%;border:1.5px solid #7c7c72;display:grid;place-items:center;color:#6d6d64
+  }
+  .new-task .round .icon{width:12px;height:12px;stroke-width:2.2}
+
+  .nav{display:flex;flex-direction:column;gap:1px;padding:0 2px}
+  .nav-item{
+    height:38px;border-radius:9px;display:flex;align-items:center;gap:11px;padding:0 10px;
+    color:#4a4a44;font-size:13.8px;transition:background .14s,color .14s;text-align:left;width:100%
+  }
+  .nav-item:hover{background:var(--hover)}
+  .nav-item.is-active{background:var(--active);color:var(--ink);font-weight:560}
+  .nav-item .icon{color:#78786f}
+  .nav-item.is-active .icon{color:#3c3c36}
+  .beta{
+    font-size:9.5px;font-weight:600;letter-spacing:.04em;color:#9a9a90;background:#efefe8;
+    border-radius:4px;padding:2px 4px;margin-left:2px
+  }
+  .dot-red{width:6px;height:6px;border-radius:50%;background:#e5484d;margin-left:auto}
+
+  .side-scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-bottom:8px;scrollbar-width:none}
+  .side-scroll::-webkit-scrollbar{width:0}
+
+  .side-section{
+    display:flex;align-items:baseline;gap:6px;padding:0 10px;margin:20px 0 7px;
+    font-size:11.5px;color:var(--muted-2);letter-spacing:.02em
+  }
+  .side-section b{font-weight:500}
+  .side-section .more-link{margin-left:auto;color:var(--muted-2);font-size:11.5px;text-decoration:none;transition:color .15s}
+  .side-section .more-link:hover{color:var(--ink-2);text-decoration:underline;text-underline-offset:2px}
+
+  .task-row{
+    display:flex;align-items:center;gap:8px;height:30px;padding:0 10px 0 34px;border-radius:8px;
+    color:#5d5d55;font-size:12.8px;transition:background .14s,color .14s;text-align:left;width:100%
+  }
+  .task-row:hover{background:var(--hover);color:var(--ink-2)}
+  .task-row .t{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:1}
+  .task-row time{font-size:11px;color:var(--muted-2);flex:none}
+
+  .space{display:flex;flex-direction:column}
+  .space-row{
+    height:35px;border-radius:8px;display:flex;align-items:center;gap:9px;padding:0 10px;
+    color:#4c4c46;font-size:13.4px;transition:background .14s;width:100%;text-align:left
+  }
+  .space-row:hover{background:var(--hover)}
+  .space-row.is-current{background:#f0f0e9;color:var(--ink);font-weight:540}
+  .space-row .icon{color:#83837a}
+  .space-row .count{margin-left:auto;font-size:11px;color:var(--muted-2)}
+  .space-tasks{overflow:hidden;max-height:0;transition:max-height .34s var(--ease)}
+  .space.is-open .space-tasks{max-height:180px}
+  .space-tasks .task-row{padding-left:36px;height:28px;font-size:12.4px}
+
+  .side-foot{
+    border-top:1px solid rgba(24,24,18,.06);padding-top:10px;margin-top:4px;
+    display:flex;align-items:center;gap:9px
+  }
+  .avatar{
+    width:30px;height:30px;border-radius:50%;background:#e8f0e6;display:grid;place-items:center;flex:none;
+    color:#2f7d55;font-weight:700;font-size:12px;letter-spacing:.02em;overflow:hidden
+  }
+  .avatar svg{width:100%;height:100%;display:block}
+  .side-foot .who{font-size:13.6px;font-weight:560;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .bell{position:relative}
+  .bell .badge{
+    position:absolute;top:2px;right:1px;min-width:14px;height:14px;padding:0 3px;border-radius:8px;
+    background:#e5484d;color:#fff;font-size:9.5px;font-weight:650;display:grid;place-items:center;
+    box-shadow:0 0 0 2px var(--panel)
+  }
+
+  /* ───────────────── main ───────────────── */
+  .main{flex:1;min-width:0;position:relative;overflow:hidden;display:flex;flex-direction:column}
+  .view{flex:1;min-height:0;display:none;flex-direction:column;animation:fade .25s var(--ease)}
+  .view.is-active{display:flex}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+  .home{overflow-y:auto;scrollbar-width:thin;scrollbar-color:#deded5 transparent}
+  .home::-webkit-scrollbar{width:8px}
+  .home::-webkit-scrollbar-thumb{background:#deded5;border-radius:8px}
+  .home-inner{
+    width:100%;max-width:880px;margin:0 auto;padding:0 28px 28px;
+    display:flex;flex-direction:column;align-items:center;
+    min-height:100%;padding-top:clamp(40px,8.5vh,104px)
+  }
+  .hero{text-align:center;display:flex;flex-direction:column;align-items:center;width:100%}
+  .hero h2{
+    margin:0;font-size:clamp(34px,3.5vw,46px);font-weight:720;letter-spacing:-.035em;line-height:1.1;
+  }
+  .hero h2 .comma{font-weight:600;color:#2b2b26}
+
+  .modes{display:flex;align-items:center;gap:6px;margin-top:24px;padding:4px;border-radius:999px}
+  .mode{
+    height:38px;padding:0 17px;border-radius:999px;display:inline-flex;align-items:center;gap:7px;
+    font-size:13.8px;color:#83837a;transition:all .18s var(--ease);border:1px solid transparent
+  }
+  .mode:hover{color:var(--ink-2);background:rgba(24,24,18,.035)}
+  .mode.is-active{background:#fff;color:var(--ink);border-color:#ececE6;box-shadow:var(--shadow-xs);font-weight:540}
+  .mode .icon{width:15px;height:15px}
+
+  .quick{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:38px}
+  .quick button{
+    height:35px;padding:0 15px;border-radius:999px;background:#fff;border:1px solid #ececE6;
+    box-shadow:var(--shadow-xs);font-size:13px;color:#3f3f39;transition:all .16s var(--ease)
+  }
+  .quick button:hover{box-shadow:var(--shadow-sm);transform:translateY(-1px);border-color:#e2e2da}
+
+  .composer-wrap{position:relative;width:100%;margin-top:24px}to{opacity:1;transform:none}}
+
+  .composer{
+    position:relative;z-index:2;background:var(--card);border:1px solid #e9e9e1;border-radius:22px;
+    box-shadow:0 10px 34px rgba(24,24,18,.075),0 1px 2px rgba(24,24,18,.04);
+    padding:17px 17px 12px;transition:box-shadow .2s var(--ease),border-color .2s
+  }
+  .composer:focus-within{box-shadow:0 14px 44px rgba(24,24,18,.10),0 0 0 3px rgba(24,24,18,.045);border-color:#deded5}
+  .composer textarea{
+    display:block;width:100%;border:0;outline:0;background:transparent;resize:none;
+    min-height:62px;max-height:200px;font-size:15.5px;line-height:1.62;padding:2px 6px;color:var(--ink)
+  }
+  .composer textarea::placeholder{color:#b5b5ac}
+  .composer-bar{display:flex;align-items:center;gap:6px;margin-top:4px;padding:0 2px}
+  .model-btn{
+    display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 8px;border-radius:9px;
+    font-size:12.8px;color:#4d4d46;transition:background .15s
+  }
+  .model-btn:hover{background:#f4f4ee}
+  .model-orb{width:16px;height:16px;border-radius:50%;background:conic-gradient(from 210deg,#2b2b26,#6d6d5f,#c9c9b8,#2b2b26);box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+  .model-btn .icon{width:12px;height:12px;color:#9a9a90}
+  .bar-spacer{flex:1}
+  .round-btn{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;color:#6e6e66;transition:background .15s,color .15s}
+  .round-btn:hover{background:#f2f2ec;color:var(--ink)}
+  .send{
+    width:36px;height:36px;border-radius:50%;background:#ececE4;color:#a8a89e;display:grid;place-items:center;
+    transition:all .18s var(--ease)
+  }
+  .send.is-ready{background:#1c1c19;color:#fff;box-shadow:0 4px 12px rgba(20,20,15,.22)}
+  .send.is-ready:hover{transform:translateY(-1px)}
+  .send.is-stop{background:#1c1c19;color:#fff}
+  .send .icon{width:17px;height:17px;stroke-width:2}
+
+  .hint-row{display:flex;align-items:center;gap:16px;padding:10px 8px 0;font-size:12.4px;color:#77776e}
+  .hint-btn{display:inline-flex;align-items:center;gap:6px;height:24px;transition:color .15s}
+  .hint-btn:hover{color:var(--ink)}
+  .hint-btn .icon{width:13px;height:13px;opacity:.75}
+  .hint-btn.warn{color:#a3453f}
+  .hint-btn.warn .icon{color:#d64545;opacity:1}
+  .hint-btn.safe{color:#3d6b52}
+  .hint-btn.safe .icon{color:#2f7d55;opacity:1}
+
+  .examples{display:flex;flex-direction:column;align-items:flex-start;gap:11px;margin-top:44px;width:100%;padding-left:2px}
+  .example{
+    display:inline-flex;align-items:center;gap:10px;background:#fff;border:1px solid #ededE6;border-radius:14px;
+    padding:12px 15px;font-size:13.8px;color:#3c3c36;box-shadow:var(--shadow-xs);
+    transition:all .18s var(--ease);text-align:left
+  }
+  .example:hover{box-shadow:var(--shadow-sm);transform:translateY(-1px);border-color:#e3e3db}
+  .example .icon{width:14px;height:14px;color:#a5a59b;transition:color .16s}
+  .example:hover .icon{color:#6d6d64}
+
+  .footnote{width:100%;text-align:center;color:#b3b3aa;font-size:11px;margin-top:auto;padding:32px 0 18px;letter-spacing:.01em}
+
+  /* popovers */
+  .pop{
+    position:absolute;z-index:90;background:#fff;border:1px solid #ececE5;border-radius:16px;text-align:left;
+    box-shadow:var(--shadow-lg);padding:7px;opacity:0;transform:translateY(6px) scale(.985);
+    pointer-events:none;transition:opacity .16s var(--ease),transform .16s var(--ease)
+  }
+  .pop.is-open{opacity:1;transform:none;pointer-events:auto}
+  .pop-ws{position:fixed;width:304px;max-width:calc(100vw - 32px);overflow:auto;scrollbar-width:thin}
+  .pop-perm{position:fixed;width:326px;max-width:calc(100vw - 32px)}
+  .pop-model{position:fixed;width:262px;max-width:calc(100vw - 32px)}
+
+  .ws-search{position:relative;margin:3px 3px 6px}
+  .ws-search .icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#a5a59b;width:15px;height:15px}
+  .ws-search input{
+    width:100%;height:36px;border:0;border-radius:10px;background:#f5f5ef;padding:0 10px 0 33px;
+    font-size:13px;outline:0
+  }
+  .ws-search input::placeholder{color:#adada3}
+  .pop-list{max-height:38vh;overflow-y:auto;scrollbar-width:thin}
+  .pop-item{
+    display:flex;align-items:center;gap:10px;height:36px;padding:0 9px;border-radius:9px;
+    font-size:13.4px;color:#3d3d37;width:100%;text-align:left;transition:background .13s
+  }
+  .pop-item:hover{background:#f5f5ef}
+  .pop-item .icon{color:#8b8b81;width:16px;height:16px}
+  .pop-item .t{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .pop-item .check{width:14px;height:14px;color:#2f7d55;opacity:0}
+  .pop-item.is-current .check{opacity:1}
+  .pop-divider{height:1px;background:#f0f0ea;margin:6px 5px}
+  .pop-empty{padding:18px 10px;text-align:center;color:var(--muted);font-size:12.5px}
+  .pop-action{
+    display:flex;align-items:center;gap:10px;height:36px;padding:0 9px;border-radius:9px;
+    font-size:13.4px;color:#3d3d37;width:100%;text-align:left;transition:background .13s
+  }
+  .pop-action:hover{background:#f5f5ef}
+  .pop-action .icon{width:16px;height:16px;color:#8b8b81}
+  .ws-new{display:flex;gap:6px;padding:4px 3px 2px}
+  .ws-new input{flex:1;height:34px;border:1px solid #e3e3db;border-radius:9px;padding:0 10px;font-size:13px;outline:0;background:#fff}
+  .ws-new input:focus{border-color:#cfcfc4;box-shadow:0 0 0 3px rgba(24,24,18,.04)}
+  .ws-new button{height:34px;padding:0 12px;border-radius:9px;background:#1c1c19;color:#fff;font-size:12.5px;font-weight:560}
+  .ws-new button.ghost{background:#f2f2ec;color:#4a4a44}
+
+  .perm-title{font-size:11.5px;color:var(--muted-2);padding:6px 9px 5px;letter-spacing:.02em}
+  .perm-item{display:flex;align-items:flex-start;gap:10px;padding:9px;border-radius:10px;width:100%;text-align:left;transition:background .13s}
+  .perm-item:hover{background:#f5f5ef}
+  .perm-item .p-icon{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;flex:none;background:#f3f3ed;color:#6d6d64;margin-top:1px}
+  .perm-item .p-icon.danger{background:#fdf0ef;color:#c94a44}
+  .perm-item .p-icon.safe{background:#eef5f0;color:#2f7d55}
+  .perm-item .p-body{display:block;flex:1;min-width:0}
+  .perm-item .p-name{display:block;font-size:13px;font-weight:540;color:var(--ink);line-height:1.35}
+  .perm-item .p-desc{display:block;font-size:11.5px;color:var(--muted);line-height:1.5;margin-top:3px}
+  .perm-item .p-check{width:15px;height:15px;color:#2f7d55;opacity:0;margin-top:5px}
+  .perm-item.is-current .p-check{opacity:1}
+  .perm-note{margin:6px 4px 2px;padding:8px 9px;border-radius:9px;background:#faf5ef;color:#8a6238;font-size:11.2px;line-height:1.5}
+  .pop-model .pop-item .p-sub{margin-left:auto;font-size:10.5px;color:#a8a89e;letter-spacing:.02em}
+
+  /* ───────────────── chat ───────────────── */
+  .chat-head{
+    height:58px;flex:none;display:flex;align-items:center;gap:10px;padding:0 18px;
+    border-bottom:1px solid rgba(24,24,18,.06);background:rgba(244,244,241,.8);backdrop-filter:saturate(1.2) blur(8px)
+  }
+  .chat-title{display:flex;flex-direction:column;min-width:0;line-height:1.25}
+  .chat-title b{font-size:13.6px;font-weight:600;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:52vw}
+  .chat-title span{font-size:11.4px;color:var(--muted);margin-top:1px;display:flex;align-items:center;gap:5px}
+  .chat-title .icon{width:11px;height:11px}
+  .chat-head .spacer{flex:1}
+  .messages{flex:1;min-height:0;overflow-y:auto;padding:30px 0 12px;scrollbar-width:thin;scrollbar-color:#deded5 transparent}
+  .messages::-webkit-scrollbar{width:8px}
+  .messages::-webkit-scrollbar-thumb{background:#deded5;border-radius:8px}
+  .thread{max-width:780px;margin:0 auto;padding:0 28px;display:flex;flex-direction:column;gap:22px}
+  .msg-user{align-self:flex-end;max-width:76%;background:#ececE4;border-radius:16px 16px 5px 16px;padding:11px 15px;font-size:14.4px;line-height:1.62;white-space:pre-wrap;color:#26261f}
+  .msg-ai{display:flex;gap:12px;align-items:flex-start}
+  .pi-avatar{
+    width:27px;height:27px;border-radius:50%;background:#1c1c19;color:#fff;display:grid;place-items:center;
+    font-size:13px;font-weight:700;flex:none;margin-top:1px;letter-spacing:-.02em
+  }
+  .ai-body{flex:1;min-width:0;padding-top:1px}
+  .ai-name{font-size:12px;color:var(--muted);margin-bottom:7px;display:flex;align-items:center;gap:7px}
+  .ai-name .tag{font-size:10px;color:#8b8b81;background:#eeeee7;padding:1px 5px;border-radius:4px;letter-spacing:.02em}
+  .ai-text{font-size:14.5px;line-height:1.72;color:#2a2a24}
+  .ai-text p{margin:0 0 10px}
+  .ai-text p:last-child{margin-bottom:0}
+  .ai-text ul{margin:6px 0 12px;padding-left:19px}
+  .ai-text li{margin:3px 0}
+  .ai-text code{background:#efefE8;border-radius:4px;padding:1px 5px;font-size:12.8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .ai-text strong{font-weight:620}
+
+  .steps{border:1px solid #ececE5;border-radius:13px;background:#fbfbf7;margin-bottom:13px;overflow:hidden}
+  .steps-head{display:flex;align-items:center;gap:9px;padding:10px 12px;width:100%;text-align:left;font-size:12.3px;color:#5f5f57}
+  .steps-head:hover{background:#f7f7f2}
+  .steps-head .icon{width:13px;height:13px;color:#9a9a90;transition:transform .2s var(--ease)}
+  .steps.is-collapsed .steps-head .chev{transform:rotate(-90deg)}
+  .steps-head b{font-weight:560;color:#3f3f38}
+  .steps-head .ok{color:#2f7d55;display:inline-flex;align-items:center;gap:4px;margin-left:auto;font-size:11.5px}
+  .steps-head .ok .icon{width:12px;height:12px;color:#2f7d55}
+  .steps-body{padding:0 12px 9px}
+  .steps.is-collapsed .steps-body{display:none}
+  .step{display:flex;align-items:flex-start;gap:9px;padding:4px 0;font-size:12.4px;color:#5c5c54;line-height:1.55}
+  .step .icon{width:13px;height:13px;color:#9a9a90;margin-top:2px}
+  .step .st{flex:1}
+  .step .dur{color:#b1b1a7;font-size:11px;flex:none;margin-top:1px}
+
+  .filecard{
+    display:flex;align-items:center;gap:11px;border:1px solid #ececE5;background:#fff;border-radius:12px;
+    padding:10px 12px;margin:4px 0 12px;box-shadow:var(--shadow-xs);max-width:400px
+  }
+  .filecard .fi{width:32px;height:32px;border-radius:8px;background:#eef2ee;color:#2f7d55;display:grid;place-items:center;flex:none}
+  .filecard .fi .icon{width:16px;height:16px}
+  .filecard .ft{flex:1;min-width:0}
+  .filecard .ft b{display:block;font-size:12.8px;font-weight:560;color:#2f2f29;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .filecard .ft span{font-size:11px;color:#a0a096}
+  .filecard .open{font-size:11.8px;color:#4a6b57;background:#eff4f0;border-radius:7px;padding:5px 9px;font-weight:540;flex:none}
+  button.filecard{cursor:pointer;text-align:left;width:100%;max-width:440px;font:inherit;color:inherit}
+  button.filecard:hover{box-shadow:var(--shadow-sm);border-color:#e0e0d7}
+  .filecard .fi{background:#fdf1e6;color:#b9772f}
+  .artifacts-link{margin:-2px 0 12px}
+  .artifacts-link button{display:inline-flex;align-items:center;gap:5px;font-size:12.2px;color:#6b7a70;padding:3px 0;transition:color .15s}
+  .artifacts-link button:hover{color:#2f4d3c}
+  .artifacts-link .icon{width:12px;height:12px}
+  .ai-text table{border-collapse:collapse;width:100%;margin:2px 0 14px;font-size:12.6px;table-layout:fixed}
+  .ai-text th,.ai-text td{border:1px solid #e7e7df;padding:7px 9px;text-align:left;vertical-align:top;line-height:1.5;word-break:break-word}
+  .ai-text th{background:#fafaf6;font-weight:560;color:#3c3c36}
+  .ai-text td{color:#3a3a34}
+  .ai-text table col:first-child{width:42%}
+  .msg-tools{display:flex;align-items:center;gap:2px;margin-top:14px;flex-wrap:wrap;row-gap:6px}
+  .msg-tools .tool{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;color:#8b8b81;transition:background .14s,color .14s}
+  .msg-tools .tool:hover{background:#f0f0e9;color:#3d3d37}
+  .msg-tools .tool.is-on{color:#2f7d55;background:#eef4ef}
+  .msg-tools .tool .icon{width:15px;height:15px}
+  .msg-tools .tool .flip{transform:rotate(180deg)}
+  .msg-tools .cost{margin-left:8px;font-size:11.2px;color:#a8a89e;display:inline-flex;align-items:center;gap:6px}
+  .msg-tools .cost b{font-weight:500;color:#77776e}
+  .msg-tools .cost .sep{width:1px;height:10px;background:#deded5}
+  .chat-bar{gap:4px}
+  .chat-plus{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:#5f5f57;background:#f4f4ee;transition:background .15s}
+  .chat-plus:hover{background:#ececE4}
+  .chat-plus .icon{width:15px;height:15px;stroke-width:2}
+  .chat-bar .hint-btn{font-size:12px;height:28px;padding:0 6px;border-radius:7px}
+  .chat-bar .hint-btn:hover{background:#f4f4ee}
+  .chat-bar .hint-btn .icon{width:13px;height:13px}
+  .chat-bar .model-btn{height:28px}
+
+  .typing{display:flex;align-items:center;gap:4px;height:22px}
+  .typing i{width:5px;height:5px;border-radius:50%;background:#b6b6ac;display:block;animation:blink 1.1s infinite}
+  .typing i:nth-child(2){animation-delay:.16s}.typing i:nth-child(3){animation-delay:.32s}
+  @keyframes blink{0%,80%,100%{opacity:.35;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
+
+  .chat-composer{flex:none;padding:8px 28px 20px}
+  .chat-composer .composer-wrap{max-width:780px;margin:0 auto}
+  .chat-composer .composer{border-radius:19px;padding:14px 15px 10px}
+  .chat-composer textarea{min-height:44px;max-height:160px;font-size:14.8px}
+
+  /* ───────────────── artifact pane ───────────────── */
+  .artifact{
+    container-type:inline-size;
+    width:var(--art-w,42%);flex:none;min-width:400px;max-width:74%;background:#fff;
+    border-left:1px solid #e6e6dd;display:none;flex-direction:column;min-height:0;position:relative;z-index:10;
+  }
+  .app.artifact-open .artifact{display:flex}
+  .app.art-max .artifact{max-width:82%;width:62%}
+  .art-resize{position:absolute;left:-3px;top:0;bottom:0;width:6px;cursor:col-resize;z-index:6;background:transparent}
+  .art-resize:hover{background:rgba(47,111,237,.12)}
+  .art-tabs{height:44px;display:flex;align-items:flex-end;gap:2px;padding:0 8px;background:#f3f3ef;border-bottom:1px solid #e8e8e0;flex:none}
+  .art-tab{display:flex;align-items:center;gap:7px;height:33px;padding:0 7px 0 10px;border-radius:8px 8px 0 0;font-size:12.2px;color:#4a4a44;max-width:250px;position:relative;margin-bottom:-1px}
+  .art-tab.is-active{background:#fff;border:1px solid #e8e8e0;border-bottom-color:#fff}
+  .art-tab .fic{color:#b9772f;display:inline-flex}
+  .art-tab .fic .icon{width:14px;height:14px}
+  .art-tab b{font-weight:520;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:168px}
+  .art-tab .dot{width:6px;height:6px;border-radius:50%;background:#e0a23a;flex:none;display:none}
+  .art-tab.is-dirty .dot{display:block}
+  .art-tab .x{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;color:#9a9a90;flex:none}
+  .art-tab .x:hover{background:#ececE4;color:#3d3d37}
+  .art-tab .x .icon{width:12px;height:12px}
+  .art-add{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;color:#7c7c72;margin-bottom:3px}
+  .art-add:hover{background:#e9e9e2;color:#2f2f29}
+  .art-tabs .grow{flex:1}
+  .art-head{height:46px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #f0f0ea;flex:none}
+  .art-head .name{font-size:13.2px;font-weight:560;display:flex;align-items:center;gap:5px;min-width:0}
+  .art-head .name b{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .art-head .actions{margin-left:auto;display:flex;gap:1px}
+  .art-menu{display:flex;align-items:center;gap:1px;padding:0 10px;height:33px;border-bottom:1px solid #f0f0ea;flex:none;overflow-x:auto;scrollbar-width:none}
+  .art-menu::-webkit-scrollbar{display:none}
+  .art-menu button{height:25px;padding:0 9px;border-radius:6px;font-size:12px;color:#55554f;white-space:nowrap}
+  .art-menu button:hover{background:#f4f4ef}
+  .art-menu button.is-active{color:#2f6fed;background:#eef4ff}
+  .art-tools{display:flex;align-items:center;gap:2px;padding:5px 10px;border-bottom:1px solid #ecece6;flex:none;overflow-x:auto;scrollbar-width:none}
+  .art-tools::-webkit-scrollbar{display:none}
+  .art-tool{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:44px;height:46px;justify-content:center;border-radius:7px;font-size:10px;color:#5a5a52;flex:none}
+  .art-tool:hover{background:#f4f4ef}
+  .art-tool .icon{width:16px;height:16px}
+  .art-tool.off{opacity:.45}
+  .art-tool .aa{font-size:13px;font-weight:600;line-height:1;color:#3d3d37;letter-spacing:-.02em}
+  .art-tools .sep{width:1px;height:26px;background:#ecece6;margin:0 5px;flex:none}
+  .art-tools .grow{flex:1}
+  .art-body{flex:1;min-height:0;display:flex}
+  .thumbs{width:128px;flex:none;background:#f7f7f3;border-right:1px solid #ecece6;overflow-y:auto;padding:12px 10px;scrollbar-width:thin}
+  .thumb{display:block;width:100%;margin-bottom:15px;text-align:center}
+  .thumb .mini{width:100%;aspect-ratio:16/10;background:#fff;border:1px solid #e2e2d9;border-radius:3px;box-shadow:0 1px 2px rgba(20,20,15,.05);overflow:hidden;position:relative;transition:box-shadow .15s,border-color .15s}
+  .thumb:hover .mini{border-color:#c9c9be}
+  .thumb.is-active .mini{border-color:#2f6fed;box-shadow:0 0 0 2px rgba(47,111,237,.18)}
+  .thumb .n{font-size:10.5px;color:#8b8b81;margin-top:4px}
+  .thumb.is-active .n{color:#2f6fed}
+  .thumb .mini .m-cover{position:absolute;inset:0;background:#3B5FBA;display:flex;flex-direction:column;justify-content:center;padding:12%}
+  .thumb .mini .m-cover i{display:block;height:5px;width:70%;background:rgba(255,255,255,.92);border-radius:1px;margin-bottom:4px}
+  .thumb .mini .m-cover i+i{width:42%;background:rgba(255,255,255,.5);height:3px}
+  .thumb .mini .m-sec{position:absolute;inset:0;padding:12%;display:flex;flex-direction:column;justify-content:center;background:#fbfcfe}
+  .thumb .mini .m-sec i{display:block;height:4px;width:46%;background:#3B5FBA;border-radius:1px;margin-bottom:5px}
+  .thumb .mini .m-sec i+i{height:3px;width:66%;background:#C9D4EA}
+  .thumb .mini .m-bul{position:absolute;inset:0;padding:11%}
+  .thumb .mini .m-bul .bar{height:3px;width:34%;background:#3B5FBA;border-radius:1px;margin-bottom:8px}
+  .thumb .mini .m-bul i{display:block;height:2px;background:#DFE5F0;border-radius:1px;margin:4px 0}
+  .thumb .mini .m-bul i:nth-child(odd){width:80%}.thumb .mini .m-bul i:nth-child(even){width:64%}
+  .thumb .mini .m-tab{position:absolute;inset:0;padding:10%}
+  .thumb .mini .m-tab .bar{height:3px;width:30%;background:#3B5FBA;border-radius:1px;margin-bottom:6px}
+  .thumb .mini .m-tab .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:#E6E6E9;border:1px solid #E6E6E9}
+  .thumb .mini .m-tab .grid span{background:#fff;height:6px}
+  .canvas{flex:1;min-width:0;background:#eceef2;overflow:auto;padding:22px 24px 18px;display:flex;flex-direction:column;align-items:center;gap:12px;scrollbar-width:thin}
+  .slide{width:100%;max-width:760px;background:#fff;box-shadow:0 12px 34px rgba(18,25,38,.14);position:relative;overflow:hidden;flex:none}
+  .slide *{box-sizing:border-box}
+  .slide .s-kicker{font-size:11px;letter-spacing:.14em;color:#8a94a6;text-transform:uppercase}
+  .slide .s-title{font-size:34px;line-height:1.25;font-weight:700;letter-spacing:-.02em;color:#17233b;outline:none;border-radius:4px}
+  .slide .s-title:focus,.slide .s-sub:focus,.slide li:focus,.slide td:focus{box-shadow:0 0 0 2px rgba(47,111,237,.28)}
+  .slide [contenteditable]:hover{box-shadow:inset 0 0 0 1px rgba(47,111,237,.16)}
+  .slide .s-sub{font-size:14px;color:#6b7789;outline:none;border-radius:4px}
+  .slide-cover{background:linear-gradient(135deg,#182741 0%,#223a5c 55%,#2b4a72 100%);color:#fff;padding:9% 10%;display:flex;flex-direction:column;justify-content:center}
+  .slide-cover .brandline{position:absolute;left:10%;top:9%;font-size:10px;letter-spacing:.22em;color:rgba(255,255,255,.55)}
+  .slide-cover .s-kicker{color:#8fb6e8}
+  .slide-cover .s-title{color:#fff;font-size:44px;margin-top:14px}
+  .slide-cover .s-sub{color:rgba(255,255,255,.66);margin-top:10px}
+  .slide-cover .rule{width:54px;height:2px;background:#6ea8e6;margin-top:22px}
+  .slide-sec{background:#fbfcfe;padding:9% 10%;display:flex;flex-direction:column;justify-content:center;overflow:hidden}
+  .slide-sec::before{content:"";position:absolute;right:-6%;top:-18%;width:62%;height:120%;background:radial-gradient(closest-side,rgba(28,44,76,.08),transparent 70%)}
+  .slide-sec::after{content:"";position:absolute;right:7%;bottom:12%;width:21%;height:21%;border:1px solid rgba(28,44,76,.09);border-radius:50%}
+  .slide .s-foot{position:absolute;left:9%;right:9%;bottom:6%;display:flex;justify-content:space-between;font-size:9px;letter-spacing:.06em;color:#aab2c0}
+  .slide-cover .s-foot{color:rgba(255,255,255,.45)}
+  .slide-sec .s-title{font-size:46px;margin-top:6px;position:relative;z-index:1}
+  .slide-sec .s-sub{margin-top:14px;position:relative;z-index:1}
+  .slide-sec .mark{position:absolute;right:9%;top:8%;width:32px;height:32px;border-radius:50%;background:#e8eef8;display:grid;place-items:center;color:#2c4a72;font-size:9px;font-weight:700;letter-spacing:.02em}
+  .slide-bul{padding:8% 9%;display:flex;flex-direction:column}
+  .slide-bul .s-title{font-size:30px}
+  .slide-bul .accent{width:46px;height:3px;background:#2f6fed;margin:12px 0 18px}
+  .slide-bul ul{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:11px}
+  .slide-bul li{position:relative;padding-left:20px;font-size:14px;line-height:1.55;color:#3d4a5e;outline:none;border-radius:4px}
+  .slide-bul li::before{content:"";position:absolute;left:2px;top:8px;width:7px;height:7px;border-radius:2px;background:#2f6fed;opacity:.85}
+  .slide-tbl{padding:7% 8%;display:flex;flex-direction:column}
+  .slide-tbl .s-title{font-size:28px}
+  .slide-tbl table{border-collapse:collapse;width:100%;margin-top:16px;font-size:11.5px;table-layout:fixed}
+  .slide-tbl th,.slide-tbl td{border:1px solid #dfe4ec;padding:6px 8px;text-align:left;color:#3d4a5e;outline:none;line-height:1.45;word-break:break-word}
+  .slide-tbl th{background:#f2f5fa;color:#2c3a4f;font-weight:600}
+  .slide-tbl col:first-child{width:40%}
+  .notes{width:100%;max-width:760px;display:flex;align-items:center;gap:8px;border-top:1px solid rgba(255,255,255,.0);padding:2px 4px}
+  .notes .icon{width:13px;height:13px;color:#9aa0aa}
+  .notes input{flex:1;border:0;background:transparent;font-size:12px;color:#6f7785;outline:none;padding:4px 0}
+  .notes input::placeholder{color:#9aa0aa}
+  .art-status{height:32px;display:flex;align-items:center;gap:6px;padding:0 12px;border-top:1px solid #ecece6;font-size:11.5px;color:#77776e;flex:none;background:#fdfdfb}
+  .art-status .grow{flex:1}
+  .art-status .zoom{display:flex;align-items:center;gap:2px}
+  .art-status .zoom button{width:22px;height:22px;border-radius:5px;display:grid;place-items:center;color:#77776e}
+  .art-status .zoom button:hover{background:#f0f0e9}
+  .art-status .zoom .icon{width:13px;height:13px}
+  .art-status .dirty-label{color:#b9772f;font-size:11px}
+  .art-status .edit-hint{color:#b0b0a7;font-size:10.8px;padding-left:4px}
+  .art-status .zoom span{font-size:11px;min-width:34px;text-align:center}
+  .art-status .vbtn{width:24px;height:22px;border-radius:5px;display:grid;place-items:center;color:#8b8b81}
+  .art-status .vbtn:hover{background:#f0f0e9}
+  @container (max-width: 680px){
+    .art-tool{min-width:38px}
+    .art-tool[data-compact="hide"]{display:none}
+    .art-tools .sep{margin:0 2px}
+  }
+
+  /* ───────────────── list pages ───────────────── */
+  .page{flex:1;min-height:0;overflow-y:auto;padding:38px 42px 48px}
+  .page-inner{max-width:980px;margin:0 auto}
+  .page-head{display:flex;align-items:flex-end;gap:14px;margin-bottom:26px}
+  .page-head h2{margin:0;font-size:27px;font-weight:710;letter-spacing:-.025em}
+  .page-head p{margin:6px 0 0;font-size:13px;color:var(--muted)}
+  .page-head .actions{margin-left:auto;display:flex;gap:8px}
+  .btn{
+    height:36px;padding:0 14px;border-radius:10px;font-size:13px;display:inline-flex;align-items:center;gap:7px;
+    background:#fff;border:1px solid #e6e6de;box-shadow:var(--shadow-xs);transition:all .16s
+  }
+  .btn:hover{border-color:#dcdcd2;box-shadow:var(--shadow-sm)}
+  .btn.dark{background:#1c1c19;color:#fff;border-color:#1c1c19}
+  .btn.dark:hover{transform:translateY(-1px);box-shadow:var(--shadow-md)}
+  .btn .icon{width:15px;height:15px}
+
+  .schedule-list{display:flex;flex-direction:column;gap:10px}
+  .sched{
+    display:flex;align-items:center;gap:14px;background:#fff;border:1px solid #ececE5;border-radius:14px;
+    padding:15px 17px;box-shadow:var(--shadow-xs);transition:box-shadow .18s
+  }
+  .sched:hover{box-shadow:var(--shadow-sm)}
+  .sched .time{width:64px;flex:none;font-size:12px;color:#8b8b81;line-height:1.4}
+  .sched .time b{display:block;font-size:19px;font-weight:650;color:#2a2a24;letter-spacing:-.02em}
+  .sched .body{flex:1;min-width:0}
+  .sched .body b{font-size:13.8px;font-weight:560}
+  .sched .body p{margin:3px 0 0;font-size:12.2px;color:var(--muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .sched .meta{display:flex;align-items:center;gap:6px;font-size:11.4px;color:#a0a096;margin-top:5px}
+  .pill{font-size:10.5px;padding:2px 6px;border-radius:5px;background:#f1f1ea;color:#7c7c72}
+  .switch{width:36px;height:21px;border-radius:999px;background:#dcdcd2;position:relative;transition:background .18s;flex:none}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.18);transition:transform .18s var(--ease)}
+  .switch.on{background:#2f7d55}
+  .switch.on::after{transform:translateX(15px)}
+
+  .lib-tools{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+  .lib-search{position:relative;flex:1;max-width:360px}
+  .lib-search .icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);width:15px;height:15px;color:#a5a59b}
+  .lib-search input{width:100%;height:36px;border-radius:10px;border:1px solid #e8e8e0;background:#fff;padding:0 12px 0 34px;font-size:13px;outline:0}
+  .lib-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+  .file{
+    background:#fff;border:1px solid #ececE5;border-radius:13px;padding:13px;box-shadow:var(--shadow-xs);
+    transition:all .16s var(--ease);text-align:left
+  }
+  .file:hover{box-shadow:var(--shadow-sm);transform:translateY(-1px)}
+  .file .top{display:flex;align-items:center;gap:9px;margin-bottom:12px}
+  .file .ft{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;flex:none}
+  .file .ft .icon{width:16px;height:16px}
+  .ft.md{background:#eef3ef;color:#3f7a5a}.ft.img{background:#f2eef6;color:#7a5a9a}
+  .ft.data{background:#fbf2e6;color:#a57433}.ft.doc{background:#fdeeee;color:#b25856}
+  .file b{display:block;font-size:13px;font-weight:550;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .file span{display:block;font-size:11.4px;color:#a2a298;margin-top:4px}
+  .empty{
+    border:1px dashed #dddDD3;border-radius:16px;padding:44px 24px;text-align:center;background:rgba(255,255,255,.4)
+  }
+  .empty .ic{width:46px;height:46px;border-radius:14px;background:#fff;border:1px solid #e9e9e1;display:grid;place-items:center;margin:0 auto 13px;color:#8b8b81}
+  .empty b{display:block;font-size:14px;margin-bottom:5px}
+  .empty p{margin:0 auto 16px;font-size:12.5px;color:var(--muted);max-width:340px;line-height:1.6}
+
+  /* notification / more popovers */
+  .pop-notify{position:fixed;width:296px}
+  .pop-more{position:fixed;width:186px}
+  .notify-item{display:flex;gap:9px;padding:9px;border-radius:9px;text-align:left;width:100%}
+  .notify-item:hover{background:#f5f5ef}
+  .notify-item .ni{width:26px;height:26px;border-radius:8px;background:#f1f1ea;display:grid;place-items:center;flex:none;color:#6d6d64}
+  .notify-item .nt{flex:1;font-size:12.2px;color:#3d3d37;line-height:1.5}
+  .notify-item .nt span{display:block;font-size:10.8px;color:#a8a89e;margin-top:2px}
+
+  .toast{
+    position:fixed;left:50%;bottom:26px;transform:translate(-50%,14px);background:#1e1e1a;color:#f7f7f2;
+    padding:9px 15px;border-radius:11px;font-size:12.5px;box-shadow:var(--shadow-lg);opacity:0;
+    pointer-events:none;transition:all .24s var(--ease);z-index:200;max-width:80vw
+  }
+  .toast.is-on{opacity:1;transform:translate(-50%,0)}
+
+  .mobile-toggle{display:none;position:fixed;left:14px;top:14px;z-index:80;width:34px;height:34px;border-radius:9px;background:#fff;border:1px solid #e6e6de;box-shadow:var(--shadow-sm);place-items:center;color:#4a4a44}
+  .scrim{display:none;position:fixed;inset:0;background:rgba(28,28,22,.32);z-index:19}
+
+  @media (max-width:1100px){
+    .artifact{position:fixed;right:0;top:0;bottom:0;width:min(94vw,780px);max-width:none;min-width:0;z-index:70;box-shadow:var(--shadow-lg);border-left:1px solid #e2e2d9}
+    .art-resize{display:none}
+    .thumbs{width:104px}
+    .app.art-max .artifact{width:min(94vw,780px)}
+    .slide .s-title{font-size:26px!important}
+    .slide-cover .s-title{font-size:32px!important}
+    .slide-sec .s-title{font-size:32px!important}
+  }
+  @media (max-width:900px){
+    .sidebar{position:fixed;left:0;top:0;bottom:0;transform:translateX(-102%);box-shadow:var(--shadow-lg);width:288px}
+    .app.nav-open .sidebar{transform:none}
+    .app.nav-open .scrim{display:block}
+    .app.nav-open .mobile-toggle{display:none}
+    .mobile-toggle{display:grid}
+    .home-inner{padding-top:64px}
+    .page{padding:64px 20px 36px}
+    .chat-head{padding-left:58px}
+    .thread{padding:0 18px}
+    .chat-composer{padding:8px 14px 14px}
+    .hero h2{font-size:31px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation-duration:.001ms !important;transition-duration:.001ms !important}
+  }
+
+/* ══════════════════════════════════════════════════════════
+   视觉规范适配层
+   参考：内部设计规范（设计令牌 / 布局 / 输入框 / 文件卡片）
+   主色 #3B5FBA，Element 主色 #4B639F，AI 链接 #3F76FC
+   表面 #F5F7FB，边框 #E6E6E9 / #D9DADB，正文 #121826 / #515767 / #666
+   ══════════════════════════════════════════════════════════ */
+:root{
+  --sidebar-w:239px;
+  --bg:#ffffff;
+  --panel:#F5F7FB;
+  --card:#ffffff;
+  --ink:#121826;
+  --ink-2:#515767;
+  --muted:#666666;
+  --muted-2:#8A8F99;
+  --line:#E6E6E9;
+  --line-2:#D9DADB;
+  --hover:#F5F7FB;
+  --active:#EEF3FF;
+  --green:#2E7D5B;
+  --red:#FA5151;
+  --shadow-xs:0 1px 2px rgba(18,24,38,.04);
+  --shadow-sm:0 2px 4px rgba(0,0,0,.05);
+  --shadow-md:0 2px 8px rgba(18,24,38,.08);
+  --shadow-lg:0 8px 24px rgba(18,24,38,.12);
+}
+body{
+  background:#fff;color:#121826;font-size:14px;
+  font-family:"PingFang SC","PingFangSC-Regular",-apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif;
+}
+.icon{stroke-width:2}
+
+/* ── sidebar ── */
+.sidebar{
+  width:var(--sidebar-w);background:#F7F9FD;
+  background-image:linear-gradient(180deg,#F5F7FB 0%,#FAFBFD 46%,#FFFFFF 100%);
+  border-right:1px solid var(--line);padding:12px 10px 10px;transition:width .25s var(--ease);
+}
+.side-head{display:flex;align-items:center;gap:8px;padding:4px 8px 8px}
+.logo-box{display:flex;align-items:center;gap:8px;min-width:0;cursor:pointer;padding:0;border:0;background:none;text-align:left}
+.logo-tile{width:28px;height:28px;border-radius:8px;background:none;display:block;overflow:hidden;flex:none}
+.logo-tile img{width:100%;height:100%;display:block;object-fit:cover}
+.logo-name{font-size:18px;font-weight:600;color:#121826;letter-spacing:0}
+.fold-btn{margin-left:auto;color:#515767}
+.side-meta{display:flex;align-items:center;gap:8px;padding:0 8px 10px}
+.side-meta .version{font-size:12px;color:#8A8F99}
+
+.new-task{
+  margin:4px 2px 10px;height:40px;width:calc(100% - 4px);border-radius:8px;
+  background:#3B5FBA;color:#fff;font-size:14px;font-weight:500;padding:0 12px;gap:8px;
+}
+.new-task:hover{background:#3454A6}
+.new-task .round{width:18px;height:18px;border:0;color:#fff}
+.new-task .round .icon{width:15px;height:15px}
+
+.nav{padding:0 2px;gap:2px}
+.nav-item{height:44px;border-radius:8px;padding:0 10px;font-size:14px;font-weight:500;color:#121826;gap:10px}
+.nav-item .icon{width:19px;height:19px;color:#515767}
+.nav-item:hover{background:#EEF2F8;color:#121826}
+.nav-item.is-active{background:#fff;border:1px solid var(--line);color:#3B5FBA;font-weight:600;box-shadow:0 1px 2px rgba(18,24,38,.04)}
+.nav-item.is-active .icon{color:#3B5FBA}
+.beta{background:#EEF3FF;color:#3B5FBA;border-radius:4px;font-size:10px;letter-spacing:.02em;padding:2px 4px}
+.dot-red{background:#FA5151}
+
+.side-section{padding:0 10px;margin:16px 0 6px;font-size:12px;font-weight:600;color:#666}
+.side-section b{font-weight:600}
+.side-section .more-link{font-size:12px;color:#8A8F99}
+.side-section .more-link:hover{color:#3B5FBA}
+.task-row{height:32px;padding:0 10px 0 30px;border-radius:6px;font-size:13px;color:#515767}
+.task-row:hover{background:#EEF2F8;color:#121826}
+.task-row time{font-size:11px;color:#8A8F99}
+.space-row{height:38px;padding:0 10px;border-radius:8px;font-size:14px;font-weight:500;color:#121826;gap:8px}
+.space-row .icon{width:17px;height:17px;color:#515767}
+.space-row:hover{background:#EEF2F8}
+.space-row.is-current{background:#fff;border:1px solid var(--line);color:#3B5FBA;font-weight:600;box-shadow:0 1px 2px rgba(18,24,38,.04)}
+.space-row.is-current .icon{color:#3B5FBA}
+.space-row .count{font-size:11px;color:#8A8F99;font-weight:400}
+.space-tasks .task-row{padding-left:32px;font-size:12.5px}
+.side-foot{border-top:1px solid var(--line);padding-top:10px}
+.avatar{width:30px;height:30px;background:#EEF3FF;color:#3B5FBA;font-size:12px;font-weight:600}
+.side-foot .who{font-size:14px;font-weight:500;color:#121826}
+.bell .badge{background:#FA5151}
+.icon-btn{color:#515767;border-radius:6px}
+.icon-btn:hover{background:#EEF2F8;color:#121826}
+
+/* folded rail: 70px */
+.app.folded .sidebar{width:70px;padding:10px 6px}
+.app.folded .side-head{flex-direction:column;gap:10px;padding:2px 0 8px}
+.app.folded .logo-name,.app.folded .side-meta{display:none}
+.app.folded .fold-btn{margin-left:0}
+.app.folded .new-task{width:40px;height:40px;margin:2px auto 10px;padding:0;justify-content:center;font-size:0}
+.app.folded .new-task .round{width:18px;height:18px}
+.app.folded .nav-item{width:40px;height:40px;margin:0 auto;padding:0;gap:0;font-size:0;justify-content:center}
+.app.folded .nav-item .icon{width:19px;height:19px}
+.app.folded .nav-item .beta,.app.folded .nav-item .dot-red{display:none}
+.app.folded .side-scroll,.app.folded .side-section{display:none}
+.app.folded .side-foot{flex-direction:column;gap:8px;padding-top:8px}
+.app.folded .side-foot .who,.app.folded .side-foot > .icon-btn{display:none}
+
+/* ── home ── */
+.main{background:#fff}
+.home{background:#fff}
+.home-inner{max-width:800px;padding:0 24px 24px;padding-top:clamp(36px,8vh,88px)}
+.hero-mark{width:48px;height:48px;border-radius:12px;background:none;display:block;overflow:hidden;margin-bottom:16px}
+.hero-mark img{width:100%;height:100%;display:block;object-fit:cover}
+.hero h2{font-size:30px;font-weight:600;letter-spacing:-.01em;color:#121826;line-height:1.3}
+.hero h2 .comma{color:#121826;font-weight:600}
+
+.modes{margin-top:20px;padding:3px;gap:2px;background:#F5F7FB;border-radius:8px}
+.mode{height:34px;padding:0 14px;border-radius:6px;font-size:13px;font-weight:500;color:#515767;gap:6px;border:1px solid transparent}
+.mode:hover{background:#EEF2F8;color:#121826}
+.mode.is-active{background:#fff;border-color:var(--line);color:#3B5FBA;font-weight:600;box-shadow:0 1px 2px rgba(18,24,38,.04)}
+.mode .icon{width:15px;height:15px}
+
+.quick{margin-top:26px;gap:8px}
+.quick button{height:34px;padding:0 12px;border-radius:6px;background:#F5F7FB;border:1px solid transparent;color:#515767;font-size:13px;font-weight:500;box-shadow:none}
+.quick button:hover{background:#EEF2F8;border-color:var(--line);transform:none;box-shadow:none}
+
+.composer-wrap{margin-top:20px;max-width:800px}
+.composer{border:1px solid var(--line-2);border-radius:12px;box-shadow:0 2px 4px rgba(0,0,0,.05);padding:14px 14px 12px}
+.composer:focus-within{border-color:#448CFC;box-shadow:0 0 0 3px rgba(68,140,252,.08)}
+.composer textarea{font-size:16px;line-height:24px;min-height:56px;max-height:200px;padding:0 2px;color:#121826}
+.composer textarea::placeholder{color:#A3A3A3}
+.composer-bar{padding:0;margin-top:10px;gap:4px}
+.model-btn{height:30px;padding:0 8px;border-radius:6px;font-size:13px;color:#515767;gap:6px}
+.model-btn:hover{background:#F5F7FB}
+.model-orb{width:16px;height:16px;border-radius:50%;background:#3B5FBA;box-shadow:none}
+.round-btn{width:32px;height:32px;color:#515767;border-radius:6px}
+.round-btn:hover{background:#F5F7FB;color:#121826}
+.send{width:30px;height:30px;background:transparent;color:#C7CAD1;border-radius:6px}
+.send.is-ready,.send.is-stop{background:transparent;color:#3B5FBA;box-shadow:none}
+.send.is-ready:hover{transform:none;background:#F5F7FB}
+.send .icon{width:22px;height:22px;stroke-width:2}
+
+.hint-row{padding:10px 2px 0;gap:14px;font-size:12px;color:#666}
+.hint-btn{height:22px;gap:5px}
+.hint-btn:hover{color:#3B5FBA}
+.hint-btn .icon{width:14px;height:14px}
+.hint-btn.warn{color:#666}
+.hint-btn.warn .icon{color:#FA5151;opacity:1}
+.hint-btn.safe{color:#666}
+.hint-btn.safe .icon{color:#2E7D5B;opacity:1}
+
+.examples{margin-top:28px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding-left:0;max-width:800px;width:100%;align-items:stretch}
+.example{height:48px;width:100%;border:1px solid transparent;border-radius:8px;background:#F5F7FB;padding:0 14px;font-size:14px;font-weight:500;color:#121826;box-shadow:none;gap:12px;justify-content:space-between;text-align:left;min-width:0}
+.example span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.example:hover{background:#EEF2F8;border-color:var(--line);transform:none;box-shadow:none}
+.example .icon{width:15px;height:15px;color:#8A8F99}
+.footnote{font-size:12px;color:#999;padding:24px 0 16px}
+
+/* ── chat ── */
+.chat-head{height:56px;padding:0 16px;background:#fff;border-bottom:1px solid var(--line);backdrop-filter:none}
+.chat-title b{font-size:14px;font-weight:600;color:#121826}
+.chat-title span{font-size:12px;color:#8A8F99;margin-top:2px}
+.chat-title .icon{width:12px;height:12px}
+.messages{padding:24px 0 8px}
+.thread{max-width:800px;padding:0 24px;gap:24px}
+.msg-user{background:#F5F7FB;color:#121826;border-radius:8px;padding:10px 12px;font-size:14px;line-height:1.65;max-width:76%}
+.ai-name{font-size:12px;color:#8A8F99;gap:6px;margin-bottom:8px}
+.ai-name .tag{background:#EEF3FF;color:#3B5FBA;border-radius:4px;font-size:10px;padding:1px 5px}
+.pi-avatar{width:28px;height:28px;border-radius:8px;background:#3B5FBA;margin-top:0;overflow:hidden}
+.pi-avatar img{width:100%;height:100%;display:block;object-fit:cover}
+.ai-text{font-size:14px;line-height:1.72;color:#121826}
+.ai-text p{margin:0 0 10px}
+.ai-text ul{margin:6px 0 12px;padding-left:18px}
+.ai-text li{margin:4px 0}
+.ai-text code{background:#F5F7FB;border:1px solid var(--line);border-radius:4px;padding:1px 4px;font-size:12px}
+.steps{border:1px solid var(--line);border-radius:8px;background:#fff;box-shadow:none;margin-bottom:12px}
+.steps-head{padding:10px 12px;font-size:12px;color:#515767;gap:8px}
+.steps-head b{font-weight:600;color:#121826}
+.steps-head .icon{color:#8A8F99}
+.steps-head .ok{color:#2E7D5B}
+.steps-body{padding:0 12px 8px}
+.step{font-size:12px;color:#515767;padding:3px 0}
+.step .icon{color:#8A8F99}
+.step .dur{color:#A3A3A3}
+.filecard{border:1px solid var(--line);border-radius:8px;background:#fff;padding:12px;box-shadow:none;max-width:440px;gap:10px}
+.filecard:hover{border-color:var(--line-2);box-shadow:0 2px 4px rgba(0,0,0,.05)}
+.filecard .fi{width:36px;height:36px;border-radius:8px;background:#EEF3FF;color:#3B5FBA}
+.filecard .fi .icon{width:18px;height:18px}
+.filecard .ft b{font-size:15px;font-weight:600;color:#121826}
+.filecard .ft span{font-size:12px;color:#8A8F99}
+.filecard .open{background:none;padding:0;color:#3F76FC;font-size:13px;font-weight:500}
+.filecard .open:hover{text-decoration:underline;text-underline-offset:3px}
+.artifacts-link{margin:-2px 0 12px}
+.artifacts-link button{font-size:13px;color:#3F76FC;gap:4px}
+.artifacts-link button:hover{text-decoration:underline;text-underline-offset:3px;color:#3F76FC}
+.ai-text table{font-size:13px;margin:2px 0 14px}
+.ai-text th,.ai-text td{border-color:var(--line);padding:8px 10px}
+.ai-text th{background:#F5F7FB;color:#121826;font-weight:600}
+.ai-text td{color:#515767}
+.ai-text strong{font-weight:600}
+.msg-tools{margin-top:14px;gap:2px}
+.msg-tools .tool{width:28px;height:28px;border-radius:6px;color:#8A8F99}
+.msg-tools .tool:hover{background:#F5F7FB;color:#3B5FBA}
+.msg-tools .tool.is-on{background:#EEF3FF;color:#3B5FBA}
+.msg-tools .cost{font-size:12px;color:#999;gap:6px;margin-left:8px}
+.msg-tools .cost b{font-weight:500;color:#666}
+.chat-composer{padding:8px 24px 14px}
+.chat-composer .composer-wrap{max-width:800px}
+.chat-composer .composer{border-radius:12px;padding:14px 14px 12px}
+.chat-composer textarea{min-height:44px;font-size:16px;line-height:24px}
+.chat-plus{width:28px;height:28px;background:#F5F7FB;color:#515767;border-radius:6px}
+.chat-plus:hover{background:#EEF2F8;color:#3B5FBA}
+.chat-bar .hint-btn{font-size:12px;height:26px;padding:0 6px}
+.chat-bar .hint-btn:hover{background:#F5F7FB;color:#3B5FBA}
+
+/* ── popovers ── */
+.pop{border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(18,24,38,.12);padding:6px;background:#fff}
+.ws-search{margin:2px 2px 6px}
+.ws-search input{height:34px;border-radius:6px;background:#F5F7FB;font-size:13px;padding-left:32px}
+.ws-search .icon{width:14px;height:14px}
+.pop-item{height:36px;border-radius:6px;font-size:13px;color:#121826;gap:9px;padding:0 8px}
+.pop-item:hover{background:#F5F7FB}
+.pop-item .icon{width:16px;height:16px;color:#515767}
+.pop-item.is-current{color:#3B5FBA}
+.pop-item .check{color:#3B5FBA}
+.pop-action{height:36px;border-radius:6px;font-size:13px;color:#121826;gap:9px;padding:0 8px}
+.pop-action:hover{background:#F5F7FB}
+.pop-action .icon{width:16px;height:16px;color:#515767}
+.pop-divider{background:var(--line);margin:5px 4px}
+.perm-title{font-size:12px;color:#8A8F99;padding:6px 8px 5px}
+.perm-item{padding:8px;border-radius:6px;gap:9px}
+.perm-item:hover{background:#F5F7FB}
+.perm-item .p-icon{width:26px;height:26px;border-radius:6px;background:#F5F7FB;color:#515767}
+.perm-item .p-icon.danger{background:#FFF1F1;color:#FA5151}
+.perm-item .p-icon.safe{background:#EEF3FF;color:#3B5FBA}
+.perm-item .p-name{font-size:13px;font-weight:600;color:#121826}
+.perm-item .p-desc{font-size:12px;color:#666;line-height:1.5}
+.perm-item .p-check{color:#3B5FBA}
+.perm-note{background:#FFF5F5;color:#A33A3A;border-radius:6px;font-size:11.5px;line-height:1.55}
+.notify-item:hover{background:#F5F7FB}
+.notify-item .ni{background:#F5F7FB;color:#515767;border-radius:6px}
+.notify-item .nt{font-size:12.5px;color:#121826}
+.notify-item .nt span{font-size:11px;color:#8A8F99}
+
+/* ── pages ── */
+.page{padding:32px 40px 40px;background:#fff}
+.page-head h2{font-size:24px;font-weight:600;color:#121826}
+.page-head p{font-size:14px;color:#666}
+.btn{height:40px;border-radius:8px;border:1px solid var(--line);box-shadow:none;font-size:14px;font-weight:500;color:#121826;background:#fff}
+.btn:hover{border-color:var(--line-2);box-shadow:none;background:#F5F7FB}
+.btn.dark{background:#3B5FBA;border-color:#3B5FBA;color:#fff}
+.btn.dark:hover{background:#3454A6;border-color:#3454A6;box-shadow:none}
+.sched{border:1px solid var(--line);border-radius:8px;box-shadow:none;padding:14px 16px}
+.sched:hover{box-shadow:0 2px 4px rgba(0,0,0,.05)}
+.sched .time b{font-size:18px;font-weight:600;color:#121826}
+.sched .time{font-size:12px;color:#8A8F99}
+.sched .body b{font-size:14px;font-weight:600;color:#121826}
+.sched .body p{font-size:12px;color:#666}
+.pill{background:#F5F7FB;color:#666;border-radius:4px;font-size:11px}
+.switch{background:#D9DADB}
+.switch.on{background:#3B5FBA}
+.lib-search input{border:1px solid var(--line);border-radius:6px;height:36px;font-size:13px}
+.lib-search input:focus{border-color:#448CFC;box-shadow:0 0 0 3px rgba(68,140,252,.08)}
+.file{border:1px solid var(--line);border-radius:8px;box-shadow:none;padding:14px}
+.file:hover{box-shadow:0 2px 4px rgba(0,0,0,.05);transform:none;border-color:var(--line-2)}
+.file b{font-size:13px;font-weight:500;color:#121826}
+.file span{font-size:12px;color:#8A8F99}
+.ft.md{background:#EEF3FF;color:#3B5FBA}.ft.img{background:#F3F0FA;color:#6B5BA8}
+.ft.data{background:#FFF7ED;color:#B26A2B}.ft.doc{background:#FFF1F1;color:#C25353}
+.empty{border:1px dashed #D9DADB;border-radius:8px;background:#FAFBFD}
+.empty b{font-size:14px;color:#121826}
+.empty p{font-size:12px;color:#666}
+.empty .ic{border:1px solid var(--line);border-radius:8px;color:#515767;background:#fff}
+
+/* ── artifact pane ── */
+.artifact{border-left:1px solid var(--line);background:#fff}
+.art-tabs{height:40px;background:#F5F7FB;border-bottom:1px solid var(--line);padding:0 8px;align-items:center;gap:4px}
+.art-tab{height:32px;border-radius:6px;font-size:13px;color:#515767;margin-bottom:0;padding:0 8px}
+.art-tab.is-active{background:#fff;border:1px solid var(--line);color:#121826}
+.art-tab .fic{color:#3F76FC}
+.art-tab .x{width:18px;height:18px;border-radius:4px;color:#8A8F99}
+.art-tab .x:hover{background:#EEF2F8;color:#121826}
+.art-add{height:28px;border-radius:6px;color:#515767;margin-bottom:0}
+.art-add:hover{background:#EEF2F8}
+.art-head{height:40px;border-bottom:1px solid var(--line);padding:0 12px}
+.art-head .name{font-size:14px;font-weight:600;color:#121826}
+.art-menu{height:36px;border-bottom:1px solid var(--line);padding:0 8px;gap:2px}
+.art-menu button{height:36px;padding:0 10px;border-radius:0;font-size:13px;color:#515767;position:relative}
+.art-menu button:hover{background:#F5F7FB;color:#121826}
+.art-menu button.is-active{background:transparent;color:#3B5FBA;font-weight:600}
+.art-menu button.is-active::after{content:"";position:absolute;left:10px;right:10px;bottom:0;height:2px;border-radius:2px;background:#3B5FBA}
+.art-tools{background:#fff;border-bottom:1px solid var(--line);padding:4px 8px;gap:2px}
+.art-tool{min-width:40px;height:44px;border-radius:6px;font-size:11px;color:#515767;gap:2px}
+.art-tool:hover{background:#F5F7FB}
+.art-tool .icon{width:16px;height:16px;color:#515767}
+.art-tool .aa{font-size:13px;font-weight:600;color:#515767}
+.art-tools .sep{background:var(--line);height:24px}
+.thumbs{width:124px;background:#F5F7FB;border-right:1px solid var(--line);padding:12px 10px}
+.thumb .mini{border:1px solid var(--line);border-radius:4px;box-shadow:none}
+.thumb:hover .mini{border-color:var(--line-2)}
+.thumb.is-active .mini{border-color:#3B5FBA;box-shadow:0 0 0 2px rgba(59,95,186,.14)}
+.thumb .n{font-size:11px;color:#8A8F99}
+.thumb.is-active .n{color:#3B5FBA;font-weight:600}
+.canvas{background:#F5F7FB;padding:20px 20px 16px;gap:10px}
+.slide{box-shadow:0 2px 8px rgba(18,24,38,.08)}
+.slide-cover{background:#3B5FBA;color:#fff}
+.slide-cover .brandline{color:rgba(255,255,255,.6)}
+.slide-cover .s-kicker{color:#D7E2FA}
+.slide-cover .s-sub{color:rgba(255,255,255,.78)}
+.slide-cover .rule{background:#A9C0EE}
+.slide-sec{background:#fff}
+.slide-sec::before{background:radial-gradient(closest-side,rgba(59,95,186,.06),transparent 72%)}
+.slide-sec::after{border-color:rgba(59,95,186,.12)}
+.slide-sec .mark{background:#EEF3FF;color:#3B5FBA}
+.slide .s-kicker{color:#8A8F99;font-size:11px;letter-spacing:.12em}
+.slide .s-title{color:#121826}
+.slide-sec .s-title{color:#121826}
+.slide .s-sub{color:#666}
+.slide-bul .accent{background:#3B5FBA}
+.slide-bul li{color:#515767;font-size:13px}
+.slide-bul li::before{background:#3B5FBA;border-radius:2px}
+.slide-tbl table{margin-top:14px}
+.slide-tbl th{background:#F5F7FB;border-color:var(--line);color:#121826;font-weight:600}
+.slide-tbl td{border-color:var(--line);color:#515767}
+.slide .s-foot{color:#A3A3A3;font-size:9px}
+.slide-cover .s-foot{color:rgba(255,255,255,.55)}
+.notes input{font-size:12px;color:#515767}
+.notes input::placeholder{color:#A3A3A3}
+.notes .icon{color:#8A8F99}
+.art-status{background:#fff;border-top:1px solid var(--line);font-size:12px;color:#8A8F99;height:34px}
+.art-status .dirty-label{color:#B26A2B;font-size:11px}
+.art-status .edit-hint{color:#A3A3A3;font-size:11px}
+.art-status .vbtn,.art-status .zoom button{color:#8A8F99}
+.art-status .vbtn:hover,.art-status .zoom button:hover{background:#F5F7FB;color:#121826}
+
+.toast{background:#121826;border-radius:8px;font-size:13px}
+.modal{border-radius:8px;box-shadow:0 8px 24px rgba(18,24,38,.14)}
+.modal h3{font-size:16px;font-weight:600}
+.modal p{font-size:13px;color:#666}
+.modal input{border:1px solid var(--line-2);border-radius:6px;font-size:14px;height:38px}
+.modal input:focus{border-color:#448CFC;box-shadow:0 0 0 3px rgba(68,140,252,.08)}
+.scrim{background:rgba(18,24,38,.28)}
+
+@media (max-width:1100px){
+  .artifact{box-shadow:0 8px 24px rgba(18,24,38,.12)}
+}
+@media (max-width:820px){
+  .examples{grid-template-columns:1fr}
+}
+
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-panel" viewBox="0 0 24 24"><svg class="lucide lucide-panel-left" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M9 3v18" /></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><svg class="lucide lucide-search" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m21 21-4.34-4.34" /> <circle cx="11" cy="11" r="8" /></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><svg class="lucide lucide-filter" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z" /></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><svg class="lucide lucide-plus" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M5 12h14" /> <path d="M12 5v14" /></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><svg class="lucide lucide-sparkles" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" /> <path d="M20 2v4" /> <path d="M22 4h-4" /> <circle cx="4" cy="20" r="2" /></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><svg class="lucide lucide-puzzle" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z" /></symbol>
+    <symbol id="i-blocks" viewBox="0 0 24 24"><svg class="lucide lucide-blocks" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 22V7a1 1 0 0 0-1-1H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 0 0-1-1H2" /> <rect x="14" y="2" width="8" height="8" rx="1" /></symbol>
+    <symbol id="i-house" viewBox="0 0 24 24"><svg class="lucide lucide-house" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /> <path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></symbol>
+    <symbol id="i-apps" viewBox="0 0 24 24"><svg class="lucide lucide-layout-grid" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="7" height="7" x="3" y="3" rx="1" /> <rect width="7" height="7" x="14" y="3" rx="1" /> <rect width="7" height="7" x="14" y="14" rx="1" /> <rect width="7" height="7" x="3" y="14" rx="1" /></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><svg class="lucide lucide-clock" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="10" /> <path d="M12 6v6l4 2" /></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><svg class="lucide lucide-book-open" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 5v16" /> <path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z" /></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><svg class="lucide lucide-ellipsis" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="1" /> <circle cx="19" cy="12" r="1" /> <circle cx="5" cy="12" r="1" /></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><svg class="lucide lucide-folder" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></symbol>
+    <symbol id="i-folder-open" viewBox="0 0 24 24"><svg class="lucide lucide-folder-open" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><svg class="lucide lucide-bell" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10.268 21a2 2 0 0 0 3.464 0" /> <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" /></symbol>
+    <symbol id="i-chev-down" viewBox="0 0 24 24"><svg class="lucide lucide-chevron-down" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m6 9 6 6 6-6" /></symbol>
+    <symbol id="i-chev-up" viewBox="0 0 24 24"><svg class="lucide lucide-chevron-up" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m18 15-6-6-6 6" /></symbol>
+    <symbol id="i-chev-left" viewBox="0 0 24 24"><svg class="lucide lucide-chevron-left" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m15 18-6-6 6-6" /></symbol>
+    <symbol id="i-chev-right" viewBox="0 0 24 24"><svg class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /></symbol>
+    <symbol id="i-arrow-ur" viewBox="0 0 24 24"><svg class="lucide lucide-arrow-up-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M7 7h10v10" /> <path d="M7 17 17 7" /></symbol>
+    <symbol id="i-arrow-up" viewBox="0 0 24 24"><svg class="lucide lucide-arrow-up" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m5 12 7-7 7 7" /> <path d="M12 19V5" /></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><svg class="lucide lucide-square" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><svg class="lucide lucide-mic" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 19v3" /> <path d="M19 10v2a7 7 0 0 1-14 0v-2" /> <rect x="9" y="2" width="6" height="13" rx="3" /></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><svg class="lucide lucide-check" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 6 9 17l-5-5" /></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><svg class="lucide lucide-circle-alert" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="10" /> <line x1="12" x2="12" y1="8" y2="12" /> <line x1="12" x2="12.01" y1="16" y2="16" /></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><svg class="lucide lucide-shield" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /></symbol>
+    <symbol id="i-write" viewBox="0 0 24 24"><svg class="lucide lucide-pen-line" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M13 21h8" /> <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><svg class="lucide lucide-eye" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /> <circle cx="12" cy="12" r="3" /></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><svg class="lucide lucide-file-text" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M10 9H8" /> <path d="M16 13H8" /> <path d="M16 17H8" /></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><svg class="lucide lucide-file-text" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M10 9H8" /> <path d="M16 13H8" /> <path d="M16 17H8" /></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><svg class="lucide lucide-image" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" ry="2" /> <circle cx="9" cy="9" r="2" /> <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" /></symbol>
+    <symbol id="i-table" viewBox="0 0 24 24"><svg class="lucide lucide-table" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 3v18" /> <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><svg class="lucide lucide-x" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><svg class="lucide lucide-settings" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /> <circle cx="12" cy="12" r="3" /></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><svg class="lucide lucide-chart-column" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M3 3v16a2 2 0 0 0 2 2h16" /> <path d="M18 17V9" /> <path d="M13 17V5" /> <path d="M8 17v-3" /></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><svg class="lucide lucide-circle-help" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="10" /> <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /> <path d="M12 17h.01" /></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><svg class="lucide lucide-users" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /> <path d="M16 3.128a4 4 0 0 1 0 7.744" /> <path d="M22 21v-2a4 4 0 0 0-3-3.87" /> <circle cx="9" cy="7" r="4" /></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><svg class="lucide lucide-play" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z" /></symbol>
+    <symbol id="i-paperclip" viewBox="0 0 24 24"><svg class="lucide lucide-paperclip" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551" /></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><svg class="lucide lucide-code" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m16 18 6-6-6-6" /> <path d="m8 6-6 6 6 6" /></symbol>
+    <symbol id="i-palette" viewBox="0 0 24 24"><svg class="lucide lucide-palette" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z" /> <circle cx="13.5" cy="6.5" r=".5" fill="currentColor" /> <circle cx="17.5" cy="10.5" r=".5" fill="currentColor" /> <circle cx="6.5" cy="12.5" r=".5" fill="currentColor" /> <circle cx="8.5" cy="7.5" r=".5" fill="currentColor" /></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><svg class="lucide lucide-download" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 15V3" /> <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /> <path d="m7 10 5 5 5-5" /></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><svg class="lucide lucide-copy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="14" height="14" x="8" y="8" rx="2" ry="2" /> <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><svg class="lucide lucide-undo-2" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M9 14 4 9l5-5" /> <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" /></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><svg class="lucide lucide-redo-2" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m15 14 5-5-5-5" /> <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13" /></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><svg class="lucide lucide-trash-2" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 11v6" /> <path d="M14 11v6" /> <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /> <path d="M3 6h18" /> <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><svg class="lucide lucide-maximize-2" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M15 3h6v6" /> <path d="m21 3-7 7" /> <path d="m3 21 7-7" /> <path d="M9 21H3v-6" /></symbol>
+    <symbol id="i-slides" viewBox="0 0 24 24"><svg class="lucide lucide-presentation" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M2 3h20" /> <path d="M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3" /> <path d="m7 21 5-5 5 5" /></symbol>
+    <symbol id="i-paint" viewBox="0 0 24 24"><svg class="lucide lucide-paintbrush" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m14.622 17.897-10.68-2.913" /> <path d="M18.376 2.622a1 1 0 1 1 3.002 3.002L17.36 9.643a.5.5 0 0 0 0 .707l.944.944a2.41 2.41 0 0 1 0 3.408l-.944.944a.5.5 0 0 1-.707 0L8.354 7.348a.5.5 0 0 1 0-.707l.944-.944a2.41 2.41 0 0 1 3.408 0l.944.944a.5.5 0 0 0 .707 0z" /> <path d="M9 8c-1.804 2.71-3.97 3.46-6.583 3.948a.507.507 0 0 0-.302.819l7.32 8.883a1 1 0 0 0 1.185.204C12.735 20.405 16 16.792 16 15" /></symbol>
+    <symbol id="i-printer" viewBox="0 0 24 24"><svg class="lucide lucide-printer" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /> <path d="M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6" /> <rect x="6" y="14" width="12" height="8" rx="1" /></symbol>
+    <symbol id="i-zoom-in" viewBox="0 0 24 24"><svg class="lucide lucide-zoom-in" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="11" cy="11" r="8" /> <line x1="21" x2="16.65" y1="21" y2="16.65" /> <line x1="11" x2="11" y1="8" y2="14" /> <line x1="8" x2="14" y1="11" y2="11" /></symbol>
+    <symbol id="i-zoom-out" viewBox="0 0 24 24"><svg class="lucide lucide-zoom-out" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="11" cy="11" r="8" /> <line x1="21" x2="16.65" y1="21" y2="16.65" /> <line x1="8" x2="14" y1="11" y2="11" /></symbol>
+    <symbol id="i-thumb-up" viewBox="0 0 24 24"><svg class="lucide lucide-thumbs-up" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" /> <path d="M7 10v12" /></symbol>
+    <symbol id="i-speaker" viewBox="0 0 24 24"><svg class="lucide lucide-volume-2" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z" /> <path d="M16 9a5 5 0 0 1 0 6" /> <path d="M19.364 18.364a9 9 0 0 0 0-12.728" /></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><svg class="lucide lucide-rotate-cw" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /> <path d="M21 3v5h-5" /></symbol>
+  </defs>
+</svg>
+
+<button class="mobile-toggle" id="mobileToggle" aria-label="打开导航">
+  <svg class="icon"><use href="#i-panel"/></svg>
+</button>
+<div class="app" id="app">
+  <div class="scrim" id="scrim"></div>
+  <!-- ══════════ sidebar ══════════ -->
+  <aside class="sidebar">
+    <div class="side-head">
+      <button class="logo-box" id="homeBrand" aria-label="回到首页">
+        <span class="logo-tile" aria-hidden="true"><img src="prototype-pi-icon.png" alt="" /></span>
+        <span class="logo-name">Pi</span>
+      </button>
+      <button class="icon-btn fold-btn" id="collapseBtn" aria-label="收起侧栏"><svg class="icon sm"><use href="#i-panel"/></svg></button>
+    </div>
+    <div class="side-meta">
+      <span class="version">V0.1.0</span>
+    </div>
+
+    <button class="new-task" id="newTask">
+      <span class="round"><svg class="icon"><use href="#i-plus"/></svg></span>
+      新建任务
+    </button>
+
+    <nav class="nav" aria-label="主导航">
+      <button class="nav-item" data-toast="应用（原型未接入）">
+        <svg class="icon"><use href="#i-apps"/></svg>应用
+      </button>
+      <button class="nav-item" data-toast="技能（原型未接入）">
+        <svg class="icon"><use href="#i-blocks"/></svg>技能
+      </button>
+      <button class="nav-item" data-toast="插件（原型未接入）">
+        <svg class="icon"><use href="#i-plug"/></svg>插件
+      </button>
+      <button class="nav-item" data-view="scheduled">
+        <svg class="icon"><use href="#i-clock"/></svg>定时任务<span class="dot-red"></span>
+      </button>
+      <button class="nav-item" data-view="library">
+        <svg class="icon"><use href="#i-book"/></svg>资料库
+      </button>
+      <button class="nav-item" id="moreBtn">
+        <svg class="icon"><use href="#i-more"/></svg>更多
+      </button>
+    </nav>
+
+    <div class="side-scroll">
+      <div class="side-section"><span>任务 <b>(12)</b></span>
+        <button class="more-link" id="moreTasks">查看更多 (9)</button>
+      </div>
+      <div id="taskList"></div>
+
+      <div class="side-section"><span>空间 <b>(6)</b></span></div>
+      <div id="spaceList"></div>
+    </div>
+
+    <div class="side-foot">
+      <span class="avatar" aria-hidden="true">J</span>
+      <span class="who">Johnson</span>
+      <button class="icon-btn bell" id="bellBtn" aria-label="通知">
+        <svg class="icon sm"><use href="#i-bell"/></svg><span class="badge">2</span>
+      </button>
+      <button class="icon-btn" aria-label="切换到 Pi" data-toast="切换到 Pi（原型未接入）">
+        <svg class="icon sm"><use href="#i-code"/></svg>
+      </button>
+    </div>
+
+    <!-- more menu -->
+    <div class="pop pop-more" id="morePop" role="menu">
+      <button class="pop-action" role="menuitem" data-toast="设置（原型未接入）"><svg class="icon"><use href="#i-settings"/></svg>设置</button>
+      <button class="pop-action" role="menuitem" data-toast="帮助与反馈（原型未接入）"><svg class="icon"><use href="#i-help"/></svg>帮助与反馈</button>
+    </div>
+
+    <!-- notifications -->
+    <div class="pop pop-notify" id="notifyPop">
+      <div class="perm-title">通知</div>
+      <button class="notify-item" data-toast="打开任务（原型未接入）">
+        <span class="ni"><svg class="icon sm"><use href="#i-check"/></svg></span>
+        <span class="nt">「把工作台首页改成新版风格」已完成<span>3 分钟前</span></span>
+      </button>
+      <button class="notify-item" data-toast="打开定时任务（原型未接入）">
+        <span class="ni"><svg class="icon sm"><use href="#i-clock"/></svg></span>
+        <span class="nt">定时任务「每日 09:00 日报汇总」即将运行<span>今天 08:45</span></span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ══════════ main ══════════ -->
+  <main class="main">
+
+    <!-- ── home ── -->
+    <section class="view home is-active" id="view-home">
+      <div class="home-inner">
+        <div class="hero">
+          <span class="hero-mark" aria-hidden="true"><img src="prototype-pi-icon.png" alt="" /></span>
+          <h2>Pi<span class="comma">，</span>我帮你</h2>
+
+          <div class="modes" role="tablist" aria-label="工作模式">
+            <button class="mode is-active" data-mode="office" role="tab" aria-selected="true">
+              <svg class="icon"><use href="#i-spark"/></svg>办公
+            </button>
+            <button class="mode" data-mode="dev" role="tab" aria-selected="false">
+              <svg class="icon"><use href="#i-code"/></svg>开发
+            </button>
+            <button class="mode" data-mode="design" role="tab" aria-selected="false">
+              <svg class="icon"><use href="#i-palette"/></svg>设计
+            </button>
+          </div>
+
+          <div class="quick" id="quickChips">
+            <button data-fill="帮我做一份产品方案 PPT">制作 PPT</button>
+            <button data-fill="深度研究：最近半年 AI 编程助手的进展">深度研究</button>
+            <button data-fill="策划一个周末团队活动方案">策划方案</button>
+            <button data-fill="每天早上 9 点汇总仓库动态发给我">定时任务</button>
+          </div>
+
+          <div class="composer-wrap" id="homeComposer">
+
+            <div class="composer" id="composerBox">
+              <textarea id="homeInput" rows="2" placeholder="/调用技能与指令" aria-label="输入任务"></textarea>
+              <div class="composer-bar">
+                <div class="bar-spacer"></div>
+                <button class="round-btn" data-toast="语音输入（原型未接入）" aria-label="语音输入"><svg class="icon"><use href="#i-mic"/></svg></button>
+                <button class="send" id="sendBtn" aria-label="发送">
+                  <svg class="icon"><use href="#i-arrow-up"/></svg>
+                </button>
+              </div>
+
+            </div>
+
+            <div class="hint-row">
+              <button class="hint-btn" id="wsBtn" aria-haspopup="listbox" aria-expanded="false">
+                <svg class="icon" id="wsIcon"><use href="#i-house"/></svg>
+                <span>默认工作空间</span>
+                <svg class="icon"><use href="#i-chev-up"/></svg>
+              </button>
+            </div>
+
+            <!-- workspace popover -->
+            <div class="pop pop-ws" id="wsPop" role="listbox" aria-label="工作空间">
+              <div class="ws-search">
+                <svg class="icon"><use href="#i-search"/></svg>
+                <input id="wsSearch" type="text" placeholder="搜索工作空间" autocomplete="off" />
+              </div>
+              <div class="pop-list" id="wsList"></div>
+              <div class="pop-divider"></div>
+              <div id="wsActions">
+                <button class="pop-action" id="wsCreate"><svg class="icon"><use href="#i-plus"/></svg>新建工作空间</button>
+              </div>
+              <div class="ws-new" id="wsNewRow" hidden>
+                <input id="wsNewName" type="text" placeholder="工作空间名称" autocomplete="off" />
+                <button id="wsNewOk">创建</button>
+                <button class="ghost" id="wsNewCancel">取消</button>
+              </div>
+            </div>
+
+          </div>
+
+          <div class="examples" id="examples"></div>
+        </div>
+
+        <div class="footnote">以上内容均由 AI 生成，仅供参考和借鉴</div>
+      </div>
+    </section>
+
+    <!-- ── chat ── -->
+    <section class="view" id="view-chat">
+      <header class="chat-head">
+        <button class="icon-btn" id="backHome" aria-label="返回首页"><svg class="icon"><use href="#i-chev-left"/></svg></button>
+        <div class="chat-title">
+          <b id="chatTitle">新任务</b>
+          <span><svg class="icon" id="chatWsIcon"><use href="#i-house"/></svg><span id="chatWs">默认工作空间</span></span>
+        </div>
+        <div class="spacer"></div>
+        <button class="icon-btn" data-toast="搜索本任务（原型未接入）" aria-label="搜索"><svg class="icon"><use href="#i-search"/></svg></button>
+        <button class="icon-btn" data-toast="分享（原型未接入）" aria-label="分享"><svg class="icon"><use href="#i-arrow-ur"/></svg></button>
+        <button class="icon-btn" data-toast="任务设置（原型未接入）" aria-label="更多"><svg class="icon"><use href="#i-more"/></svg></button>
+      </header>
+
+      <div class="messages" id="messages">
+        <div class="thread" id="thread"></div>
+      </div>
+
+      <div class="chat-composer">
+        <div class="composer-wrap">
+          <div class="composer">
+            <textarea id="chatInput" rows="1" placeholder="今天帮你做些什么？@ 添加上下文，/调用技能与指令" aria-label="继续追问"></textarea>
+            <div class="composer-bar chat-bar">
+              <button class="chat-plus" id="chatPlus" aria-label="添加上下文"><svg class="icon"><use href="#i-plus"/></svg></button>
+              <div class="bar-spacer"></div>
+              <button class="round-btn" data-toast="添加附件（原型未接入）" aria-label="添加附件"><svg class="icon"><use href="#i-paperclip"/></svg></button>
+              <button class="round-btn" data-toast="语音输入（原型未接入）" aria-label="语音输入"><svg class="icon"><use href="#i-mic"/></svg></button>
+              <button class="send" id="chatSend" aria-label="发送"><svg class="icon"><use href="#i-arrow-up"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── scheduled ── -->
+    <section class="view" id="view-scheduled">
+      <div class="page">
+        <div class="page-inner">
+          <div class="page-head">
+            <div>
+              <h2>定时任务</h2>
+              <p>让 Pi 按计划自己跑：日报、巡检、竞品跟踪。</p>
+            </div>
+            <div class="actions">
+              <button class="btn dark" data-toast="新建定时任务（原型未接入）"><svg class="icon"><use href="#i-plus"/></svg>新建定时任务</button>
+            </div>
+          </div>
+
+          <div class="schedule-list" id="scheduleList"></div>
+
+          <div class="empty" style="margin-top:16px">
+            <span class="ic"><svg class="icon"><use href="#i-clock"/></svg></span>
+            <b>还没有更多计划</b>
+            <p>用一个自然语言描述你的节奏，例如「每个工作日早上 9 点把仓库动态整理成一页」，Pi 会把它变成可暂停的计划。</p>
+            <button class="btn" data-toast="用一句话创建（原型未接入）">用一句话创建</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── library ── -->
+    <section class="view" id="view-library">
+      <div class="page">
+        <div class="page-inner">
+          <div class="page-head">
+            <div>
+              <h2>资料库</h2>
+              <p>工作空间里的文件、产出与附件，都在这里。</p>
+            </div>
+            <div class="actions">
+              <button class="btn" data-toast="上传文件（原型未接入）"><svg class="icon"><use href="#i-plus"/></svg>上传</button>
+            </div>
+          </div>
+          <div class="lib-tools">
+            <div class="lib-search">
+              <svg class="icon"><use href="#i-search"/></svg>
+              <input type="text" id="libSearch" placeholder="搜索文件" />
+            </div>
+            <span class="pill">全部类型</span>
+            <span class="pill">最近更新</span>
+          </div>
+          <div class="lib-grid" id="libGrid"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ══════════ artifact preview / editor ══════════ -->
+  <aside class="artifact" id="artifactPane" aria-label="产物预览与编辑">
+    <div class="art-resize" id="artResize" role="separator" aria-label="调整宽度"></div>
+
+    <div class="art-tabs">
+      <div class="art-tab is-active" id="artTab">
+        <span class="fic"><svg class="icon"><use href="#i-doc"/></svg></span>
+        <b id="artTabName">10月工作月报.pptx</b>
+        <span class="dot" aria-label="未保存"></span>
+        <button class="x" id="artClose" aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+      <button class="art-add" id="artAdd" aria-label="添加产物"><svg class="icon"><use href="#i-plus"/></svg></button>
+      <div class="grow"></div>
+      <button class="icon-btn" id="artMax" aria-label="最大化"><svg class="icon"><use href="#i-expand"/></svg></button>
+      <button class="icon-btn" id="artHide" aria-label="收起"><svg class="icon"><use href="#i-chev-right"/></svg></button>
+    </div>
+
+    <div class="art-head">
+      <div class="name">
+        <b id="artName">10月工作月报.pptx</b>
+        <button class="icon-btn" data-toast="复制文件链接（原型未接入）" aria-label="复制链接"><svg class="icon sm"><use href="#i-copy"/></svg></button>
+      </div>
+      <div class="actions">
+        <button class="icon-btn" id="artSave" aria-label="保存" title="保存"><svg class="icon sm"><use href="#i-check"/></svg></button>
+        <button class="icon-btn" data-toast="导出为 PDF / 图片（原型未接入）" aria-label="导出"><svg class="icon sm"><use href="#i-download"/></svg></button>
+        <button class="icon-btn" id="artUndoBtn" aria-label="撤销"><svg class="icon sm"><use href="#i-undo"/></svg></button>
+        <button class="icon-btn" data-toast="更多文档操作（原型未接入）" aria-label="更多"><svg class="icon sm"><use href="#i-more"/></svg></button>
+      </div>
+    </div>
+
+    <div class="art-menu" role="tablist" aria-label="编辑器菜单">
+      <button class="is-active" role="tab">开始</button>
+      <button role="tab" data-toast="插入（原型未接入）">插入</button>
+      <button role="tab" data-toast="美化（原型未接入）">美化</button>
+      <button role="tab" data-toast="切换（原型未接入）">切换</button>
+      <button role="tab" data-toast="动画（原型未接入）">动画</button>
+      <button role="tab" data-toast="放映（原型未接入）">放映</button>
+      <button role="tab" data-toast="视图（原型未接入）">视图</button>
+    </div>
+
+    <div class="art-tools">
+      <button class="art-tool" data-art="undo"><svg class="icon"><use href="#i-undo"/></svg>撤销</button>
+      <button class="art-tool" data-art="redo"><svg class="icon"><use href="#i-redo"/></svg>重做</button>
+      <button class="art-tool" data-compact="hide" data-toast="格式刷（原型未接入）"><svg class="icon"><use href="#i-paint"/></svg>格式刷</button>
+      <span class="sep"></span>
+      <button class="art-tool" data-art="add"><svg class="icon"><use href="#i-plus"/></svg>插入页面</button>
+      <button class="art-tool" data-art="delete"><svg class="icon"><use href="#i-trash"/></svg>删除页面</button>
+      <span class="sep"></span>
+      <button class="art-tool" data-art="font-up"><span class="aa">A⁺</span>字体</button>
+      <button class="art-tool" data-art="font-down"><span class="aa">A⁻</span>字号</button>
+      <button class="art-tool" data-compact="hide" data-toast="段落设置（原型未接入）"><svg class="icon"><use href="#i-filter"/></svg>段落</button>
+      <span class="sep"></span>
+      <button class="art-tool" data-toast="插入表格（原型未接入）"><svg class="icon"><use href="#i-table"/></svg>表格</button>
+      <button class="art-tool" data-toast="插入图片（原型未接入）"><svg class="icon"><use href="#i-image"/></svg>图片</button>
+      <button class="art-tool" data-compact="hide" data-toast="插入幻灯片（原型未接入）"><svg class="icon"><use href="#i-slides"/></svg>幻灯片</button>
+      <span class="sep"></span>
+      <button class="art-tool" data-toast="页面设置（原型未接入）"><svg class="icon"><use href="#i-settings"/></svg>页面设置</button>
+      <button class="art-tool" data-compact="hide" data-toast="打印（原型未接入）"><svg class="icon"><use href="#i-printer"/></svg>打印</button>
+      <div class="grow"></div>
+      <button class="art-tool" id="artToolSave"><svg class="icon"><use href="#i-download"/></svg>保存</button>
+    </div>
+
+    <div class="art-body">
+      <div class="thumbs" id="artThumbs" aria-label="页面"></div>
+      <div class="canvas" id="artCanvas">
+        <div id="artSlideWrap" style="width:100%;display:flex;justify-content:center"></div>
+        <div class="notes">
+          <svg class="icon"><use href="#i-doc"/></svg>
+          <input id="artNotes" type="text" placeholder="点击添加备注" />
+        </div>
+      </div>
+    </div>
+
+    <div class="art-status">
+      <button class="icon-btn" style="width:24px;height:22px" data-toast="页面列表（原型未接入）" aria-label="页面列表"><svg class="icon xs"><use href="#i-slides"/></svg></button>
+      <span id="artPos">第 2 页 / 共 6 页</span>
+      <span id="artDirty" class="dirty-label" hidden>未保存</span>
+      <span class="edit-hint">点击文字直接编辑</span>
+      <span class="grow"></span>
+      <button class="vbtn" data-toast="网格视图（原型未接入）" aria-label="网格视图"><svg class="icon xs"><use href="#i-table"/></svg></button>
+      <button class="vbtn" data-toast="全屏（原型未接入）" aria-label="全屏"><svg class="icon xs"><use href="#i-expand"/></svg></button>
+      <button class="vbtn" data-art="zoom-out" aria-label="缩小"><svg class="icon xs"><use href="#i-zoom-out"/></svg></button>
+      <span id="artZoom">37%</span>
+      <button class="vbtn" data-art="zoom-in" aria-label="放大"><svg class="icon xs"><use href="#i-zoom-in"/></svg></button>
+    </div>
+  </aside>
+</div>
+
+<!-- folder modal -->
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  /* ───────── data ───────── */
+  const WORKSPACES = [
+    { id:'default', name:'默认工作空间', kind:'default', tasks:[
+      { t:'梳理今天的待办', d:'今天' },
+      { t:'整理本周会议纪要', d:'昨天' }
+    ]},
+    { id:'python-pi', name:'python-pi', tasks:[
+      { t:'把工作台首页改成新版风格', d:'今天' },
+      { t:'给 effect 队列补上重试', d:'昨天' },
+      { t:'跑多租户隔离测试', d:'8月28日' }
+    ]},
+    { id:'deepseek-harness', name:'deepseek-harness', tasks:[
+      { t:'读 superagent 原型的 effects 实现', d:'昨天' },
+      { t:'对比 agent preset 的工具面', d:'8月27日' }
+    ]},
+    { id:'dsh-superagent', name:'dsh-superagent', tasks:[
+      { t:'整理 observe 模式的接入点', d:'8月29日' }
+    ]},
+    { id:'limit-as-a-verifier', name:'limit-as-a-verifier', tasks:[
+      { t:'先运行代码看看', d:'8月27日' }
+    ]},
+    { id:'weekly', name:'周报', tasks:[
+      { t:'汇总本周 AI 板块进展', d:'8月28日' }
+    ]}
+  ];
+  const RECENT = [
+    { t:'把工作台首页改成新版风格', d:'今天' },
+    { t:'给 effect 队列补上重试', d:'昨天' },
+    { t:'读 superagent 原型的 effects 实现', d:'昨天' },
+    { t:'跑多租户隔离测试', d:'8月28日' }
+  ];
+  const MORE_TASKS = [
+    { t:'检查 12 个坏链接模型', d:'8月26日' },
+    { t:'写 MCP client 的 seam', d:'8月25日' },
+    { t:'对比 agent preset 的工具面', d:'8月24日' }
+  ];
+
+  const MODES = {
+    office: {
+      placeholder:'/调用技能与指令',
+      quick:['制作 PPT','深度研究','策划方案','定时任务'],
+      examples:[
+        '这个周末，附近有什么值得去',
+        '最近 7 天，短视频都在流行什么',
+        '每月定投 1000 元，5 年后能有多少钱',
+        '最近 AI 行业变了什么，给我一份变更日志'
+      ]
+    },
+    dev: {
+      placeholder:'描述要改的功能，或贴一段报错',
+      quick:['读仓库结构','定位一个 bug','补测试','准备发布'],
+      examples:[
+        '把 pi_server 的排队消息改成持久化',
+        '这个 traceback 是什么原因，帮我修掉',
+        '给 session 模块补 5 个边界测试',
+        '看看这个仓库最该先补的 3 个能力'
+      ]
+    },
+    design: {
+      placeholder:'描述你想做的界面或视觉方向',
+      quick:['做原型','配色方案','竞品分析','图标'],
+      examples:[
+        '把首页做成新版那样，先出 HTML',
+        '给这个产品定一套克制的浅色配色',
+        '拆解 3 个同类产品的首屏差异',
+        '这套界面还缺什么状态，列给我'
+      ]
+    }
+  };
+
+  const FILES = [
+    { name:'产品方案.pptx', type:'doc', meta:'2.4 MB · 今天 10:24' },
+    { name:'GAP-ANALYSIS-vs-DSH.md', type:'md', meta:'38 KB · 昨天' },
+    { name:'效果队列设计.drawio', type:'img', meta:'124 KB · 昨天' },
+    { name:'多租户压测.csv', type:'data', meta:'860 KB · 8月28日' },
+    { name:'superagent 学习笔记.md', type:'md', meta:'22 KB · 8月29日' },
+    { name:'首页截图.png', type:'img', meta:'480 KB · 8月27日' }
+  ];
+
+  const SCHEDULES = [
+    { time:'09:00', day:'每天', title:'每日仓库动态', desc:'汇总 python-pi 昨日的提交、issue 与待办，发到飞书。', cadence:'每个工作日 · 下次 明天 09:00', on:true },
+    { time:'18:30', day:'每天', title:'竞品与行业变更日志', desc:'搜集 AI 行业当天的重要变更，沉淀成一页 Markdown。', cadence:'每天 · 下次 今天 18:30', on:true },
+    { time:'08:00', day:'每周一', title:'周报草稿', desc:'按本周任务与产出生成周报初稿，等我确认。', cadence:'每周一 08:00', on:false }
+  ];
+
+  /* ───────── state ───────── */
+  const state = {
+    view:'home',
+    mode:'office',
+    ws:'default',
+    messages:[],
+    sending:false,
+    moreTasks:false,
+    openSpace:null,
+    wsFilter:'',
+    chatTitle:'新任务'
+  };
+
+  const $ = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+  const el = (tag, cls, html) => { const n = document.createElement(tag); if (cls) n.className = cls; if (html != null) n.innerHTML = html; return n; };
+  const esc = (s) => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function icon(id, cls='icon'){ return `<svg class="${cls}"><use href="#${id}"/></svg>`; }
+
+  /* ───────── toast ───────── */
+  let toastTimer;
+  function toast(text){
+    const t = $('#toast');
+    t.textContent = text;
+    t.classList.add('is-on');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('is-on'), 1900);
+  }
+  document.addEventListener('click', (e) => {
+    const hit = e.target.closest('[data-toast]');
+    if (hit) toast(hit.dataset.toast);
+  });
+
+  /* ───────── popovers ───────── */
+  const pops = ['wsPop','morePop','notifyPop'];
+  function closePops(except){
+    pops.forEach(id => { if (id !== except) $('#'+id)?.classList.remove('is-open'); });
+    $$('[aria-expanded="true"]').forEach(b => { if (b.id && b.id !== 'wsPop') b.setAttribute('aria-expanded','false'); });
+    if (except === 'wsPop') $('#wsBtn').setAttribute('aria-expanded','true');
+    document.querySelectorAll('.pop.is-open').forEach(p => { if (p.id !== except) p.classList.remove('is-open'); });
+  }
+  function togglePop(id, anchor){
+    const pop = $('#'+id);
+    const open = pop.classList.contains('is-open');
+    closePops();
+    pop.classList.toggle('is-open', !open);
+    if (anchor) anchor.setAttribute('aria-expanded', String(!open));
+  }
+
+  /* ───────── sidebar: tasks & spaces ───────── */
+  function renderTasks(){
+    const list = $('#taskList');
+    list.innerHTML = '';
+    const show = (items) => items.forEach(({t,d}) => {
+      const b = el('button','task-row', `<span class="t">${esc(t)}</span><time>${esc(d)}</time>`);
+      b.addEventListener('click', () => openChat(t));
+      list.appendChild(b);
+    });
+    show(RECENT.slice(0, 4));
+    if (state.moreTasks) show(MORE_TASKS);
+    $('#moreTasks').textContent = state.moreTasks ? '收起' : '查看更多 (9)';
+    $('#moreTasks').blur();
+  }
+  $('#moreTasks').addEventListener('click', () => { state.moreTasks = !state.moreTasks; renderTasks(); });
+
+  function renderSpaces(){
+    const box = $('#spaceList');
+    box.innerHTML = '';
+    WORKSPACES.forEach(ws => {
+      const wrap = el('div','space' + (state.openSpace === ws.id ? ' is-open' : ''));
+      const row = el('button','space-row' + (state.ws === ws.id ? ' is-current' : ''),
+        `${icon(ws.kind === 'default' ? 'i-house' : 'i-folder')}<span>${esc(ws.name)}</span><span class="count">${ws.tasks.length}</span>`);
+      row.addEventListener('click', () => {
+        state.openSpace = state.openSpace === ws.id ? null : ws.id;
+        selectWorkspace(ws.id);
+        renderSpaces();
+      });
+      const kids = el('div','space-tasks');
+      ws.tasks.slice(0,2).forEach(({t,d}) => {
+        const k = el('button','task-row', `<span class="t">${esc(t)}</span><time>${esc(d)}</time>`);
+        k.addEventListener('click', (e) => { e.stopPropagation(); openChat(t); });
+        kids.appendChild(k);
+      });
+      wrap.append(row, kids);
+      box.appendChild(wrap);
+    });
+  }
+
+  function selectWorkspace(id){
+    const ws = WORKSPACES.find(w => w.id === id);
+    if (!ws) return;
+    state.ws = id;
+    const label = $('#wsBtn span');
+    label.textContent = ws.name;
+    $('#chatWs').textContent = ws.name;
+    $('#wsIcon use').setAttribute('href', ws.kind === 'default' ? '#i-house' : '#i-folder');
+    $('#chatWsIcon use').setAttribute('href', ws.kind === 'default' ? '#i-house' : '#i-folder');
+    renderSpaces();
+    renderWsList();
+    renderTasks();
+  }
+
+  /* ───────── workspace popover ───────── */
+  function renderWsList(){
+    const list = $('#wsList');
+    const q = state.wsFilter.trim().toLowerCase();
+    const items = WORKSPACES.filter(w => !q || w.name.toLowerCase().includes(q));
+    list.innerHTML = '';
+    if (!items.length){
+      list.appendChild(el('div','pop-empty','没有匹配的工作空间'));
+      return;
+    }
+    items.forEach(ws => {
+      const b = el('button','pop-item' + (state.ws === ws.id ? ' is-current' : ''),
+        `${icon(ws.kind === 'default' ? 'i-house' : 'i-folder')}<span class="t">${esc(ws.name)}</span>${icon('i-check','icon check')}`);
+      b.setAttribute('role','option');
+      b.setAttribute('aria-selected', String(state.ws === ws.id));
+      b.addEventListener('click', () => {
+        selectWorkspace(ws.id);
+        closePops();
+        toast(`已切换到 ${ws.name}`);
+      });
+      list.appendChild(b);
+    });
+  }
+
+  function placePop(pop, anchor, width){
+    const r = anchor.getBoundingClientRect();
+    const w = Math.min(width, innerWidth - 24);
+    const spaceBelow = innerHeight - r.bottom - 12;
+    const openUp = r.top > innerHeight * 0.55 || spaceBelow < 280;
+    pop.style.width = w + 'px';
+    pop.style.left = Math.min(Math.max(12, r.left - 6), innerWidth - w - 12) + 'px';
+    if (openUp){
+      pop.style.top = 'auto';
+      pop.style.bottom = (innerHeight - r.top + 8) + 'px';
+      pop.style.maxHeight = Math.max(220, r.top - 24) + 'px';
+    } else {
+      pop.style.bottom = 'auto';
+      pop.style.top = (r.bottom + 8) + 'px';
+      pop.style.maxHeight = Math.max(220, spaceBelow) + 'px';
+    }
+  }
+  $('#wsBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    renderWsList();
+    $('#wsActions').hidden = false;
+    $('#wsNewRow').hidden = true;
+    closePops();
+    placePop($('#wsPop'), e.currentTarget, 304);
+    $('#wsPop').classList.add('is-open');
+    $('#wsBtn').setAttribute('aria-expanded','true');
+    setTimeout(() => $('#wsSearch').focus(), 60);
+  });
+  window.addEventListener('resize', closePops);
+  $('#wsSearch').addEventListener('input', (e) => { state.wsFilter = e.target.value; renderWsList(); });
+  $('#wsSearch').addEventListener('keydown', (e) => { if (e.key === 'Escape') closePops(); });
+
+  $('#wsCreate').addEventListener('click', () => {
+    $('#wsActions').hidden = true;
+    $('#wsNewRow').hidden = false;
+    $('#wsNewName').value = '';
+    $('#wsNewName').focus();
+  });
+  $('#wsNewCancel').addEventListener('click', () => {
+    $('#wsActions').hidden = false;
+    $('#wsNewRow').hidden = true;
+  });
+  function createWorkspace(name){
+    const clean = name.trim();
+    if (!clean) { toast('给工作空间起个名字'); return; }
+    const id = clean.toLowerCase().replace(/\s+/g,'-') + '-' + Date.now().toString(36).slice(-3);
+    WORKSPACES.push({ id, name:clean, tasks:[] });
+    $('#wsActions').hidden = false;
+    $('#wsNewRow').hidden = true;
+    state.wsFilter = '';
+    $('#wsSearch').value = '';
+    selectWorkspace(id);
+    closePops();
+    toast(`已创建 ${clean}`);
+  }
+  $('#wsNewOk').addEventListener('click', () => createWorkspace($('#wsNewName').value));
+  $('#wsNewName').addEventListener('keydown', (e) => { if (e.key === 'Enter') createWorkspace(e.target.value); });
+
+  $('#chatPlus').addEventListener('click', (e) => { e.stopPropagation(); toast('添加文件、引用或技能（原型未接入）'); });
+
+  /* ───────── modes & examples ───────── */
+  function renderQuick(){
+    const m = MODES[state.mode];
+    $('#quickChips').innerHTML = m.quick.map(q => `<button data-fill="${esc(q)}">${esc(q)}</button>`).join('');
+    $('#homeInput').placeholder = m.placeholder;
+    const ex = $('#examples');
+    ex.innerHTML = '';
+    m.examples.forEach(text => {
+      const b = el('button','example', `<span>${esc(text)}</span>${icon('i-arrow-ur')}`);
+      b.addEventListener('click', () => fillComposer(text));
+      ex.appendChild(b);
+    });
+  }
+  function setMode(mode){
+    state.mode = mode;
+    $$('.mode').forEach(b => {
+      const on = b.dataset.mode === mode;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-selected', String(on));
+    });
+    renderQuick();
+  }
+  $$('.mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+
+  /* ───────── composer ───────── */
+  function fillComposer(text){
+    const input = $('#homeInput');
+    input.value = text;
+    input.focus();
+    input.setSelectionRange(text.length, text.length);
+    autoGrow(input);
+    syncSend();
+  }
+  function autoGrow(ta){
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
+  }
+  function syncSend(){
+    const homeReady = $('#homeInput').value.trim().length > 0;
+    $('#sendBtn').classList.toggle('is-ready', homeReady);
+    const chatReady = $('#chatInput').value.trim().length > 0;
+    if (!$('#chatSend').classList.contains('is-stop')) $('#chatSend').classList.toggle('is-ready', chatReady);
+  }
+
+  ['homeInput','chatInput'].forEach(id => {
+    const ta = $('#'+id);
+    ta.addEventListener('input', () => { autoGrow(ta); syncSend(); });
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing){
+        e.preventDefault();
+        if (id === 'homeInput') sendHome();
+        else sendChat();
+      }
+    });
+  });
+  $('#homeInput').addEventListener('click', () => { /* keep popovers closed */ });
+
+  /* ───────── chat ───────── */
+  function setView(view){
+    state.view = view;
+    $$('.view').forEach(v => v.classList.toggle('is-active', v.id === 'view-' + view));
+    $$('.nav-item').forEach(b => b.classList.toggle('is-active', b.dataset.view === (view === 'chat' ? 'home' : view)));
+    if (view !== 'home'){
+      $('#app').classList.remove('nav-open');
+    }
+    if (view === 'scheduled') closeArtifact();
+  }
+  $$('.nav-item[data-view]').forEach(b => b.addEventListener('click', () => {
+    setView(b.dataset.view);
+    $('#app').classList.remove('nav-open');
+  }));
+  $('#backHome').addEventListener('click', () => { setView('home'); setTimeout(() => $('#homeInput').focus(), 80); });
+  $('#homeBrand').addEventListener('click', () => { setView('home'); $('#app').classList.remove('nav-open'); setTimeout(() => $('#homeInput').focus(), 80); });
+
+  function resetThread(){
+    state.messages = [];
+    $('#thread').innerHTML = '';
+  }
+
+  function addUser(text){
+    const node = el('div','msg-user', esc(text));
+    $('#thread').appendChild(node);
+    scrollBottom();
+  }
+
+  function aiShell(){
+    const wrap = el('div','msg-ai');
+    wrap.innerHTML = `
+      <span class="pi-avatar" aria-hidden="true"><img src="prototype-pi-icon.png" alt="" /></span>
+      <div class="ai-body">
+        <div class="ai-name">Pi <span class="tag">助手</span></div>
+        <div class="ai-content"></div>
+      </div>`;
+    $('#thread').appendChild(wrap);
+    scrollBottom();
+    return wrap.querySelector('.ai-content');
+  }
+
+  function typing(container){
+    const t = el('div','typing','<i></i><i></i><i></i>');
+    container.appendChild(t);
+    scrollBottom();
+    return t;
+  }
+
+  function stepsCard(steps, total='2.4s'){
+    const card = el('div','steps');
+    card.innerHTML = `
+      <button class="steps-head">
+        ${icon('i-chev-down','icon chev')}
+        <b>工作记录</b>
+        <span>${steps.length} 步 · ${total}</span>
+        <span class="ok">${icon('i-check')}完成</span>
+      </button>
+      <div class="steps-body">
+        ${steps.map(s => `<div class="step">${icon(s.icon)}<span class="st">${esc(s.text)}</span><span class="dur">${esc(s.dur||'')}</span></div>`).join('')}
+      </div>`;
+    card.querySelector('.steps-head').addEventListener('click', () => card.classList.toggle('is-collapsed'));
+    return card;
+  }
+
+  function replyFor(text){
+    const t = text.trim();
+    if (/PPT|方案|幻灯片|月报/.test(t)){
+      return {
+        steps:[
+          { icon:'i-file', text:'读取 10 月的任务、提交与进度', dur:'0.9s' },
+          { icon:'i-search', text:'筛出未到 100% 的项并核对表述', dur:'0.8s' },
+          { icon:'i-spark', text:'生成 6 页月报并套用模板', dur:'1.1s' }
+        ],
+        html:`<table>
+            <colgroup><col><col><col></colgroup>
+            <thead><tr><th>项目</th><th>进度</th><th>下一步</th></tr></thead>
+            <tbody>
+              <tr><td>工作台首页改版</td><td>完成 60%</td><td>接通真实 RPC</td></tr>
+              <tr><td>effect 队列重构</td><td>完成 40%</td><td>补重试与健康看板</td></tr>
+              <tr><td>多租户压测</td><td>完成 80%</td><td>补隔离用例</td></tr>
+              <tr><td>MCP 接入</td><td>完成 20%</td><td>先做 stdio</td></tr>
+              <tr><td>定时任务原型</td><td>完成 100%</td><td>等排期</td></tr>
+            </tbody>
+          </table>
+          <p>这 5 条都是从 10 月数据里带进度百分比、明确未到 100% 的项提炼出来的（已完成的权限三档、资料库搜索等 100% 项不再列入）。背景与其余页面保持不变。</p>
+          <p>如需把某些已完成项也纳入下月（比如持续迭代类），或调整进度表述，告诉我即可。</p>
+          <button class="filecard" data-artifact="ppt">
+            <span class="fi">${icon('i-doc')}</span>
+            <span class="ft"><b>10月工作月报.pptx</b><span>6 页 · 1.5 MB</span></span>
+            <span class="open">预览</span>
+          </button>
+          <div class="artifacts-link"><button data-artifact="ppt">查看所有产物 (1) ${icon('i-chev-right')}</button></div>`
+      };
+    }
+    if (/变更日志|AI 行业|行业/.test(t)){
+      return {
+        steps:[
+          { icon:'i-search', text:'检索 24 小时内的行业来源', dur:'1.1s' },
+          { icon:'i-file', text:'去重并核对原始链接', dur:'0.7s' },
+          { icon:'i-file', text:'按影响面归并成变更日志', dur:'0.4s' }
+        ],
+        html:`<p>今天值得看的 4 条，我按「会不会影响你手上的事」排序：</p>
+          <ul>
+            <li><strong>编码 agent 的评测口径在变</strong>：从单轮题转向长任务与工具调用，静态榜单的参考价值继续下降。</li>
+            <li><strong>MCP 生态开始收敛</strong>：资源与工具的服务端实现逐渐统一，接入成本比半年前低一个量级。</li>
+            <li><strong>推理成本继续下探</strong>：长上下文的缓存命中价格差距被拉大，prompt 结构开始直接影响账单。</li>
+            <li><strong>「可观测」成为刚需</strong>：agent 产品的竞争点从模型能力转向失败恢复与审计。</li>
+          </ul>
+          <p>完整版带原始链接，我已经存到资料库：<code>行业变更-1102.md</code>。</p>`
+      };
+    }
+    if (/定投|多少钱|收益/.test(t)){
+      return {
+        steps:[
+          { icon:'i-spark', text:'按年化 6% 与 8% 两档试算', dur:'0.3s' },
+          { icon:'i-table', text:'生成逐年资产表', dur:'0.2s' }
+        ],
+        html:`<p>按每月 1000 元、定投 5 年（共 6 万本金）粗算：</p>
+          <ul>
+            <li>年化 <strong>3%</strong>：约 6.46 万</li>
+            <li>年化 <strong>6%</strong>：约 6.98 万</li>
+            <li>年化 <strong>8%</strong>：约 7.35 万</li>
+          </ul>
+          <p>真正拉开差距的是时间而不是择时；如果你愿意，我可以按你的风险偏好换成股债比例再算一版。</p>`
+      };
+    }
+    if (/周末|附近|值得去/.test(t)){
+      return {
+        steps:[
+          { icon:'i-search', text:'检索你所在城市本周的活动', dur:'0.8s' },
+          { icon:'i-file', text:'按距离与天气筛选', dur:'0.5s' }
+        ],
+        html:`<p>这周末给你三个方向，都在一小时车程内：</p>
+          <ul>
+            <li><strong>看展</strong>：美术馆的新媒体展，周六人少，适合待两小时。</li>
+            <li><strong>走走</strong>：城郊那条沿河步道，周日 26℃ 多云，下午光线最好。</li>
+            <li><strong>带孩子</strong>：科技馆的动手区，建议一开门就去，十一点后排队明显。</li>
+          </ul>
+          <p>要我把路线、停车和吃饭排成一张半日计划吗？</p>`
+      };
+    }
+    if (/短视频|流行/.test(t)){
+      return {
+        steps:[
+          { icon:'i-search', text:'抓取最近 7 天的热榜与话题', dur:'1.2s' },
+          { icon:'i-chart', text:'按增速与完播率聚类', dur:'0.6s' }
+        ],
+        html:`<p>最近 7 天的流量有三个明显变化：</p>
+          <ul>
+            <li><strong>「过程感」压过「结论感」</strong>：展示怎么做的视频，完播率比直接给结果高约三成。</li>
+            <li><strong>三秒内的信息密度</strong>成为分水岭，慢开场几乎不再有二次推荐。</li>
+            <li><strong>评论区互动</strong>开始反向影响选题，能引发争论的中立提问更容易起量。</li>
+          </ul>
+          <p>如果你要做的是产品号，我建议先试「一个真实问题 + 一次失败 + 一次修正」的三段式。</p>`
+      };
+    }
+    return {
+      steps:[
+        { icon:'i-file', text:`读取 ${state.ws} 的仓库结构`, dur:'0.7s' },
+        { icon:'i-search', text:'检索相关代码与最近的改动', dur:'0.9s' },
+        { icon:'i-spark', text:'整理结论与下一步', dur:'0.5s' }
+      ],
+      html:`<p>看完了。这件事可以拆成三步，我建议先做第一步：</p>
+        <ul>
+          <li><strong>先确认边界</strong>：把「谁可以触发、能改什么、失败了怎么恢复」写成三条约束。</li>
+          <li><strong>再做最小闭环</strong>：一条真实请求走完「识别 → 执行 → 回报」，暂时不做并发。</li>
+          <li><strong>最后加护栏</strong>：默认观察模式，跑一周记录再放开自动执行。</li>
+        </ul>
+        <p>要我先按这个拆法起一个任务清单吗？</p>`
+    };
+  }
+
+  function scrollBottom(){
+    const box = $('#messages');
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function msgTools(){
+    const row = el('div','msg-tools');
+    const tools = [
+      { icon:'i-copy', label:'复制', act:'copy' },
+      { icon:'i-thumb-up', label:'有帮助', act:'like' },
+      { icon:'i-thumb-up', label:'没帮助', act:'dislike', cls:'flip' },
+      { icon:'i-speaker', label:'朗读', act:'speak' },
+      { icon:'i-refresh', label:'重新生成', act:'retry' },
+      { icon:'i-arrow-ur', label:'分享', act:'share' },
+      { icon:'i-more', label:'更多', act:'more' }
+    ];
+    tools.forEach(t => {
+      const b = el('button','tool', `${icon(t.icon, 'icon' + (t.cls ? ' ' + t.cls : ''))}`);
+      b.title = t.label;
+      b.setAttribute('aria-label', t.label);
+      b.addEventListener('click', () => {
+        if (t.act === 'copy'){
+          const text = $('#thread').lastElementChild?.querySelector('.ai-text')?.innerText || '';
+          navigator.clipboard?.writeText(text).catch(() => {});
+          toast('已复制到剪贴板');
+          return;
+        }
+        if (t.act === 'like' || t.act === 'dislike'){
+          const group = b.parentElement;
+          group.querySelectorAll('[data-voted]').forEach(n => { n.classList.remove('is-on'); delete n.dataset.voted; });
+          b.classList.add('is-on'); b.dataset.voted = '1';
+          toast(t.act === 'like' ? '谢谢反馈' : '已记录，下次会注意');
+          return;
+        }
+        toast(`${t.label}（原型未接入）`);
+      });
+      row.appendChild(b);
+    });
+    row.appendChild(el('span','cost',
+      `共消耗 <b>◇ 0.85</b>`));
+    return row;
+  }
+
+  let replyTimer = null;
+  function runReply(userText){
+    state.sending = true;
+    const sendBtn = $('#chatSend');
+    sendBtn.classList.add('is-stop');
+    sendBtn.classList.remove('is-ready');
+    sendBtn.innerHTML = icon('i-stop');
+
+    const content = aiShell();
+    const dots = typing(content);
+    replyTimer = setTimeout(() => {
+      dots.remove();
+      const r = replyFor(userText);
+      content.appendChild(stepsCard(r.steps));
+      const textNode = el('div','ai-text', r.html);
+      content.appendChild(textNode);
+      content.appendChild(msgTools());
+      scrollBottom();
+      state.sending = false;
+      sendBtn.classList.remove('is-stop');
+      sendBtn.innerHTML = icon('i-arrow-up');
+      syncSend();
+    }, 1100);
+  }
+
+  function stopReply(){
+    if (!state.sending) return;
+    clearTimeout(replyTimer);
+    state.sending = false;
+    const sendBtn = $('#chatSend');
+    sendBtn.classList.remove('is-stop');
+    sendBtn.innerHTML = icon('i-arrow-up');
+    const last = $('#thread').lastElementChild;
+    const t = last?.querySelector('.typing');
+    if (t) t.remove();
+    const body = last?.querySelector('.ai-content');
+    if (body && !body.textContent.trim()) body.innerHTML = '<div class="ai-text"><p>已停止。</p></div>';
+    syncSend();
+  }
+
+  function startChat(text){
+    resetThread();
+    state.chatTitle = text.length > 22 ? text.slice(0,22) + '…' : text;
+    $('#chatTitle').textContent = state.chatTitle;
+    setView('chat');
+    addUser(text);
+    runReply(text);
+  }
+
+  function sendHome(){
+    const text = $('#homeInput').value.trim();
+    if (!text) return;
+    $('#homeInput').value = '';
+    autoGrow($('#homeInput'));
+    syncSend();
+    startChat(text);
+  }
+  function sendChat(){
+    if (state.sending) { stopReply(); return; }
+    const text = $('#chatInput').value.trim();
+    if (!text) return;
+    $('#chatInput').value = '';
+    autoGrow($('#chatInput'));
+    syncSend();
+    addUser(text);
+    runReply(text);
+  }
+  $('#sendBtn').addEventListener('click', sendHome);
+  $('#chatSend').addEventListener('click', sendChat);
+
+  $('#newTask').addEventListener('click', () => {
+    stopReply();
+    closeArtifact();
+    resetThread();
+    setView('home');
+    $('#chatTitle').textContent = '新任务';
+    $('#homeInput').value = '';
+    autoGrow($('#homeInput'));
+    syncSend();
+    $('#app').classList.remove('nav-open');
+    setTimeout(() => $('#homeInput').focus(), 120);
+  });
+
+  function openChat(text){
+    startChat(text);
+    $('#app').classList.remove('nav-open');
+  }
+
+  /* ───────── pages ───────── */
+  function renderSchedules(){
+    const box = $('#scheduleList');
+    box.innerHTML = '';
+    SCHEDULES.forEach((s, i) => {
+      const row = el('div','sched');
+      row.innerHTML = `
+        <div class="time"><b>${esc(s.time)}</b>${esc(s.day)}</div>
+        <div class="body">
+          <b>${esc(s.title)}</b>
+          <p>${esc(s.desc)}</p>
+          <div class="meta"><span class="pill">${esc(s.cadence)}</span></div>
+        </div>
+        <button class="switch ${s.on ? 'on' : ''}" role="switch" aria-checked="${s.on}" aria-label="${esc(s.title)}"></button>`;
+      const sw = row.querySelector('.switch');
+      sw.addEventListener('click', () => {
+        s.on = !s.on;
+        sw.classList.toggle('on', s.on);
+        sw.setAttribute('aria-checked', String(s.on));
+        toast(s.on ? `已启用「${s.title}」` : `已暂停「${s.title}」`);
+      });
+      box.appendChild(row);
+    });
+  }
+
+  function renderFiles(filter=''){
+    const grid = $('#libGrid');
+    grid.innerHTML = '';
+    const q = filter.trim().toLowerCase();
+    const items = FILES.filter(f => !q || f.name.toLowerCase().includes(q));
+    if (!items.length){ grid.innerHTML = '<div class="empty" style="grid-column:1/-1"><b>没有找到文件</b><p>换个关键词试试。</p></div>'; return; }
+    items.forEach(f => {
+      const b = el('button','file');
+      b.innerHTML = `<div class="top"><span class="ft ${f.type}">${icon(f.type === 'img' ? 'i-image' : f.type === 'data' ? 'i-table' : f.type === 'doc' ? 'i-doc' : 'i-file')}</span></div>
+        <b>${esc(f.name)}</b><span>${esc(f.meta)}</span>`;
+      b.addEventListener('click', () => {
+        if (f.name.endsWith('.pptx')) openArtifact();
+        else toast(`打开 ${f.name}（原型未接入）`);
+      });
+      grid.appendChild(b);
+    });
+  }
+  $('#libSearch').addEventListener('input', (e) => renderFiles(e.target.value));
+
+  /* ───────── sidebar toggles / mobile ───────── */
+  $('#collapseBtn').addEventListener('click', () => {
+    if (innerWidth <= 900) $('#app').classList.remove('nav-open');
+    else $('#app').classList.toggle('folded');
+  });
+  $('#mobileToggle').addEventListener('click', () => {
+    if ($('#app').classList.contains('folded')) $('#app').classList.remove('folded');
+    else $('#app').classList.add('nav-open');
+  });
+  $('#scrim').addEventListener('click', () => $('#app').classList.remove('nav-open'));
+
+  $('#moreBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const pop = $('#morePop'), open = pop.classList.contains('is-open');
+    closePops();
+    if (!open){ placePop(pop, e.currentTarget, 186); pop.classList.add('is-open'); }
+  });
+  $('#bellBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const pop = $('#notifyPop'), open = pop.classList.contains('is-open');
+    closePops();
+    if (!open){ placePop(pop, e.currentTarget, 296); pop.classList.add('is-open'); }
+  });
+
+  /* ───────── global dismiss ───────── */
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.pop') && !e.target.closest('#wsBtn,#moreBtn,#bellBtn')){
+      closePops();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape'){
+      closePops();
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'){
+      e.preventDefault();
+      if (state.view !== 'home') setView('home');
+      renderWsList();
+      $('#wsPop').classList.add('is-open');
+      $('#wsBtn').setAttribute('aria-expanded','true');
+      setTimeout(() => $('#wsSearch').focus(), 40);
+    }
+  });
+  $$('[data-fill]').forEach(b => b.addEventListener('click', () => fillComposer(b.dataset.fill)));
+  // quick chips re-render, so delegate:
+  $('#quickChips').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-fill]');
+    if (b) fillComposer(b.dataset.fill);
+  });
+
+  /* ───────── artifact pane ───────── */
+  const DECK = {
+    name: '10月工作月报.pptx',
+    slides: [
+      { kind:'cover', kicker:'PI · MONTHLY REPORT', title:'10月工作月报', sub:'Pi 项目组 · 2026.10' },
+      { kind:'sec', kicker:'- 01 -', title:'上月工作总结', sub:'9 项里 6 项达到预期，3 项转入下月' },
+      { kind:'bul', kicker:'02', title:'关键进展', items:[
+        '工作台首页完成改版，进入任务的路径从 3 步收敛到 1 步',
+        'effect 队列落地：副作用先入库，进程崩溃后可重放',
+        '多租户隔离补齐 9 条用例，跨用户读写全部被拒绝',
+        'MCP 选型完成，先用 stdio 跑通一个 server'
+      ]},
+      { kind:'tbl', kicker:'03', title:'进度一览', head:['项目','进度','下一步'], rows:[
+        ['工作台首页改版','完成 60%','接通真实 RPC'],
+        ['effect 队列重构','完成 40%','补重试与健康看板'],
+        ['多租户压测','完成 80%','补隔离用例'],
+        ['MCP 接入','完成 20%','先做 stdio'],
+        ['定时任务原型','完成 100%','等排期']
+      ]},
+      { kind:'bul', kicker:'04', title:'下月计划', items:[
+        '首页与真实会话数据打通，支持中断与重试',
+        '把排队消息改成可恢复的持久队列',
+        '补一条端到端压测：20 个用户并发 3 轮',
+        '给出插件清单与启停开关的最小实现'
+      ]},
+      { kind:'bul', kicker:'05', title:'风险与求助', items:[
+        '沙箱默认值仍是 local，需要确认团队模式的默认策略',
+        'MCP 依赖的外部 server 还没定，可能需要一次选型评审',
+        '月报里的进度口径需要和项目负责人再对齐一次'
+      ]}
+    ]
+  };
+  const art = { index: 1, dirty: false, zoom: 37, scale: 1, hist: [], future: [] };
+
+  const artWidth = () => Math.max(340, Math.round(760 * art.zoom / 37));
+  const fontPx = (base) => Math.round(base * art.scale);
+
+  function miniFor(s){
+    if (s.kind === 'cover') return '<div class="m-cover"><i></i><i></i></div>';
+    if (s.kind === 'sec') return '<div class="m-sec"><i></i><i></i></div>';
+    if (s.kind === 'tbl') return '<div class="m-tab"><div class="bar"></div><div class="grid">' + '<span></span>'.repeat(9) + '</div></div>';
+    return '<div class="m-bul"><div class="bar"></div><i></i><i></i><i></i><i></i><i></i><i></i></div>';
+  }
+
+  function renderThumbs(){
+    const box = $('#artThumbs');
+    box.innerHTML = '';
+    DECK.slides.forEach((s, i) => {
+      const b = el('button', 'thumb' + (i === art.index ? ' is-active' : ''), `<div class="mini">${miniFor(s)}</div><div class="n">${i + 1}</div>`);
+      b.setAttribute('aria-label', `第 ${i+1} 页：${s.title || '未命名'}`);
+      b.addEventListener('click', () => { art.index = i; renderArt(); });
+      box.appendChild(b);
+    });
+  }
+
+  function slideHTML(s){
+    const w = artWidth();
+    const pageNo = String(art.index + 1).padStart(2, '0');
+    if (s.kind === 'cover') return `<div class="slide slide-cover" style="max-width:${w}px;min-height:${Math.round(w*9/16)}px">
+      <div class="brandline">PI · 2026</div>
+      <div class="s-kicker" contenteditable="true" spellcheck="false" data-edit="kicker">${esc(s.kicker)}</div>
+      <div class="s-title" contenteditable="true" spellcheck="false" data-edit="title" style="font-size:${fontPx(44)}px">${esc(s.title)}</div>
+      <div class="s-sub" contenteditable="true" spellcheck="false" data-edit="sub" style="font-size:${fontPx(14)}px">${esc(s.sub)}</div>
+      <div class="rule"></div>
+      <div class="s-foot"><span>PI · 2026</span><span>${pageNo}</span></div>
+    </div>`;
+    if (s.kind === 'sec') return `<div class="slide slide-sec" style="max-width:${w}px;min-height:${Math.round(w*9/16)}px">
+      <div class="mark">Pi</div>
+      <div class="s-kicker" contenteditable="true" spellcheck="false" data-edit="kicker">${esc(s.kicker)}</div>
+      <div class="s-title" contenteditable="true" spellcheck="false" data-edit="title" style="font-size:${fontPx(46)}px">${esc(s.title)}</div>
+      <div class="s-sub" contenteditable="true" spellcheck="false" data-edit="sub">${esc(s.sub)}</div>
+      <div class="s-foot"><span>PI · 2026 · 内部资料</span><span>${pageNo}</span></div>
+    </div>`;
+    if (s.kind === 'bul') return `<div class="slide slide-bul" style="max-width:${w}px;min-height:${Math.round(w*9/16)}px">
+      <div class="s-kicker" contenteditable="true" spellcheck="false" data-edit="kicker">${esc(s.kicker||'')}</div>
+      <div class="s-title" contenteditable="true" spellcheck="false" data-edit="title" style="font-size:${fontPx(30)}px">${esc(s.title)}</div>
+      <div class="accent"></div>
+      <ul>${(s.items||[]).map((it,i)=>`<li contenteditable="true" spellcheck="false" data-edit="item:${i}">${esc(it)}</li>`).join('')}</ul>
+      <div class="s-foot"><span>PI · 2026 · 内部资料</span><span>${pageNo}</span></div>
+    </div>`;
+    const cols = (s.head||[]).length || 3;
+    return `<div class="slide slide-tbl" style="max-width:${w}px;min-height:${Math.round(w*9/16)}px">
+      <div class="s-kicker" contenteditable="true" spellcheck="false" data-edit="kicker">${esc(s.kicker||'')}</div>
+      <div class="s-title" contenteditable="true" spellcheck="false" data-edit="title" style="font-size:${fontPx(28)}px">${esc(s.title)}</div>
+      <table><colgroup>${'<col>'.repeat(cols)}</colgroup>
+        <thead><tr>${(s.head||[]).map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead>
+        <tbody>${(s.rows||[]).map((row,r)=>`<tr>${row.map((c,ci)=>`<td contenteditable="true" spellcheck="false" data-edit="cell:${r}:${ci}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>
+      <div class="s-foot"><span>PI · 2026 · 内部资料</span><span>${pageNo}</span></div>
+    </div>`;
+  }
+
+  function applyEdit(node){
+    const s = DECK.slides[art.index];
+    const key = node.dataset.edit;
+    const value = node.textContent.replace(/\s+/g, ' ').trim();
+    if (key === 'title') s.title = value || '未命名页面';
+    else if (key === 'sub') s.sub = value;
+    else if (key === 'kicker') s.kicker = value;
+    else if (key.startsWith('item:')) s.items[Number(key.split(':')[1])] = value;
+    else if (key.startsWith('cell:')){
+      const [, r, c] = key.split(':');
+      s.rows[Number(r)][Number(c)] = value;
+    }
+    art.dirty = true;
+    $('#artTab').classList.add('is-dirty');
+    $('#artDirty').hidden = false;
+  }
+
+  function snapshot(){
+    art.hist.push(JSON.stringify(DECK.slides));
+    if (art.hist.length > 40) art.hist.shift();
+    art.future = [];
+  }
+  function undo(){
+    if (!art.hist.length){ toast('没有可撤销的编辑'); return; }
+    art.future.push(JSON.stringify(DECK.slides));
+    DECK.slides = JSON.parse(art.hist.pop());
+    art.index = Math.min(art.index, DECK.slides.length - 1);
+    art.dirty = true;
+    renderArt();
+  }
+  function redo(){
+    if (!art.future.length){ toast('没有可重做的编辑'); return; }
+    art.hist.push(JSON.stringify(DECK.slides));
+    DECK.slides = JSON.parse(art.future.pop());
+    art.index = Math.min(art.index, DECK.slides.length - 1);
+    art.dirty = true;
+    renderArt();
+  }
+  function saveDoc(){
+    art.dirty = false;
+    $('#artTab').classList.remove('is-dirty');
+    $('#artDirty').hidden = true;
+    toast(`已保存 · ${DECK.name}`);
+  }
+  function addSlide(){
+    snapshot();
+    DECK.slides.push({ kind:'bul', kicker:String(DECK.slides.length + 1).padStart(2,'0'), title:'新页面', items:['单击这里的文字开始编辑'] });
+    art.index = DECK.slides.length - 1;
+    art.dirty = true;
+    renderArt();
+    toast('已插入一页');
+  }
+  function deleteSlide(){
+    if (DECK.slides.length <= 1){ toast('至少保留一页'); return; }
+    snapshot();
+    DECK.slides.splice(art.index, 1);
+    art.index = Math.max(0, art.index - 1);
+    art.dirty = true;
+    renderArt();
+    toast('已删除当前页');
+  }
+  function scaleFont(delta){
+    const next = Math.min(1.5, Math.max(0.75, Math.round((art.scale + delta) * 100) / 100));
+    if (next === art.scale) return;
+    art.scale = next;
+    art.dirty = true;
+    renderArt();
+  }
+  function setZoom(delta){
+    art.zoom = Math.min(80, Math.max(22, art.zoom + delta));
+    renderArt();
+  }
+
+  function renderArt(){
+    $('#artTabName').textContent = DECK.name;
+    $('#artName').textContent = DECK.name;
+    renderThumbs();
+    const s = DECK.slides[art.index];
+    const wrap = $('#artSlideWrap');
+    wrap.innerHTML = slideHTML(s);
+    wrap.querySelectorAll('[data-edit]').forEach(node => {
+      node.addEventListener('focus', () => snapshot());
+      node.addEventListener('input', () => applyEdit(node));
+      node.addEventListener('keydown', (e) => { if (e.key === 'Enter' && node.tagName !== 'LI'){ e.preventDefault(); node.blur(); } });
+    });
+    $('#artPos').textContent = `第 ${art.index + 1} 页 / 共 ${DECK.slides.length} 页`;
+    $('#artDirty').hidden = !art.dirty;
+    $('#artTab').classList.toggle('is-dirty', art.dirty);
+    $('#artZoom').textContent = `${art.zoom}%`;
+    $('#artNotes').value = DECK.slides[art.index].notes || '';
+    const active = $('#artThumbs').children[art.index];
+    if (active) active.scrollIntoView({ block: 'nearest' });
+  }
+
+  function openArtifact(){
+    $('#app').classList.add('artifact-open');
+    renderArt();
+    scrollBottom();
+  }
+  function closeArtifact(){
+    $('#app').classList.remove('artifact-open');
+  }
+
+  $('#artClose').addEventListener('click', closeArtifact);
+  $('#artHide').addEventListener('click', closeArtifact);
+  $('#artAdd').addEventListener('click', () => toast('从资料库或聊天产物添加（原型未接入）'));
+  $('#artMax').addEventListener('click', () => $('#app').classList.toggle('art-max'));
+  $('#artSave').addEventListener('click', saveDoc);
+  $('#artToolSave').addEventListener('click', saveDoc);
+  $('#artUndoBtn').addEventListener('click', undo);
+  $('#artNotes').addEventListener('input', (e) => {
+    DECK.slides[art.index].notes = e.target.value;
+    art.dirty = true;
+    $('#artTab').classList.add('is-dirty');
+  });
+  document.addEventListener('click', (e) => {
+    const hit = e.target.closest('[data-artifact]');
+    if (hit){ e.preventDefault(); openArtifact(); }
+  });
+  $('#artifactPane').addEventListener('click', (e) => {
+    const tool = e.target.closest('[data-art]');
+    if (!tool) return;
+    const act = tool.dataset.art;
+    if (act === 'undo') undo();
+    else if (act === 'redo') redo();
+    else if (act === 'add') addSlide();
+    else if (act === 'delete') deleteSlide();
+    else if (act === 'font-up') scaleFont(0.1);
+    else if (act === 'font-down') scaleFont(-0.1);
+    else if (act === 'zoom-in') setZoom(5);
+    else if (act === 'zoom-out') setZoom(-5);
+  });
+
+  (function artResize(){
+    const handle = $('#artResize');
+    let on = false;
+    handle.addEventListener('pointerdown', (e) => {
+      on = true;
+      handle.setPointerCapture(e.pointerId);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    });
+    window.addEventListener('pointermove', (e) => {
+      if (!on) return;
+      const w = Math.max(380, Math.min(innerWidth - e.clientX, innerWidth * 0.8));
+      document.documentElement.style.setProperty('--art-w', w + 'px');
+    });
+    window.addEventListener('pointerup', () => {
+      on = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      scrollBottom();
+    });
+  })();
+
+  /* ───────── boot ───────── */
+  renderTasks();
+  renderSpaces();
+  renderWsList();
+  renderArt();
+  renderQuick();
+  renderSchedules();
+  renderFiles();
+  syncSend();
+  const initialWs = WORKSPACES.find(w => w.id === state.ws);
+  $('#wsBtn span').textContent = initialWs.name;
+  $('#chatWs').textContent = initialWs.name;
+  $('#wsIcon use').setAttribute('href', initialWs.kind === 'default' ? '#i-house' : '#i-folder');
+  $('#chatWsIcon use').setAttribute('href', initialWs.kind === 'default' ? '#i-house' : '#i-folder');
+  setTimeout(() => $('#homeInput').focus(), 260);
+})();
+</script>
+</body>
+</html>
