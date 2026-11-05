@@ -2,17 +2,19 @@
 
 ## 环境
 
-```bash
-./scripts/build-office.sh        # docs + slides + sheets -> office-dist/
-./scripts/build-xlsx-sidecar.sh  # Rust xlsx sidecar
-cd web && npm run typecheck && npm run build
-```
-
-启动：
+首次启动会自动构建 web、office 三个编辑器和 xlsx sidecar，然后启动服务：
 
 ```bash
 ./start.sh
 # http://127.0.0.1:8787/#/workbench
+```
+
+如果需要单独构建：
+
+```bash
+./scripts/build-office.sh
+./scripts/build-xlsx-sidecar.sh
+cd web && npm run typecheck && npm run build
 ```
 
 ## 验收项

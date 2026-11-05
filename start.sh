@@ -2,9 +2,11 @@
 #
 # 一键启动 python-pi 的浏览器 UI。
 #
-#   ./start.sh                     # agent 的工作目录 = 当前目录
+#   ./start.sh                     # 首次会自动构建 web/office/xlsx-sidecar，然后启动
 #   ./start.sh ~/git/my-project    # 指定工作目录
 #   PORT=9000 ./start.sh           # 换端口
+#   PI_SKIP_OFFICE_BUILD=1 ./start.sh      # 跳过 Office 编辑器构建
+#   PI_SKIP_SIDECAR_BUILD=1 ./start.sh     # 跳过 XLSX sidecar 构建
 #
 # 配置读取顺序（后者覆盖前者）：
 #   1. 本文件里的默认值
@@ -79,14 +81,29 @@ if [[ ! -f "$ROOT/web/dist/index.html" ]]; then
   ( cd "$ROOT/web" && npm install --no-audit --no-fund && npm run build )
 fi
 
-# Office 编辑器是独立构建；缺失时不阻塞主界面，但产物面板会打不开。
+# Office 编辑器是独立构建；缺失时自动构建，让 ./start.sh 一条命令可用。
 if [[ -f "$ROOT/office/package.json" ]] && { [[ ! -f "$ROOT/office-dist/index.html" ]] || [[ ! -f "$ROOT/office-dist/slides/index.html" ]] || [[ ! -f "$ROOT/office-dist/sheets/index.html" ]]; }; then
-  echo "[start.sh] Office 编辑器尚未构建，正在构建（首次会比较慢）…"
-  "$ROOT/scripts/build-office.sh"
+  if [[ "${PI_SKIP_OFFICE_BUILD:-0}" == "1" ]]; then
+    echo "[start.sh] 提示：Office 编辑器未构建（PI_SKIP_OFFICE_BUILD=1），产物面板会打不开。" >&2
+  else
+    echo "[start.sh] Office 编辑器尚未构建，正在构建 docs/slides/sheets（首次会比较慢）…"
+    "$ROOT/scripts/build-office.sh"
+  fi
 fi
-if [[ ! -x "$ROOT/office/xlsx-engine/target/release/xlsx-sidecar" ]]; then
-  echo "[start.sh] 提示：xlsx sidecar 未构建，XLSX 在线编辑会返回 503。" >&2
-  echo "           运行 ./scripts/build-xlsx-sidecar.sh 构建。" >&2
+
+# XLSX sidecar 是 Rust 二进制；缺失时自动构建。没有 cargo 时降级为警告，
+# 保证主工作台仍能启动，只是 XLSX 在线编辑返回 503。
+SIDECAR_BIN="${PI_XLSX_SIDECAR:-$ROOT/office/xlsx-engine/target/release/xlsx-sidecar}"
+if [[ ! -x "$SIDECAR_BIN" ]]; then
+  if [[ "${PI_SKIP_SIDECAR_BUILD:-0}" == "1" ]]; then
+    echo "[start.sh] 提示：xlsx sidecar 未构建（PI_SKIP_SIDECAR_BUILD=1），XLSX 在线编辑会返回 503。" >&2
+  elif command -v cargo >/dev/null 2>&1 && [[ -z "${PI_XLSX_SIDECAR:-}" ]]; then
+    echo "[start.sh] xlsx sidecar 尚未构建，正在编译 Rust sidecar（首次会比较慢）…"
+    "$ROOT/scripts/build-xlsx-sidecar.sh"
+  else
+    echo "[start.sh] 提示：xlsx sidecar 未构建，XLSX 在线编辑会返回 503。" >&2
+    echo "           安装 Rust 后运行 ./scripts/build-xlsx-sidecar.sh，或设置 PI_XLSX_SIDECAR。" >&2
+  fi
 fi
 
 # 端口被占用时给一句人话，而不是让 uvicorn 抛一堆栈

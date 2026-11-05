@@ -13,6 +13,9 @@ npm run build
 ./scripts/build-office.sh
 ```
 
+`./start.sh` 会在首次启动时自动执行这些构建（可用 `PI_SKIP_OFFICE_BUILD=1`
+跳过编辑器构建）。
+
 Output goes to `office-dist/` at the repo root. FastAPI serves it at `/office`
 (override with `PI_OFFICE_DIST`).
 
