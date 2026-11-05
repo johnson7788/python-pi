@@ -24,6 +24,7 @@ version is never edited, only added to.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
@@ -105,8 +106,213 @@ CREATE TABLE session_pointers (
 );
 """
 
+_SCHEMA_V3 = """
+CREATE TABLE skill_prefs (
+  uid        TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+  workspace  TEXT NOT NULL DEFAULT 'default',
+  name       TEXT NOT NULL,
+  enabled    INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (uid, workspace, name)
+);
+"""
+
+_SCHEMA_V4 = """
+CREATE TABLE workspaces (
+  uid        TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+  id         TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  path       TEXT NOT NULL,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (uid, id),
+  UNIQUE (uid, name)
+);
+
+CREATE TABLE workspace_session_pointers (
+  uid          TEXT NOT NULL,
+  workspace    TEXT NOT NULL,
+  session_file TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (uid, workspace)
+);
+
+INSERT INTO workspace_session_pointers (uid, workspace, session_file, updated_at)
+SELECT uid, 'default', session_file, updated_at FROM session_pointers;
+"""
+
+_SCHEMA_V5 = """
+CREATE TABLE composition_session_pointers (
+  uid          TEXT NOT NULL,
+  workspace    TEXT NOT NULL,
+  app_id       TEXT NOT NULL,
+  mode_id      TEXT NOT NULL,
+  session_file TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (uid, workspace, app_id, mode_id)
+);
+
+INSERT INTO composition_session_pointers
+  (uid, workspace, app_id, mode_id, session_file, updated_at)
+SELECT uid, workspace, 'general', 'office', session_file, updated_at
+FROM workspace_session_pointers;
+"""
+
+_SCHEMA_V6 = """
+CREATE TABLE plugin_enable (
+  uid        TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+  app_id     TEXT NOT NULL,
+  plugin_id  TEXT NOT NULL,
+  enabled    INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (uid, app_id, plugin_id)
+);
+"""
+
+_SCHEMA_V7 = """
+CREATE TABLE schedules (
+  id               TEXT PRIMARY KEY,
+  uid              TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+  workspace        TEXT NOT NULL,
+  app_id           TEXT NOT NULL,
+  mode_id          TEXT NOT NULL,
+  name             TEXT NOT NULL,
+  prompt           TEXT NOT NULL,
+  kind             TEXT NOT NULL,
+  run_at           TEXT,
+  hour             INTEGER,
+  minute           INTEGER,
+  weekday          INTEGER,
+  interval_minutes INTEGER,
+  enabled          INTEGER NOT NULL DEFAULT 1,
+  next_run_at      TEXT,
+  last_run_at      TEXT,
+  last_status      TEXT,
+  last_error       TEXT,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+
+CREATE TABLE schedule_runs (
+  id          TEXT PRIMARY KEY,
+  schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+  started_at  TEXT NOT NULL,
+  finished_at TEXT,
+  status      TEXT NOT NULL,
+  session_file TEXT,
+  error       TEXT
+);
+"""
+
+_SCHEMA_V8 = """
+CREATE TABLE notifications (
+  id         TEXT PRIMARY KEY,
+  uid        TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+  kind       TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  body       TEXT NOT NULL DEFAULT '',
+  link       TEXT NOT NULL DEFAULT '',
+  read       INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX notifications_uid_created ON notifications(uid, created_at DESC);
+"""
+
+_SCHEMA_V9 = """
+CREATE TABLE apps (
+  uid         TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+  id          TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  accent      TEXT NOT NULL DEFAULT '#3b5fba',
+  builtin     INTEGER NOT NULL DEFAULT 0,
+  sort        INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  PRIMARY KEY (uid, id)
+);
+
+CREATE TABLE app_modes (
+  uid         TEXT NOT NULL,
+  app_id      TEXT NOT NULL,
+  id          TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  prompt      TEXT NOT NULL DEFAULT '',
+  skills_json TEXT,
+  sort        INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (uid, app_id, id)
+);
+
+CREATE TABLE app_capsules (
+  uid      TEXT NOT NULL,
+  app_id   TEXT NOT NULL,
+  mode_id  TEXT NOT NULL,
+  id       TEXT NOT NULL,
+  name     TEXT NOT NULL,
+  prompt   TEXT NOT NULL DEFAULT '',
+  sort     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (uid, app_id, mode_id, id)
+);
+"""
+
+_SCHEMA_V10 = """
+CREATE TABLE app_audit (
+  id          TEXT PRIMARY KEY,
+  uid         TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+  app_id      TEXT NOT NULL,
+  action      TEXT NOT NULL,
+  actor       TEXT NOT NULL DEFAULT '',
+  before_json TEXT,
+  after_json  TEXT,
+  created_at  TEXT NOT NULL
+);
+
+CREATE INDEX app_audit_uid_app ON app_audit(uid, app_id, created_at DESC);
+"""
+
+_SCHEMA_V11 = """
+CREATE TABLE market_ratings (
+  uid        TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+  kind       TEXT NOT NULL,
+  item_id    TEXT NOT NULL,
+  score      INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (uid, kind, item_id)
+);
+"""
+
+_SCHEMA_V12 = """
+CREATE TABLE feedback (
+  id                TEXT PRIMARY KEY,
+  uid               TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+  session_file      TEXT NOT NULL,
+  message_timestamp REAL NOT NULL,
+  rating             INTEGER NOT NULL,
+  comment            TEXT NOT NULL DEFAULT '',
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL,
+  UNIQUE (uid, session_file, message_timestamp)
+);
+"""
+
 #: ``(version, sql)`` pairs, applied in order and never edited after release.
-MIGRATIONS: tuple[tuple[int, str], ...] = ((1, _SCHEMA_V1), (2, _SCHEMA_V2))
+MIGRATIONS: tuple[tuple[int, str], ...] = (
+    (1, _SCHEMA_V1),
+    (2, _SCHEMA_V2),
+    (3, _SCHEMA_V3),
+    (4, _SCHEMA_V4),
+    (5, _SCHEMA_V5),
+    (6, _SCHEMA_V6),
+    (7, _SCHEMA_V7),
+    (8, _SCHEMA_V8),
+    (9, _SCHEMA_V9),
+    (10, _SCHEMA_V10),
+    (11, _SCHEMA_V11),
+    (12, _SCHEMA_V12),
+)
 
 
 #: Columns an API may update on ``users``.  Anything else is rejected rather than
@@ -145,6 +351,10 @@ def month_start(now: datetime | None = None) -> str:
 
 class DuplicateUsername(Exception):
     """Raised when two accounts would share a login name."""
+
+
+class DuplicateWorkspace(Exception):
+    """Raised when two workspaces would share a name for one user."""
 
 
 class Database:
@@ -422,6 +632,553 @@ class Database:
         " COALESCE(SUM(cost), 0) AS cost,"
         " COUNT(*) AS turns"
     )
+
+    # -- workspaces ------------------------------------------------------------------
+
+    def ensure_default_workspace(self, uid: str, path: str) -> None:
+        """Create the implicit default row and keep its path current.
+
+        The path is stored for display/debugging only; callers still compute it from
+        the data root so moving a deployment does not strand the row.
+        """
+        now = utcnow()
+        self._write(
+            "INSERT OR IGNORE INTO workspaces"
+            " (uid, id, name, path, is_default, created_at, updated_at)"
+            " VALUES (?, 'default', '默认工作空间', ?, 1, ?, ?)",
+            (uid, path, now, now),
+        )
+        row = self._one("SELECT path FROM workspaces WHERE uid = ? AND id = 'default'", (uid,))
+        if row is not None and str(row["path"]) != path:
+            self._write(
+                "UPDATE workspaces SET path = ?, updated_at = ? WHERE uid = ? AND id = 'default'",
+                (path, now, uid),
+            )
+
+    def list_workspaces(self, uid: str) -> list[sqlite3.Row]:
+        return self._query(
+            "SELECT id, name, path, is_default, created_at FROM workspaces"
+            " WHERE uid = ? ORDER BY is_default DESC, created_at ASC",
+            (uid,),
+        )
+
+    def get_workspace(self, uid: str, workspace_id: str) -> sqlite3.Row | None:
+        return self._one(
+            "SELECT id, name, path, is_default FROM workspaces WHERE uid = ? AND id = ?",
+            (uid, workspace_id),
+        )
+
+    def create_workspace(self, uid: str, name: str, path: str, workspace_id: str | None = None) -> str:
+        workspace = workspace_id or uuid.uuid4().hex[:12]
+        now = utcnow()
+        try:
+            self._write(
+                "INSERT INTO workspaces (uid, id, name, path, is_default, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, 0, ?, ?)",
+                (uid, workspace, name, path, now, now),
+            )
+        except sqlite3.IntegrityError as error:
+            raise DuplicateWorkspace(name) from error
+        return workspace
+
+    def rename_workspace(self, uid: str, workspace_id: str, name: str) -> None:
+        try:
+            self._write(
+                "UPDATE workspaces SET name = ?, updated_at = ? WHERE uid = ? AND id = ?",
+                (name, utcnow(), uid, workspace_id),
+            )
+        except sqlite3.IntegrityError as error:
+            raise DuplicateWorkspace(name) from error
+
+    def remember_workspace_session(self, uid: str, workspace: str, session_file: str) -> None:
+        if not session_file:
+            return
+        self._write(
+            "INSERT INTO workspace_session_pointers (uid, workspace, session_file, updated_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(uid, workspace) DO UPDATE SET session_file = excluded.session_file,"
+            " updated_at = excluded.updated_at",
+            (uid, workspace, session_file, utcnow()),
+        )
+
+    def recall_workspace_session(self, uid: str, workspace: str) -> str | None:
+        row = self._one(
+            "SELECT session_file FROM workspace_session_pointers"
+            " WHERE uid = ? AND workspace = ?",
+            (uid, workspace),
+        )
+        return str(row["session_file"]) if row else None
+
+    # -- apps -------------------------------------------------------------------------
+
+    def seed_apps(self, uid: str, apps: list[dict[str, Any]]) -> None:
+        """Install the built-in catalog for a tenant exactly once."""
+        row = self._one("SELECT COUNT(*) AS count FROM apps WHERE uid = ?", (uid,))
+        if row is not None and int(row["count"]) > 0:
+            return
+        for app in apps:
+            self.replace_app(uid, app, builtin=True)
+
+    def list_apps(self, uid: str) -> list[dict[str, Any]]:
+        app_rows = self._query(
+            "SELECT * FROM apps WHERE uid = ? ORDER BY sort ASC, created_at ASC", (uid,)
+        )
+        mode_rows = self._query(
+            "SELECT * FROM app_modes WHERE uid = ? ORDER BY sort ASC", (uid,)
+        )
+        capsule_rows = self._query(
+            "SELECT * FROM app_capsules WHERE uid = ? ORDER BY sort ASC", (uid,)
+        )
+        modes_by_app: dict[str, list[dict[str, Any]]] = {}
+        mode_index: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in mode_rows:
+            skills_raw = row["skills_json"]
+            try:
+                skills = json.loads(skills_raw) if skills_raw else None
+            except (TypeError, json.JSONDecodeError):
+                skills = None
+            mode = {
+                "id": row["id"],
+                "name": row["name"],
+                "description": row["description"],
+                "prompt": row["prompt"],
+                "skillBinding": "all" if skills is None else skills,
+                "capsules": [],
+            }
+            modes_by_app.setdefault(str(row["app_id"]), []).append(mode)
+            mode_index[(str(row["app_id"]), str(row["id"]))] = mode
+        for row in capsule_rows:
+            mode = mode_index.get((str(row["app_id"]), str(row["mode_id"])))
+            if mode is not None:
+                mode["capsules"].append(
+                    {"id": row["id"], "name": row["name"], "prompt": row["prompt"]}
+                )
+        return [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "description": row["description"],
+                "accent": row["accent"],
+                "builtin": bool(row["builtin"]),
+                "modes": modes_by_app.get(str(row["id"]), []),
+            }
+            for row in app_rows
+        ]
+
+    def replace_app(self, uid: str, app: dict[str, Any], *, builtin: bool = False) -> None:
+        now = utcnow()
+        app_id = str(app["id"])
+        with self.atomic() as conn:
+            existing = conn.execute(
+                "SELECT builtin FROM apps WHERE uid = ? AND id = ?", (uid, app_id)
+            ).fetchone()
+            is_builtin = 1 if builtin or (existing is not None and existing["builtin"]) else 0
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO apps (uid, id, name, description, accent, builtin, sort, created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                    (
+                        uid,
+                        app_id,
+                        str(app.get("name") or app_id),
+                        str(app.get("description") or ""),
+                        str(app.get("accent") or "#3b5fba"),
+                        is_builtin,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                conn.execute(
+                    "UPDATE apps SET name = ?, description = ?, accent = ?, updated_at = ?"
+                    " WHERE uid = ? AND id = ?",
+                    (
+                        str(app.get("name") or app_id),
+                        str(app.get("description") or ""),
+                        str(app.get("accent") or "#3b5fba"),
+                        now,
+                        uid,
+                        app_id,
+                    ),
+                )
+            conn.execute("DELETE FROM app_modes WHERE uid = ? AND app_id = ?", (uid, app_id))
+            conn.execute("DELETE FROM app_capsules WHERE uid = ? AND app_id = ?", (uid, app_id))
+            for mode_index, mode in enumerate(app.get("modes") or []):
+                mode_id = str(mode.get("id") or f"mode-{mode_index + 1}")
+                binding = mode.get("skillBinding", "all")
+                if binding == "all" or not isinstance(binding, list):
+                    skills_json = None
+                else:
+                    skills_json = json.dumps([str(item) for item in binding], ensure_ascii=False)
+                conn.execute(
+                    "INSERT INTO app_modes"
+                    " (uid, app_id, id, name, description, prompt, skills_json, sort)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        uid,
+                        app_id,
+                        mode_id,
+                        str(mode.get("name") or mode_id),
+                        str(mode.get("description") or ""),
+                        str(mode.get("prompt") or ""),
+                        skills_json,
+                        mode_index,
+                    ),
+                )
+                for capsule_index, capsule in enumerate(mode.get("capsules") or []):
+                    capsule_id = str(capsule.get("id") or f"capsule-{capsule_index + 1}")
+                    conn.execute(
+                        "INSERT INTO app_capsules"
+                        " (uid, app_id, mode_id, id, name, prompt, sort)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            uid,
+                            app_id,
+                            mode_id,
+                            capsule_id,
+                            str(capsule.get("name") or capsule_id),
+                            str(capsule.get("prompt") or ""),
+                            capsule_index,
+                        ),
+                    )
+
+    def delete_app(self, uid: str, app_id: str) -> None:
+        with self.atomic() as conn:
+            conn.execute("DELETE FROM app_capsules WHERE uid = ? AND app_id = ?", (uid, app_id))
+            conn.execute("DELETE FROM app_modes WHERE uid = ? AND app_id = ?", (uid, app_id))
+            conn.execute("DELETE FROM apps WHERE uid = ? AND id = ?", (uid, app_id))
+
+    def app_composition(self, uid: str, app_id: str, mode_id: str) -> tuple[str, tuple[str, ...] | None] | None:
+        row = self._one(
+            "SELECT prompt, skills_json FROM app_modes"
+            " WHERE uid = ? AND app_id = ? AND id = ?",
+            (uid, app_id, mode_id),
+        )
+        if row is None:
+            return None
+        try:
+            skills = json.loads(row["skills_json"]) if row["skills_json"] else None
+        except (TypeError, json.JSONDecodeError):
+            skills = None
+        return str(row["prompt"]), None if skills is None else tuple(str(item) for item in skills)
+
+    # -- message feedback -------------------------------------------------------------
+
+    def set_feedback(
+        self,
+        uid: str,
+        session_file: str,
+        message_timestamp: float,
+        rating: int,
+        comment: str = "",
+    ) -> None:
+        now = utcnow()
+        self._write(
+            "INSERT INTO feedback"
+            " (id, uid, session_file, message_timestamp, rating, comment, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(uid, session_file, message_timestamp)"
+            " DO UPDATE SET rating = excluded.rating, comment = excluded.comment,"
+            " updated_at = excluded.updated_at",
+            (
+                uuid.uuid4().hex[:12], uid, session_file, float(message_timestamp),
+                int(rating), comment[:1000], now, now,
+            ),
+        )
+
+    def list_feedback(self, uid: str, session_file: str) -> list[sqlite3.Row]:
+        return self._query(
+            "SELECT * FROM feedback WHERE uid = ? AND session_file = ?"
+            " ORDER BY message_timestamp ASC",
+            (uid, session_file),
+        )
+
+    # -- market ratings ---------------------------------------------------------------
+
+    def set_market_rating(self, uid: str, kind: str, item_id: str, score: int) -> None:
+        self._write(
+            "INSERT INTO market_ratings (uid, kind, item_id, score, updated_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(uid, kind, item_id)"
+            " DO UPDATE SET score = excluded.score, updated_at = excluded.updated_at",
+            (uid, kind, item_id, max(1, min(5, int(score))), utcnow()),
+        )
+
+    def market_rating_summary(self, kind: str, item_id: str) -> tuple[float, int]:
+        row = self._one(
+            "SELECT AVG(score) AS average, COUNT(*) AS count FROM market_ratings"
+            " WHERE kind = ? AND item_id = ?",
+            (kind, item_id),
+        )
+        if row is None or not row["count"]:
+            return 0.0, 0
+        return round(float(row["average"] or 0.0), 2), int(row["count"])
+
+    def my_market_rating(self, uid: str, kind: str, item_id: str) -> int | None:
+        row = self._one(
+            "SELECT score FROM market_ratings WHERE uid = ? AND kind = ? AND item_id = ?",
+            (uid, kind, item_id),
+        )
+        return int(row["score"]) if row else None
+
+    # -- app audit --------------------------------------------------------------------
+
+    def record_app_audit(
+        self,
+        uid: str,
+        app_id: str,
+        action: str,
+        actor: str,
+        before: dict[str, Any] | None,
+        after: dict[str, Any] | None,
+    ) -> None:
+        self._write(
+            "INSERT INTO app_audit (id, uid, app_id, action, actor, before_json, after_json, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                uuid.uuid4().hex[:12],
+                uid,
+                app_id,
+                action,
+                actor,
+                None if before is None else json.dumps(before, ensure_ascii=False),
+                None if after is None else json.dumps(after, ensure_ascii=False),
+                utcnow(),
+            ),
+        )
+
+    def list_app_audit(self, uid: str, app_id: str, limit: int = 30) -> list[sqlite3.Row]:
+        return self._query(
+            "SELECT * FROM app_audit WHERE uid = ? AND app_id = ?"
+            " ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (uid, app_id, limit),
+        )
+
+    # -- notifications ----------------------------------------------------------------
+
+    def create_notification(
+        self, uid: str, *, kind: str, title: str, body: str = "", link: str = ""
+    ) -> str:
+        notification_id = uuid.uuid4().hex[:12]
+        self._write(
+            "INSERT INTO notifications (id, uid, kind, title, body, link, read, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+            (notification_id, uid, kind, title, body, link, utcnow()),
+        )
+        return notification_id
+
+    def list_notifications(self, uid: str, limit: int = 50) -> list[sqlite3.Row]:
+        return self._query(
+            "SELECT * FROM notifications WHERE uid = ?"
+            " ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (uid, limit),
+        )
+
+    def unread_notifications(self, uid: str) -> int:
+        row = self._one(
+            "SELECT COUNT(*) AS count FROM notifications WHERE uid = ? AND read = 0",
+            (uid,),
+        )
+        return int(row["count"]) if row else 0
+
+    def mark_notification(self, uid: str, notification_id: str) -> None:
+        self._write(
+            "UPDATE notifications SET read = 1 WHERE uid = ? AND id = ?",
+            (uid, notification_id),
+        )
+
+    def mark_all_notifications(self, uid: str) -> None:
+        self._write("UPDATE notifications SET read = 1 WHERE uid = ? AND read = 0", (uid,))
+
+    # -- schedules --------------------------------------------------------------------
+
+    def create_schedule(
+        self,
+        *,
+        uid: str,
+        workspace: str,
+        app_id: str,
+        mode_id: str,
+        name: str,
+        prompt: str,
+        kind: str,
+        next_run_at: str,
+        run_at: str | None = None,
+        hour: int | None = None,
+        minute: int | None = None,
+        weekday: int | None = None,
+        interval_minutes: int | None = None,
+    ) -> str:
+        schedule_id = uuid.uuid4().hex[:12]
+        now = utcnow()
+        self._write(
+            "INSERT INTO schedules"
+            " (id, uid, workspace, app_id, mode_id, name, prompt, kind, run_at, hour,"
+            "  minute, weekday, interval_minutes, enabled, next_run_at, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
+            (
+                schedule_id, uid, workspace, app_id, mode_id, name, prompt, kind, run_at,
+                hour, minute, weekday, interval_minutes, next_run_at, now, now,
+            ),
+        )
+        return schedule_id
+
+    def list_schedules(self, uid: str) -> list[sqlite3.Row]:
+        return self._query(
+            "SELECT * FROM schedules WHERE uid = ? ORDER BY created_at DESC", (uid,)
+        )
+
+    def get_schedule(self, uid: str, schedule_id: str) -> sqlite3.Row | None:
+        return self._one(
+            "SELECT * FROM schedules WHERE uid = ? AND id = ?", (uid, schedule_id)
+        )
+
+    def get_schedule_by_id(self, schedule_id: str) -> sqlite3.Row | None:
+        return self._one("SELECT * FROM schedules WHERE id = ?", (schedule_id,))
+
+    def set_schedule_enabled(self, uid: str, schedule_id: str, enabled: bool, next_run_at: str | None) -> None:
+        self._write(
+            "UPDATE schedules SET enabled = ?, next_run_at = ?, updated_at = ?"
+            " WHERE uid = ? AND id = ?",
+            (1 if enabled else 0, next_run_at, utcnow(), uid, schedule_id),
+        )
+
+    def delete_schedule(self, uid: str, schedule_id: str) -> None:
+        self._write("DELETE FROM schedules WHERE uid = ? AND id = ?", (uid, schedule_id))
+
+    def due_schedules(self, now: str) -> list[sqlite3.Row]:
+        return self._query(
+            "SELECT * FROM schedules WHERE enabled = 1 AND next_run_at IS NOT NULL"
+            " AND next_run_at <= ? ORDER BY next_run_at ASC LIMIT 20",
+            (now,),
+        )
+
+    def mark_schedule_running(self, schedule_id: str, expected_next: str, next_run_at: str | None) -> bool:
+        with self.atomic() as conn:
+            cursor = conn.execute(
+                "UPDATE schedules SET last_status = 'running', last_run_at = ?,"
+                " next_run_at = ?, updated_at = ?"
+                " WHERE id = ? AND next_run_at = ?",
+                (utcnow(), next_run_at, utcnow(), schedule_id, expected_next),
+            )
+            return cursor.rowcount > 0
+
+    def finish_schedule(
+        self, schedule_id: str, *, status: str, error: str | None, next_run_at: str | None, enabled: bool
+    ) -> None:
+        self._write(
+            "UPDATE schedules SET last_status = ?, last_error = ?, next_run_at = ?,"
+            " enabled = ?, updated_at = ? WHERE id = ?",
+            (status, error, next_run_at, 1 if enabled else 0, utcnow(), schedule_id),
+        )
+
+    def start_schedule_run(self, schedule_id: str) -> str:
+        run_id = uuid.uuid4().hex[:12]
+        self._write(
+            "INSERT INTO schedule_runs (id, schedule_id, started_at, status)"
+            " VALUES (?, ?, ?, 'running')",
+            (run_id, schedule_id, utcnow()),
+        )
+        return run_id
+
+    def finish_schedule_run(
+        self, run_id: str, *, status: str, session_file: str | None, error: str | None
+    ) -> None:
+        self._write(
+            "UPDATE schedule_runs SET finished_at = ?, status = ?, session_file = ?, error = ?"
+            " WHERE id = ?",
+            (utcnow(), status, session_file, error, run_id),
+        )
+
+    def list_schedule_runs(self, schedule_id: str, limit: int = 20) -> list[sqlite3.Row]:
+        return self._query(
+            "SELECT * FROM schedule_runs WHERE schedule_id = ?"
+            " ORDER BY started_at DESC LIMIT ?",
+            (schedule_id, limit),
+        )
+
+    # -- plugins ----------------------------------------------------------------------
+
+    def plugin_states(self, uid: str, app_id: str) -> dict[str, bool]:
+        rows = self._query(
+            "SELECT plugin_id, enabled FROM plugin_enable WHERE uid = ? AND app_id = ?",
+            (uid, app_id),
+        )
+        return {str(row["plugin_id"]): bool(row["enabled"]) for row in rows}
+
+    def enabled_plugins(self, uid: str, app_id: str) -> list[str]:
+        return [
+            plugin_id
+            for plugin_id, enabled in self.plugin_states(uid, app_id).items()
+            if enabled
+        ]
+
+    def delete_plugin_enable(self, plugin_id: str) -> None:
+        self._write("DELETE FROM plugin_enable WHERE plugin_id = ?", (plugin_id,))
+
+    def set_plugin_enabled(self, uid: str, app_id: str, plugin_id: str, enabled: bool) -> None:
+        self._write(
+            "INSERT INTO plugin_enable (uid, app_id, plugin_id, enabled, updated_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(uid, app_id, plugin_id)"
+            " DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at",
+            (uid, app_id, plugin_id, 1 if enabled else 0, utcnow()),
+        )
+
+    # -- composition pointers ---------------------------------------------------------
+
+    def remember_composition_session(
+        self, uid: str, workspace: str, app_id: str, mode_id: str, session_file: str
+    ) -> None:
+        if not session_file:
+            return
+        self._write(
+            "INSERT INTO composition_session_pointers"
+            " (uid, workspace, app_id, mode_id, session_file, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(uid, workspace, app_id, mode_id)"
+            " DO UPDATE SET session_file = excluded.session_file,"
+            " updated_at = excluded.updated_at",
+            (uid, workspace, app_id, mode_id, session_file, utcnow()),
+        )
+
+    def recall_composition_session(
+        self, uid: str, workspace: str, app_id: str, mode_id: str
+    ) -> str | None:
+        row = self._one(
+            "SELECT session_file FROM composition_session_pointers"
+            " WHERE uid = ? AND workspace = ? AND app_id = ? AND mode_id = ?",
+            (uid, workspace, app_id, mode_id),
+        )
+        return str(row["session_file"]) if row else None
+
+    # -- skills ----------------------------------------------------------------------
+
+    def skill_prefs(self, uid: str, workspace: str = "default") -> dict[str, bool]:
+        """Explicit skill preferences for one user/workspace.
+
+        Absence means "enabled": a newly discovered skill must not require an
+        allow-list row before it can be used.
+        """
+        rows = self._query(
+            "SELECT name, enabled FROM skill_prefs WHERE uid = ? AND workspace = ?",
+            (uid, workspace),
+        )
+        return {str(row["name"]): bool(row["enabled"]) for row in rows}
+
+    def disabled_skills(self, uid: str, workspace: str = "default") -> list[str]:
+        """Skill names explicitly switched off, for prompt assembly."""
+        return [name for name, enabled in self.skill_prefs(uid, workspace).items() if not enabled]
+
+    def set_skill_pref(self, uid: str, name: str, enabled: bool, workspace: str = "default") -> None:
+        """Record one toggle; the table is keyed by user/workspace/skill."""
+        self._write(
+            "INSERT INTO skill_prefs (uid, workspace, name, enabled, updated_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(uid, workspace, name)"
+            " DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at",
+            (uid, workspace, name, 1 if enabled else 0, utcnow()),
+        )
 
     def usage_summary(self, uid: str, since: str) -> dict[str, Any]:
         """One user's usage since ``since`` — the quota check's input."""

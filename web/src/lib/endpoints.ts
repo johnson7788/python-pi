@@ -9,11 +9,23 @@
  * hook (which would be a cycle: the hook uses the API client for its REST calls).
  */
 
-export function resolveWsUrl(): string {
+export function resolveWsUrl(
+  workspace?: string,
+  appId?: string,
+  modeId?: string,
+): string {
   const configured = import.meta.env.VITE_WS_URL
-  if (typeof configured === 'string' && configured.length > 0) return configured
-  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${scheme}//${window.location.host}/api/ws`
+  const base =
+    typeof configured === 'string' && configured.length > 0
+      ? configured
+      : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/ws`
+  const params = new URLSearchParams()
+  if (workspace) params.set('workspace', workspace)
+  if (appId) params.set('app', appId)
+  if (modeId) params.set('mode', modeId)
+  if (![...params].length) return base
+  const separator = base.includes('?') ? '&' : '?'
+  return `${base}${separator}${params.toString()}`
 }
 
 export function resolveApiBase(): string {

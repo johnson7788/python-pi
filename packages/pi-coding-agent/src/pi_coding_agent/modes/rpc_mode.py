@@ -314,6 +314,16 @@ class RpcMode:
             await self._settle()
         return 0
 
+    async def wait_for_prompt(self) -> None:
+        """Wait for the prompt currently accepted by the controller (if any).
+
+        The socket transport never needs this — it streams events — but a headless caller
+        such as the scheduler must know when the turn is over and the session file exists.
+        """
+        task = self._prompt_task
+        if task is not None:
+            await task
+
     async def _settle(self) -> None:
         if self._prompt_task is not None and not self._prompt_task.done():
             self._prompt_task.cancel()

@@ -22,6 +22,118 @@ const PORT = Number(process.env.MOCK_PORT ?? 8787)
 const AUTOPLAY = process.env.MOCK_AUTOPLAY !== '0'
 const VERSION = '0.1.0-mock'
 const SESSION_FILE = '/tmp/pi-mock/session-mock.jsonl'
+const MOCK_TREE = {
+  '/': [
+    { name: '研究资料', path: '/研究资料', isDir: true, size: 0, modified: 1762000000, hidden: false },
+    { name: '演示文稿', path: '/演示文稿', isDir: true, size: 0, modified: 1762000000, hidden: false },
+    { name: 'notes.md', path: '/notes.md', isDir: false, size: 1280, modified: 1762000000, hidden: false },
+    { name: 'protocol.txt', path: '/protocol.txt', isDir: false, size: 640, modified: 1762000000, hidden: false },
+    { name: 'demo.pptx', path: '/demo.pptx', isDir: false, size: 640000, modified: 1762000000, hidden: false },
+    { name: 'data.csv', path: '/data.csv', isDir: false, size: 320, modified: 1762000000, hidden: false },
+  ],
+  '/研究资料': [
+    { name: 'evidence.md', path: '/研究资料/evidence.md', isDir: false, size: 4200, modified: 1762000000, hidden: false },
+    { name: 'search-notes.md', path: '/研究资料/search-notes.md', isDir: false, size: 2100, modified: 1762000000, hidden: false },
+  ],
+  '/演示文稿': [
+    { name: 'demo.pptx', path: '/演示文稿/demo.pptx', isDir: false, size: 640000, modified: 1762000000, hidden: false },
+  ],
+}
+const MOCK_FILES = {
+  '/notes.md': '# 研究笔记\n\n- 已纳入 12 篇文献\n- 待补充 3 篇全文\n',
+  '/data.csv': 'study,sample,effect\nA,320,0.42\nB,180,0.31\n',
+  '/protocol.txt': 'PICO\nP: 成人 2 型糖尿病\nI: 每周一次 GLP-1\n',
+  '/研究资料/evidence.md': '# 证据表\n\n| 研究 | 样本 | 结论 |\n| --- | --- | --- |\n| A | 320 | 有效 |\n',
+  '/研究资料/search-notes.md': '# 检索记录\n\n检索式：GLP-1 AND T2DM\n',
+}
+let MOCK_NOTIFICATIONS = [
+  {
+    id: 'notif-1', kind: 'schedule_success', title: '定时任务完成：每天早报',
+    body: '已生成新会话', link: '/workbench/scheduled', read: false,
+    createdAt: '2026-11-04T02:00:00+00:00',
+  },
+  {
+    id: 'notif-2', kind: 'schedule_failed', title: '定时任务失败：每 2 小时巡检',
+    body: 'worker is busy with another turn', link: '/workbench/scheduled', read: false,
+    createdAt: '2026-11-03T16:00:00+00:00',
+  },
+]
+let MOCK_SCHEDULES = [
+  {
+    id: 'sched-daily', name: '每天早报', prompt: '汇总昨天的研究进展，生成一份早报。',
+    workspace: 'default', appId: 'general', modeId: 'office', kind: 'daily',
+    runAt: null, hour: 9, minute: 0, weekday: null, intervalMinutes: null,
+    enabled: true, nextRunAt: '2026-11-05T01:00:00+00:00', lastRunAt: '2026-11-04T01:00:00+00:00',
+    lastStatus: 'success', lastError: null, createdAt: '2026-11-01T00:00:00+00:00',
+  },
+  {
+    id: 'sched-interval', name: '每 2 小时巡检', prompt: '检查工作区里有没有新的失败日志。',
+    workspace: 'default', appId: 'general', modeId: 'dev', kind: 'interval',
+    runAt: null, hour: null, minute: null, weekday: null, intervalMinutes: 120,
+    enabled: false, nextRunAt: null, lastRunAt: null, lastStatus: null, lastError: null,
+    createdAt: '2026-11-02T00:00:00+00:00',
+  },
+]
+const MOCK_MARKET = [
+  { kind: 'skill', id: 'evidence-table', name: '证据表', description: '把纳入研究整理成可追溯的证据表。', version: '1.0.0', author: '平台团队', source: '团队', tags: ['研究', '综述'], installed: false, rating: { average: 4.6, count: 12, mine: null } },
+  { kind: 'skill', id: 'meeting-notes', name: '会议纪要', description: '整理结论、决策、待办和风险。', version: '1.0.0', author: '平台团队', source: '团队', tags: ['办公'], installed: true, rating: { average: 4.2, count: 8, mine: 5 } },
+  { kind: 'skill', id: 'weekly-report', name: '周报', description: '按进展、结果、问题、计划生成周报。', version: '1.0.0', author: '社区贡献', source: '社区', tags: ['汇报'], installed: false, rating: { average: 4.0, count: 5, mine: null } },
+  { kind: 'plugin', id: 'hello-pi', name: 'Hello Pi', description: '最小插件示例：注册 hello_plugin 工具。', version: '0.1.0', author: '平台团队', source: '官方示例', tags: ['示例'], installed: false, rating: { average: 4.8, count: 3, mine: null } },
+]
+const MOCK_PLUGINS = [
+  { id: 'hello-pi', name: 'Hello Pi', version: '0.1.0', description: '最小示例：注册一个 hello_plugin 工具。', capabilities: ['tools'], enabled: false },
+  { id: 'literature-tools', name: '文献工具', version: '0.3.1', description: '检索、去重与整理文献的示例工具集。', capabilities: ['tools', 'commands'], enabled: true },
+]
+const MOCK_APPS = [
+  {
+    id: 'general', name: '通用工作台', description: '日常办公、开发与设计任务。', accent: '#3b5fba', builtin: true,
+    modes: [
+      { id: 'office', name: '办公', description: '文档、研究、汇报与日常事务。', skillBinding: 'all', prompt: '你是一名严谨的办公助理，输出结构化、可直接使用。', capsules: [
+        { id: 'ppt', name: '制作 PPT', prompt: '帮我制作一份演示文稿，先给大纲。' },
+        { id: 'research', name: '深度研究', prompt: '对这个主题做一次深度研究。' },
+        { id: 'plan', name: '策划方案', prompt: '帮我策划一个可执行的方案。' },
+        { id: 'job', name: '定时任务', prompt: '帮我设计一个定时任务。' },
+      ]},
+      { id: 'dev', name: '开发', description: '读代码、定位问题、补测试。', skillBinding: 'all', prompt: '你是一名资深工程师，先读代码再改，改动最小。', capsules: [
+        { id: 'map', name: '读仓库结构', prompt: '先梳理仓库结构。' },
+        { id: 'bug', name: '定位 bug', prompt: '根据报错定位根因。' },
+      ]},
+      { id: 'design', name: '设计', description: '界面与视觉方向。', skillBinding: 'all', prompt: '你是一名产品设计师，先讲场景再给方案。', capsules: [
+        { id: 'proto', name: '做原型', prompt: '把这个需求做成 HTML 原型。' },
+        { id: 'palette', name: '配色方案', prompt: '给这个产品定一套浅色配色。' },
+      ]},
+    ],
+  },
+  {
+    id: 'research', name: '研究综述', description: '循证检索、文献筛选、证据表与综述写作。', accent: '#2f7d6b', builtin: true,
+    modes: [
+      { id: 'review', name: '综述', description: '从 PICO 到证据表。', skillBinding: 'all', prompt: '按循证流程工作，每个结论可追溯。', capsules: [
+        { id: 'pico', name: '明确 PICO', prompt: '先把研究问题拆成 PICO。' },
+        { id: 'search', name: '制定检索式', prompt: '为这个 PICO 制定中英文检索式。' },
+        { id: 'evidence', name: '提取证据表', prompt: '把纳入研究整理成证据表。' },
+      ]},
+    ],
+  },
+  {
+    id: 'slides', name: '演示文稿', description: '从大纲到逐页内容与讲稿。', accent: '#b56b2a', builtin: true,
+    modes: [
+      { id: 'deck', name: '制作', description: '先结构，再页面。', skillBinding: 'all', prompt: '先确认受众和时长，再给结构，一页一个观点。', capsules: [
+        { id: 'outline', name: '10 页大纲', prompt: '给这个主题做一份 10 页大纲。' },
+        { id: 'notes', name: '讲稿', prompt: '为这套幻灯片写逐页讲稿。' },
+      ]},
+    ],
+  },
+]
+const MOCK_WORKSPACES = [
+  { id: 'default', name: '默认工作空间', isDefault: true },
+  { id: 'research', name: '研究空间', isDefault: false },
+  { id: 'writing', name: '写作空间', isDefault: false },
+]
+const MOCK_SKILLS = [
+  { name: 'literature-screening', description: '按纳入排除标准筛选研究文献。', enabled: true, disableModelInvocation: false },
+  { name: 'evidence-table', description: '把关键研究整理成可追溯的证据表。', enabled: true, disableModelInvocation: false },
+  { name: 'report-writer', description: '按团队模板生成结构化报告。', enabled: false, disableModelInvocation: false },
+]
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -203,7 +315,7 @@ async function replay(socket, session) {
   try {
     emit({ type: 'agent_start' })
 
-    const userMessage = { role: 'user', content: '请帮我看看 mock 会话', timestamp: Date.now() }
+    const userMessage = { role: 'user', content: session.pendingPrompt || '请帮我看看 mock 会话', timestamp: Date.now() }
     session.messages.push(userMessage)
     emit({ type: 'message_start', message: userMessage })
     emit({ type: 'message_end', message: userMessage })
@@ -499,6 +611,7 @@ async function handleCommand(socket, session, command) {
       return
     case 'prompt':
       // `prompt` acknowledges at preflight; the answer arrives as events.
+      session.pendingPrompt = command.message
       send(socket, ok(id, type, { accepted: true, streamingBehavior: command.streamingBehavior ?? null }))
       if (!session.replaying) void replay(socket, session)
       return
@@ -535,6 +648,155 @@ const server = createServer((request, response) => {
     case '/api/sessions':
       json({ sessions: SESSIONS })
       return
+    case '/api/workspaces':
+      if (request.method === 'GET') {
+        json({ workspaces: MOCK_WORKSPACES, canCreate: true })
+        return
+      }
+      {
+        let raw = ''
+        request.on('data', (chunk) => { raw += chunk })
+        request.on('end', () => {
+          const body = JSON.parse(raw || '{}')
+          const workspace = { id: `ws-${Date.now().toString(36)}`, name: body.name || '新空间', isDefault: false }
+          MOCK_WORKSPACES.push(workspace)
+          json(workspace, 201)
+        })
+      }
+      return
+    case '/api/apps':
+      if (request.method === 'GET') {
+        json({ apps: MOCK_APPS, defaultApp: 'general', defaultMode: 'office', canManage: true })
+        return
+      }
+      {
+        let raw = ''
+        request.on('data', (chunk) => { raw += chunk })
+        request.on('end', () => {
+          const body = JSON.parse(raw || '{}')
+          const app = { ...body, id: `app-${Date.now().toString(36)}`, builtin: false }
+          MOCK_APPS.push(app)
+          json(app, 201)
+        })
+      }
+      return
+    case '/api/plugins':
+      json({ app: url.searchParams.get('app') || 'general', canManage: true, canInstall: true, plugins: MOCK_PLUGINS })
+      return
+    case '/api/market': {
+      const kind = url.searchParams.get('kind') || 'skill'
+      const q = (url.searchParams.get('q') || '').toLowerCase()
+      const tag = url.searchParams.get('tag') || ''
+      const items = MOCK_MARKET.filter((item) => item.kind === kind)
+        .filter((item) => !tag || item.tags.includes(tag))
+        .filter((item) =>
+          !q || item.name.toLowerCase().includes(q) || item.description.toLowerCase().includes(q) || item.tags.some((entry) => entry.toLowerCase().includes(q)))
+      json({ kind, tags: [...new Set(MOCK_MARKET.filter((item) => item.kind === kind).flatMap((item) => item.tags))], canInstall: true, items })
+      return
+    }
+    case '/api/plugins/install':
+      {
+        const plugin = { id: 'uploaded-plugin', name: 'Uploaded Plugin', version: '0.1.0', description: '通过 zip 上传的示例插件。', capabilities: ['tools'], enabled: false }
+        if (!MOCK_PLUGINS.some((item) => item.id === plugin.id)) MOCK_PLUGINS.push(plugin)
+        json({ ...plugin, installed: true }, 201)
+      }
+      return
+    case '/api/feedback':
+      if (request.method === 'GET') { json({ feedback: [] }); return }
+      {
+        let raw = ''
+        request.on('data', (chunk) => { raw += chunk })
+        request.on('end', () => {
+          const body = JSON.parse(raw || '{}')
+          json({ timestamp: body.timestamp, rating: body.rating })
+        })
+      }
+      return
+    case '/api/notifications':
+      json({ notifications: MOCK_NOTIFICATIONS, unread: MOCK_NOTIFICATIONS.filter((item) => !item.read).length })
+      return
+    case '/api/notifications/read-all':
+      MOCK_NOTIFICATIONS = MOCK_NOTIFICATIONS.map((item) => ({ ...item, read: true }))
+      json({ read: true })
+      return
+    case '/api/schedules':
+      if (request.method === 'GET') {
+        json({ schedules: MOCK_SCHEDULES })
+        return
+      }
+      {
+        let raw = ''
+        request.on('data', (chunk) => { raw += chunk })
+        request.on('end', () => {
+          const body = JSON.parse(raw || '{}')
+          const schedule = {
+            id: `sched-${Date.now().toString(36)}`, name: body.name || '新任务', prompt: body.prompt || '',
+            workspace: body.workspace || 'default', appId: body.appId || 'general', modeId: body.modeId || 'office',
+            kind: body.kind || 'interval', runAt: body.runAt || null, hour: body.hour ?? null, minute: body.minute ?? null,
+            weekday: body.weekday ?? null, intervalMinutes: body.intervalMinutes ?? null, enabled: true,
+            nextRunAt: '2026-11-06T01:00:00+00:00', lastRunAt: null, lastStatus: null, lastError: null,
+            createdAt: new Date().toISOString(),
+          }
+          MOCK_SCHEDULES.unshift(schedule)
+          json(schedule, 201)
+        })
+      }
+      return
+    case '/api/artifacts/xlsx':
+      json({ path: url.searchParams.get('path'), sheets: [
+        { name: '证据表', rows: [['研究', '样本', '效应'], ['A', '320', '0.42'], ['B', '180', '0.31']] },
+        { name: '检索记录', rows: [['数据库', '命中'], ['PubMed', '128']] },
+      ] })
+      return
+    case '/api/artifacts/pptx':
+      json({ path: url.searchParams.get('path'), slides: [
+        { number: 1, texts: ['研究综述', 'GLP-1 与 2 型糖尿病'] },
+        { number: 2, texts: ['研究背景', '12 篇纳入研究'] },
+        { number: 3, texts: ['主要结论', '每周一次 GLP-1 有效'] },
+      ] })
+      return
+    case '/api/artifacts':
+      json({ artifacts: [
+        { path: '/notes.md', name: 'notes.md', kind: 'document', extension: 'md', size: 1280, modified: 1762000100, editable: true },
+        { path: '/data.csv', name: 'data.csv', kind: 'sheet', extension: 'csv', size: 320, modified: 1762000050, editable: true },
+        { path: '/研究资料/evidence.md', name: 'evidence.md', kind: 'document', extension: 'md', size: 4200, modified: 1762000000, editable: true },
+        { path: '/demo.pptx', name: 'demo.pptx', kind: 'slides', extension: 'pptx', size: 640000, modified: 1761999900, editable: false },
+        { path: '/evidence.xlsx', name: 'evidence.xlsx', kind: 'sheet', extension: 'xlsx', size: 18000, modified: 1761999800, editable: false },
+      ] })
+      return
+    case '/api/workspace/tree': {
+      const requested = url.searchParams.get('path') || '/'
+      json({ path: requested, entries: MOCK_TREE[requested] || [], truncated: false })
+      return
+    }
+    case '/api/workspace/file': {
+      const requested = url.searchParams.get('path') || '/'
+      if (request.method === 'PUT') {
+        json({ path: requested, size: 0 })
+        return
+      }
+      const text = MOCK_FILES[requested]
+      json({
+        path: requested,
+        name: requested.split('/').pop(),
+        size: text ? text.length : 0,
+        modified: 1762000000,
+        binary: !text,
+        truncated: false,
+        text: text || null,
+      })
+      return
+    }
+    case '/api/workspace/directory':
+      json({ path: '/新目录', created: true })
+      return
+    case '/api/workspace/download':
+      response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+      response.end(MOCK_FILES[url.searchParams.get('path') || ''] || 'mock file\n')
+      return
+    case '/api/skills':
+      json({ workspace: 'default', skills: MOCK_SKILLS })
+      return
     case '/api/state':
       json({
         model: MODELS[0],
@@ -549,8 +811,161 @@ const server = createServer((request, response) => {
         pendingMessageCount: 0,
       })
       return
-    default:
+    default: {
+      const marketDetail = /^\/api\/market\/([^/]+)\/([^/]+)$/.exec(url.pathname)
+      if (marketDetail && request.method === 'GET') {
+        const item = MOCK_MARKET.find((entry) => entry.kind === marketDetail[1] && entry.id === decodeURIComponent(marketDetail[2]))
+        if (!item) { json({ error: 'unknown' }, 404); return }
+        json({ ...item, readme: `# ${item.name}\n\n${item.description}\n\n来源：${item.source} · 作者：${item.author}` })
+        return
+      }
+      const marketRating = /^\/api\/market\/([^/]+)\/([^/]+)\/rating$/.exec(url.pathname)
+      if (marketRating && request.method === 'POST') {
+        let raw = ''
+        request.on('data', (chunk) => { raw += chunk })
+        request.on('end', () => {
+          const score = Number(JSON.parse(raw || '{}').score || 0)
+          const item = MOCK_MARKET.find((entry) => entry.kind === marketRating[1] && entry.id === decodeURIComponent(marketRating[2]))
+          if (!item) { json({ error: 'unknown' }, 404); return }
+          item.rating = { average: score, count: item.rating.count + (item.rating.mine ? 0 : 1), mine: score }
+          json(item.rating)
+        })
+        return
+      }
+      const marketInstall = /^\/api\/market\/([^/]+)\/([^/]+)\/install$/.exec(url.pathname)
+      if (marketInstall && request.method === 'POST') {
+        const item = MOCK_MARKET.find((entry) => entry.id === decodeURIComponent(marketInstall[2]))
+        if (item) item.installed = true
+        json({ id: decodeURIComponent(marketInstall[2]), installed: true })
+        return
+      }
+      const auditMatch = /^\/api\/apps\/([^/]+)\/audit$/.exec(url.pathname)
+      if (auditMatch) {
+        json({ audit: [
+          { id: 'audit-1', action: 'update', actor: '本地用户', createdAt: '2026-11-04T08:00:00+00:00' },
+          { id: 'audit-2', action: 'create', actor: '本地用户', createdAt: '2026-11-01T08:00:00+00:00' },
+        ] })
+        return
+      }
+      const restoreMatch = /^\/api\/apps\/([^/]+)\/restore$/.exec(url.pathname)
+      if (restoreMatch && request.method === 'POST') {
+        const app = MOCK_APPS.find((item) => item.id === decodeURIComponent(restoreMatch[1]))
+        if (!app) { json({ error: 'unknown app' }, 404); return }
+        json(app)
+        return
+      }
+      const appMatch = /^\/api\/apps\/([^/]+)$/.exec(url.pathname)
+      if (appMatch) {
+        const id = decodeURIComponent(appMatch[1])
+        if (request.method === 'PUT') {
+          let raw = ''
+          request.on('data', (chunk) => { raw += chunk })
+          request.on('end', () => {
+            const body = JSON.parse(raw || '{}')
+            const index = MOCK_APPS.findIndex((item) => item.id === id)
+            if (index < 0) { json({ error: 'unknown app' }, 404); return }
+            MOCK_APPS[index] = { ...MOCK_APPS[index], ...body, id, builtin: MOCK_APPS[index].builtin }
+            json(MOCK_APPS[index])
+          })
+          return
+        }
+        if (request.method === 'DELETE') {
+          const index = MOCK_APPS.findIndex((item) => item.id === id)
+          if (index < 0) { json({ error: 'unknown app' }, 404); return }
+          MOCK_APPS.splice(index, 1)
+          json({ deleted: id })
+          return
+        }
+      }
+      if (url.pathname === '/api/apps' && request.method === 'POST') {
+        let raw = ''
+        request.on('data', (chunk) => { raw += chunk })
+        request.on('end', () => {
+          const body = JSON.parse(raw || '{}')
+          const app = { ...body, id: `app-${Date.now().toString(36)}`, builtin: false }
+          MOCK_APPS.push(app)
+          json(app, 201)
+        })
+        return
+      }
+      const notificationMatch = /^\/api\/notifications\/([^/]+)\/read$/.exec(url.pathname)
+      if (notificationMatch && request.method === 'POST') {
+        const id = decodeURIComponent(notificationMatch[1])
+        MOCK_NOTIFICATIONS = MOCK_NOTIFICATIONS.map((item) => item.id === id ? { ...item, read: true } : item)
+        json({ id, read: true })
+        return
+      }
+      const scheduleRunMatch = /^\/api\/schedules\/([^/]+)\/run$/.exec(url.pathname)
+      if (scheduleRunMatch && request.method === 'POST') {
+        json({ accepted: true, id: decodeURIComponent(scheduleRunMatch[1]) }, 202)
+        return
+      }
+      const scheduleRunsMatch = /^\/api\/schedules\/([^/]+)\/runs$/.exec(url.pathname)
+      if (scheduleRunsMatch) {
+        json({ runs: [
+          { id: 'run-1', startedAt: '2026-11-04T01:00:00+00:00', finishedAt: '2026-11-04T01:01:00+00:00', status: 'success', sessionFile: '/tmp/s.jsonl', error: null },
+        ] })
+        return
+      }
+      const scheduleMatch = /^\/api\/schedules\/([^/]+)$/.exec(url.pathname)
+      if (scheduleMatch && request.method === 'PATCH') {
+        let raw = ''
+        request.on('data', (chunk) => { raw += chunk })
+        request.on('end', () => {
+          const body = JSON.parse(raw || '{}')
+          const id = decodeURIComponent(scheduleMatch[1])
+          const schedule = MOCK_SCHEDULES.find((item) => item.id === id)
+          if (!schedule) { json({ error: 'unknown' }, 404); return }
+          schedule.enabled = Boolean(body.enabled)
+          json(schedule)
+        })
+        return
+      }
+      if (scheduleMatch && request.method === 'DELETE') {
+        const id = decodeURIComponent(scheduleMatch[1])
+        MOCK_SCHEDULES = MOCK_SCHEDULES.filter((item) => item.id !== id)
+        json({ deleted: id })
+        return
+      }
+      const pluginDelete = /^\/api\/plugins\/([^/]+)$/.exec(url.pathname)
+      if (pluginDelete && request.method === 'DELETE') {
+        const id = decodeURIComponent(pluginDelete[1])
+        const index = MOCK_PLUGINS.findIndex((item) => item.id === id)
+        if (index < 0) { json({ error: 'unknown plugin' }, 404); return }
+        MOCK_PLUGINS.splice(index, 1)
+        json({ deleted: id })
+        return
+      }
+      const pluginMatch = /^\/api\/plugins\/([^/]+)\/enable$/.exec(url.pathname)
+      if (pluginMatch && request.method === 'PATCH') {
+        let raw = ''
+        request.on('data', (chunk) => { raw += chunk })
+        request.on('end', () => {
+          let enabled = true
+          try { enabled = Boolean(JSON.parse(raw || '{}').enabled) } catch {}
+          const plugin = MOCK_PLUGINS.find((item) => item.id === decodeURIComponent(pluginMatch[1]))
+          if (!plugin) { json({ error: 'unknown plugin' }, 404); return }
+          plugin.enabled = enabled
+          json({ id: plugin.id, enabled, app: url.searchParams.get('app') || 'general' })
+        })
+        return
+      }
+      const match = /^\/api\/skills\/([^/]+)$/.exec(url.pathname)
+      if (match && request.method === 'PATCH') {
+        let raw = ''
+        request.on('data', (chunk) => { raw += chunk })
+        request.on('end', () => {
+          let enabled = true
+          try { enabled = Boolean(JSON.parse(raw || '{}').enabled) } catch {}
+          const skill = MOCK_SKILLS.find((item) => item.name === decodeURIComponent(match[1]))
+          if (!skill) { json({ error: 'unknown skill' }, 404); return }
+          skill.enabled = enabled
+          json({ name: skill.name, enabled })
+        })
+        return
+      }
       json({ error: 'not found', path: url.pathname }, 404)
+    }
   }
 })
 

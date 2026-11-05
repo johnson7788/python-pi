@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工作台功能演示</title>
+<style>
+  body { margin: 0; background: #f5f7fb; color: #121826; font-family: "PingFang SC", -apple-system, "Microsoft YaHei", sans-serif; }
+  header { padding: 28px 32px 10px; }
+  h1 { margin: 0; font-size: 24px; }
+  p { margin: 8px 0 0; color: #666; font-size: 13px; }
+  main { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; padding: 20px 32px 40px; }
+  article { background: #fff; border: 1px solid #e6e6e9; border-radius: 10px; overflow: hidden; }
+  video { display: block; width: 100%; background: #000; aspect-ratio: 16 / 10; }
+  .meta { padding: 10px 12px 12px; }
+  .meta b { font-size: 14px; }
+  .meta span { display: block; margin-top: 3px; color: #666; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>工作台功能演示</h1>
+  <p>逐个视频检查；无声，顶部字幕说明当前操作。真实后端测试：666 passed。</p>
+</header>
+<main>
+  <article><video controls preload="metadata" src="01-home-chat.mp4"></video><div class="meta"><b>01 首页与会话</b><span>模式/胶囊、发送、流式回复、工具、反馈</span></div></article>
+  <article><video controls preload="metadata" src="02-workspaces.mp4"></video><div class="meta"><b>02 工作空间</b><span>切换与新建空间</span></div></article>
+  <article><video controls preload="metadata" src="03-skills.mp4"></video><div class="meta"><b>03 技能管理</b><span>已安装技能、启停</span></div></article>
+  <article><video controls preload="metadata" src="04-skill-market.mp4"></video><div class="meta"><b>04 技能市场</b><span>搜索、详情、评分、安装</span></div></article>
+  <article><video controls preload="metadata" src="05-app-editor.mp4"></video><div class="meta"><b>05 应用编辑</b><span>模式提示词、技能绑定、胶囊</span></div></article>
+  <article><video controls preload="metadata" src="06-app-audit.mp4"></video><div class="meta"><b>06 应用审计</b><span>变更记录、恢复默认</span></div></article>
+  <article><video controls preload="metadata" src="07-plugins.mp4"></video><div class="meta"><b>07 插件管理</b><span>启停、卸载</span></div></article>
+  <article><video controls preload="metadata" src="08-plugin-market.mp4"></video><div class="meta"><b>08 插件市场</b><span>详情、评分</span></div></article>
+  <article><video controls preload="metadata" src="09-library.mp4"></video><div class="meta"><b>09 资料库</b><span>目录与预览</span></div></article>
+  <article><video controls preload="metadata" src="10-artifacts-table.mp4"></video><div class="meta"><b>10 产物：文本与表格</b><span>CSV 编辑、Markdown 预览</span></div></article>
+  <article><video controls preload="metadata" src="11-artifacts-office.mp4"></video><div class="meta"><b>11 产物：PPT 与 Excel</b><span>PPTX 文本、XLSX 工作表</span></div></article>
+  <article><video controls preload="metadata" src="12-schedules-notify.mp4"></video><div class="meta"><b>12 定时任务与通知</b><span>创建、历史、通知</span></div></article>
+  <article><video controls preload="metadata" src="13-feedback.mp4"></video><div class="meta"><b>13 消息反馈</b><span>👍 / 👎</span></div></article>
+  <article><video controls preload="metadata" src="14-plugin-upload.mp4"></video><div class="meta"><b>14 插件上传安装</b><span>管理员 zip 安装</span></div></article>
+  <article><video controls preload="metadata" src="15-app-create.mp4"></video><div class="meta"><b>15 新建应用</b><span>创建自定义应用</span></div></article>
+  <article><video controls preload="metadata" src="16-schedule-run.mp4"></video><div class="meta"><b>16 立即运行与历史</b><span>手动触发、历史</span></div></article>
+  <article><video controls preload="metadata" src="17-home-modes.mp4"></video><div class="meta"><b>17 工作模式</b><span>办公/开发/设计</span></div></article>
+  <article><video controls preload="metadata" src="18-real-model.mp4"></video><div class="meta"><b>18 真实模型</b><span>LiteLLM / deepseek-v4-flash</span></div></article>
+  <article><video controls preload="metadata" src="19-collapse-sections.mp4"></video><div class="meta"><b>19 任务/空间折叠</b><span>点击标题收起/展开</span></div></article>
+</main>
+</body>
+</html>

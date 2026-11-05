@@ -148,6 +148,10 @@ class ServerConfig:
         return os.path.join(self.data_root, "workspaces")
 
     @property
+    def plugin_root(self) -> str:
+        return os.path.join(self.data_root, "plugins")
+
+    @property
     def agent_root(self) -> str:
         return os.path.join(self.data_root, "agents")
 
@@ -162,6 +166,23 @@ class ServerConfig:
     def agent_dir(self, uid: str) -> str:
         """Per-user replacement for ``~/.pi/agent`` (sessions, settings, models)."""
         return os.path.join(self.agent_root, _checked_uid(uid))
+
+    def workspace_path(self, uid: str, workspace_id: str) -> str:
+        """The directory backing one named workspace.
+
+        ``default`` keeps the historical per-user root, so existing files and sessions
+        stay where they are.  Named workspaces are siblings under the same root, never
+        children of the default workspace (which would leak them into its file tree).
+        """
+        owner = _checked_uid(uid)
+        if workspace_id == "default":
+            return self.workspace_dir(uid)
+        return os.path.join(self.workspace_root, f"{owner}-{_checked_workspace_id(workspace_id)}")
+
+    def ensure_workspace_path(self, uid: str, workspace_id: str) -> str:
+        path = self.workspace_path(uid, workspace_id)
+        os.makedirs(path, exist_ok=True)
+        return path
 
     # -- behaviour -------------------------------------------------------------------
 
@@ -251,6 +272,16 @@ def _checked_uid(uid: str) -> str:
     if not isinstance(uid, str) or not _UID_PATTERN.match(uid):
         raise ValueError(f"unsafe uid: {uid!r}")
     return uid
+
+_WORKSPACE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
+
+
+def _checked_workspace_id(workspace_id: str) -> str:
+    """Workspace ids are path segments; reject anything that could escape the root."""
+    if not _WORKSPACE_ID.match(workspace_id):
+        raise ValueError(f"invalid workspace id: {workspace_id!r}")
+    return workspace_id
+
 
 
 __all__ = [

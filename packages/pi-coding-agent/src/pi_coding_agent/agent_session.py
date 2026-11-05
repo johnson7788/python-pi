@@ -415,6 +415,7 @@ class AgentSession:
         extension_runner: Any = None,
         scrub_shell_env: bool = False,
         sandbox_backend: Any = None,
+        extra_system_prompt: str = "",
     ) -> None:
         self._model = model
         self._cwd = cwd
@@ -424,6 +425,7 @@ class AgentSession:
         self._auth_storage = auth_storage
         self._stream_fn = stream_fn
         self._extension_runner = extension_runner
+        self._extra_system_prompt = extra_system_prompt
         self._active_tool_names = (
             list(active_tool_names) if active_tool_names is not None else list(DEFAULT_ACTIVE_TOOL_NAMES)
         )
@@ -1070,6 +1072,18 @@ class AgentSession:
         self._base_system_prompt = self._build_system_prompt()
         self._agent.state.system_prompt = self._base_system_prompt
 
+    def set_disabled_skills(self, names: Sequence[str]) -> None:
+        """Apply a skill enable/disable set to the live session's next request.
+
+        The loader filters on read, so this only needs a prompt rebuild — the
+        conversation, tool set and session file are untouched.
+        """
+        if self._resource_loader is None:
+            return
+        self._resource_loader.set_disabled_skills(names)
+        self._base_system_prompt = self._build_system_prompt()
+        self._agent.state.system_prompt = self._base_system_prompt
+
     def get_commands(self) -> list[dict[str, Any]]:
         """Prompt templates, skills and extension commands, in that order."""
         commands: list[dict[str, Any]] = []
@@ -1450,7 +1464,10 @@ class AgentSession:
             context_files=loader.context_files() if loader is not None else None,
             skills=loader.skills() if loader is not None else None,
         )
-        return build_system_prompt(options)
+        prompt = build_system_prompt(options)
+        if self._extra_system_prompt:
+            prompt += f"\n\n{self._extra_system_prompt}"
+        return prompt
 
 
 __all__ = [

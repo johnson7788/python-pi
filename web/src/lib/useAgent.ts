@@ -143,6 +143,7 @@ type Action =
   | { type: 'dismiss_dialog'; id: string }
   | { type: 'local_error'; id: string; source: string; message: string }
   | { type: 'reset_session' }
+  | { type: 'workspace_changed' }
   | { type: 'optimistic_model'; model: ModelInfo }
   | { type: 'optimistic_thinking'; level: string }
 
@@ -770,6 +771,15 @@ function reducer(state: AgentStore, action: Action): AgentStore {
       return { ...state, dialogs: state.dialogs.filter((dialog) => dialog.id !== action.id) }
     case 'local_error':
       return pushError(state, action.source, action.message)
+    case 'workspace_changed':
+      // A different workspace is a different agent; keep the transport status but
+      // drop everything that belonged to the old one.
+      return {
+        ...INITIAL_STORE,
+        connection: state.connection,
+        hasConnected: state.hasConnected,
+        serverVersion: state.serverVersion,
+      }
     case 'reset_session':
       return {
         ...state,
@@ -861,12 +871,23 @@ export interface UseAgentOptions {
    * that is certain to be refused.
    */
   enabled?: boolean
+  /** Workspace id to bind the socket and session list to. */
+  workspace?: string
+  /** App/mode composition to bind the worker to. */
+  appId?: string
+  modeId?: string
   /** Called when the server reports the session is gone (HTTP 401 or socket close 4401). */
   onUnauthorized?: () => void
 }
 
 export function useAgent(options: UseAgentOptions = {}): AgentApi {
-  const { enabled = true } = options
+  const { enabled = true, workspace = 'default', appId = 'general', modeId = 'office' } = options
+  const workspaceRef = useRef(workspace)
+  const appRef = useRef(appId)
+  const modeRef = useRef(modeId)
+  workspaceRef.current = workspace
+  appRef.current = appId
+  modeRef.current = modeId
   const [store, dispatch] = useReducer(reducer, INITIAL_STORE)
   const socketRef = useRef<WebSocket | null>(null)
   const retryTimerRef = useRef<number | null>(null)
@@ -895,7 +916,12 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
 
   const loadSessions = useCallback(async () => {
     try {
-      const response = await fetch(`${resolveApiBase()}/api/sessions`, { credentials: 'same-origin' })
+      const response = await fetch(
+        `${resolveApiBase()}/api/sessions?workspace=${encodeURIComponent(
+          workspaceRef.current,
+        )}&app=${encodeURIComponent(appRef.current)}&mode=${encodeURIComponent(modeRef.current)}`,
+        { credentials: 'same-origin' },
+      )
       if (response.status === 401) {
         unauthorizedRef.current?.()
         return
@@ -928,7 +954,7 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
 
     dispatchRef.current({ type: 'connection', status: attemptRef.current === 0 ? 'connecting' : 'reconnecting' })
 
-    const socket = new WebSocket(resolveWsUrl())
+    const socket = new WebSocket(resolveWsUrl(workspaceRef.current, appRef.current, modeRef.current))
     socketRef.current = socket
 
     socket.onopen = () => {
@@ -994,6 +1020,7 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
   useEffect(() => {
     if (!enabled) return
     closedByUsRef.current = false
+    dispatchRef.current({ type: 'workspace_changed' })
     connect()
     return () => {
       closedByUsRef.current = true
@@ -1001,7 +1028,7 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
       socketRef.current?.close()
       socketRef.current = null
     }
-  }, [connect, enabled])
+  }, [connect, enabled, workspace, appId, modeId])
 
   // Sessions and health are cheap; polling them keeps the sidebar honest when a
   // session is created by another client.

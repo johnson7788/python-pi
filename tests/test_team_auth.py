@@ -440,7 +440,7 @@ def test_idle_eviction_skips_busy_and_recent_workers(tmp_path):
     busy._controller = FakeController()  # type: ignore[assignment]
     recent = SessionWorker("recent", BootstrapOptions(cwd=str(tmp_path)))
 
-    registry._workers.update({"stale": stale, "busy": busy, "recent": recent})
+    registry._workers.update({("stale", "default", "general", "office"): stale, ("busy", "default", "general", "office"): busy, ("recent", "default", "general", "office"): recent})
     assert asyncio.run(registry.evict_idle()) == 1
     assert registry.worker("stale") is None
     assert registry.worker("busy") is not None  # a running turn is never interrupted
@@ -452,7 +452,7 @@ def test_the_worker_cap_is_enforced(tmp_path):
         data_root=str(tmp_path), auth_mode="team", max_active_users=1, session_idle_minutes=0
     )
     registry = SessionRegistry(BootstrapOptions(cwd=str(tmp_path)), config)
-    registry._workers["someone"] = SessionWorker("someone", BootstrapOptions(cwd=str(tmp_path)))
+    registry._workers[("someone", "default", "general", "office")] = SessionWorker("someone", BootstrapOptions(cwd=str(tmp_path)))
 
     with pytest.raises(CapacityError):
         asyncio.run(registry.acquire("another"))
@@ -463,7 +463,11 @@ def test_single_mode_passes_the_command_line_through(tmp_path):
     config = ServerConfig(data_root=str(tmp_path), auth_mode="single")
     base = BootstrapOptions(cwd="/tmp/somewhere", agent_dir="/tmp/agent")
     registry = SessionRegistry(base, config)
-    assert registry.options_for("local") is base
+    options = registry.options_for("local")
+    assert options.cwd == base.cwd
+    assert options.agent_dir == base.agent_dir
+    # Composition is additive: the command-line paths are untouched, the app prompt is added.
+    assert options.app_prompt
 
 
 def test_team_mode_scrubs_the_shell_environment(tmp_path):

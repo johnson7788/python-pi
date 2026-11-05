@@ -331,6 +331,9 @@ class ResourceLoader:
         project_trusted: bool = False,
         *,
         skills_enabled: bool = True,
+        disabled_skills: Iterable[str] = (),
+        include_home_skills: bool = True,
+        skill_allowlist: Iterable[str] | None = None,
     ) -> None:
         self._cwd = os.path.abspath(os.path.expanduser(cwd))
         self._agent_dir = (
@@ -343,6 +346,17 @@ class ResourceLoader:
         #: thousands of characters to *every* system prompt, so it needs an off
         #: switch that does not require editing anyone's settings.
         self._skills_enabled = bool(skills_enabled)
+        #: Skill names the deployment/user has switched off.  Filtering happens on
+        #: read so a preference change does not require a full discovery pass.
+        self._disabled_skills = {str(name) for name in disabled_skills}
+        #: A team deployment sets this false: the server operator's ``~/.agents/skills``
+        #: is not the tenant's shared catalog (that is ``<agent_dir>/skills``, seeded
+        #: from the deployment template and shared by symlink).
+        self._include_home_skills = bool(include_home_skills)
+        #: ``None`` means "every discovered skill"; a set is an app/mode binding.
+        self._skill_allowlist = (
+            None if skill_allowlist is None else {str(name) for name in skill_allowlist}
+        )
         self._config_dir_name = find_config_dir(self._cwd)
         self._snapshot = _LoadedResources()
         self.load()
@@ -378,8 +392,21 @@ class ResourceLoader:
         return list(self._snapshot.context_files)
 
     def skills(self) -> list[Skill]:
-        """Discovered skills, in discovery precedence order."""
-        return list(self._snapshot.skills)
+        """Discovered skills, in discovery precedence order, minus disabled/unbound names."""
+        return [
+            skill
+            for skill in self._snapshot.skills
+            if skill.name not in self._disabled_skills
+            and (self._skill_allowlist is None or skill.name in self._skill_allowlist)
+        ]
+
+    def set_disabled_skills(self, names: Iterable[str]) -> None:
+        """Replace the disabled-skill set.  No discovery pass is needed."""
+        self._disabled_skills = {str(name) for name in names}
+
+    def set_skill_allowlist(self, names: Iterable[str] | None) -> None:
+        """Replace the app/mode skill binding; ``None`` restores all skills."""
+        self._skill_allowlist = None if names is None else {str(name) for name in names}
 
     def prompt_templates(self) -> list[PromptTemplate]:
         """Discovered ``*.md`` prompt templates."""
@@ -457,7 +484,8 @@ class ResourceLoader:
         home = os.path.abspath(os.path.expanduser("~"))
 
         # User-level Agent Skills convention: always trusted, never gated.
-        dirs.append(os.path.join(home, ".agents", "skills"))
+        if self._include_home_skills:
+            dirs.append(os.path.join(home, ".agents", "skills"))
         dirs.append(os.path.join(self._agent_dir, "skills"))
 
         if self._project_trusted:

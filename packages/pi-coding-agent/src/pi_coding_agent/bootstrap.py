@@ -42,6 +42,20 @@ class BootstrapOptions:
     extension_paths: Sequence[str] = ()
     no_extensions: bool = False
     no_skills: bool = False
+    #: Skill names excluded from this session's prompt.  The team server stores this
+    #: per user and passes it in; a personal install leaves it empty.
+    disabled_skills: Sequence[str] = ()
+    #: Whether the process user's ``~/.agents/skills`` participates.  A team server
+    #: turns this off so one tenant's skill catalog is the deployment template, not the
+    #: operator's personal machine-wide directory.
+    include_home_skills: bool = True
+    #: App/mode composition: appended to the built prompt, never replacing it.
+    app_prompt: str = ""
+    #: App/mode skill binding; ``None`` means every discovered skill.
+    app_skills: Sequence[str] | None = None
+    #: Entry paths of installed plugins enabled for this tenant/app.  They load through
+    #: the extension runner but only for the worker that was created with them.
+    plugin_paths: Sequence[str] = ()
     #: Extension files that load even when user extensions are disabled.  This is how a
     #: shared deployment keeps its own governance extension (*only* that one) while
     #: refusing per-user extension code, which would run with the process's full
@@ -115,7 +129,9 @@ class Bootstrapped:
 # --------------------------------------------------------------------------------------
 
 
-def resolve_project_trust(cwd: str, agent_dir: str, settings: SettingsManager) -> bool:
+def resolve_project_trust(
+    cwd: str, agent_dir: str, settings: SettingsManager, *, quiet: bool = False
+) -> bool:
     """Decide project trust without a UI.
 
     An explicit stored decision wins; otherwise ``defaultProjectTrust`` decides.
@@ -135,11 +151,12 @@ def resolve_project_trust(cwd: str, agent_dir: str, settings: SettingsManager) -
         return True
     if default == "never":
         return False
-    print(
-        f"pi-py: project {canonical} is untrusted and trust cannot be requested "
-        "non-interactively; project-local resources are disabled.",
-        file=sys.stderr,
-    )
+    if not quiet:
+        print(
+            f"pi-py: project {canonical} is untrusted and trust cannot be requested "
+            "non-interactively; project-local resources are disabled.",
+            file=sys.stderr,
+        )
     return False
 
 
@@ -299,7 +316,13 @@ async def bootstrap(
     trusted = resolve_project_trust(cwd, effective_agent_dir, settings)
     settings.set_project_trusted(trusted)
     loader = ResourceLoader(
-        cwd, effective_agent_dir, project_trusted=trusted, skills_enabled=not options.no_skills
+        cwd,
+        effective_agent_dir,
+        project_trusted=trusted,
+        skills_enabled=not options.no_skills,
+        disabled_skills=options.disabled_skills,
+        include_home_skills=options.include_home_skills,
+        skill_allowlist=options.app_skills,
     )
 
     def _warn(message: str) -> None:
@@ -315,7 +338,7 @@ async def bootstrap(
         extra_paths=tuple(options.extension_paths),
         unknown_flags=tuple(options.unknown_flags),
         disabled=options.no_extensions,
-        builtin_paths=tuple(options.builtin_extension_paths),
+        builtin_paths=tuple(options.builtin_extension_paths) + tuple(options.plugin_paths),
         on_diagnostic=_warn,
     )
 
@@ -375,6 +398,7 @@ async def bootstrap(
             extension_runner=extension_runner,
             scrub_shell_env=options.scrub_shell_env,
             sandbox_backend=options.sandbox_backend,
+            extra_system_prompt=options.app_prompt,
         )
         subagent_manager.attach(session, depth=depth)
         return session
@@ -396,6 +420,7 @@ async def bootstrap(
             extension_runner=extension_runner,
             scrub_shell_env=options.scrub_shell_env,
             sandbox_backend=options.sandbox_backend,
+            extra_system_prompt=options.app_prompt,
         )
 
     subagent_manager.set_child_factory(child_session_factory)

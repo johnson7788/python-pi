@@ -1,0 +1,14 @@
+{
+  "id": "hello-pi",
+  "name": "Hello Pi",
+  "version": "0.1.0",
+  "apiVersion": "1",
+  "entry": "main.py",
+  "description": "最小示例：注册一个 hello_plugin 工具。",
+  "capabilities": ["tools"],
+  "permissions": {
+    "tools": [],
+    "filesystem": "none",
+    "network": false
+  }
+}
