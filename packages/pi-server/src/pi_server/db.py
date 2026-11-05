@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 import threading
 import uuid
 from contextlib import contextmanager
@@ -284,6 +285,16 @@ CREATE TABLE market_ratings (
 );
 """
 
+_SCHEMA_V13 = """
+CREATE TABLE office_locks (
+  doc_id     TEXT PRIMARY KEY,
+  uid        TEXT NOT NULL,
+  token      TEXT NOT NULL,
+  expires_at REAL NOT NULL,
+  updated_at TEXT NOT NULL
+);
+"""
+
 _SCHEMA_V12 = """
 CREATE TABLE feedback (
   id                TEXT PRIMARY KEY,
@@ -312,6 +323,7 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (10, _SCHEMA_V10),
     (11, _SCHEMA_V11),
     (12, _SCHEMA_V12),
+    (13, _SCHEMA_V13),
 )
 
 
@@ -861,6 +873,34 @@ class Database:
         except (TypeError, json.JSONDecodeError):
             skills = None
         return str(row["prompt"]), None if skills is None else tuple(str(item) for item in skills)
+
+    # -- office editor locks ----------------------------------------------------------
+
+    def office_lock(self, doc_id: str) -> sqlite3.Row | None:
+        return self._one("SELECT * FROM office_locks WHERE doc_id = ?", (doc_id,))
+
+    def acquire_office_lock(self, doc_id: str, uid: str, token: str, ttl_seconds: int = 120) -> sqlite3.Row:
+        """Return the active lock; only replace it when free/expired/owned by uid."""
+        now = time.time()
+        with self.atomic() as conn:
+            row = conn.execute("SELECT * FROM office_locks WHERE doc_id = ?", (doc_id,)).fetchone()
+            if row is not None and float(row["expires_at"]) > now and str(row["uid"]) != uid:
+                return row
+            conn.execute(
+                "INSERT INTO office_locks (doc_id, uid, token, expires_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?)"
+                " ON CONFLICT(doc_id) DO UPDATE SET uid=excluded.uid, token=excluded.token,"
+                " expires_at=excluded.expires_at, updated_at=excluded.updated_at",
+                (doc_id, uid, token, now + ttl_seconds, utcnow()),
+            )
+            return conn.execute("SELECT * FROM office_locks WHERE doc_id = ?", (doc_id,)).fetchone()
+
+    def release_office_lock(self, doc_id: str, token: str) -> bool:
+        with self.atomic() as conn:
+            cursor = conn.execute(
+                "DELETE FROM office_locks WHERE doc_id = ? AND token = ?", (doc_id, token)
+            )
+            return cursor.rowcount > 0
 
     # -- message feedback -------------------------------------------------------------
 

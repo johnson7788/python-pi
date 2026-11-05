@@ -1092,6 +1092,171 @@ interface SheetPreviewRow {
   rows: string[][]
 }
 
+function officeDocId(workspace: string, path: string): string {
+  const bytes = new TextEncoder().encode(JSON.stringify({ w: workspace, p: path }))
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+function OfficeEditor({
+  workspaceId,
+  path,
+  onClose,
+  onSaved,
+}: {
+  workspaceId: string
+  path: string
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const docId = officeDocId(workspaceId, path)
+  const [phase, setPhase] = useState<'locking' | 'ready' | 'locked' | 'error'>('locking')
+  const [message, setMessage] = useState('')
+  const [saved, setSaved] = useState(false)
+  const [versions, setVersions] = useState<{ id: string; size: number; created: number }[] | null>(null)
+  const [showVersions, setShowVersions] = useState(false)
+  const [nonce, setNonce] = useState(0)
+  const tokenRef = useRef('')
+
+  useEffect(() => {
+    let cancelled = false
+    let heartbeat = 0
+    const release = () => {
+      if (!tokenRef.current) return
+      void fetch(`/api/office/documents/${docId}/lock`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: { 'X-Office-Token': tokenRef.current },
+      })
+      tokenRef.current = ''
+    }
+    const lock = async () => {
+      const response = await fetch(`/api/office/documents/${docId}/lock`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      })
+      if (cancelled) return
+      if (response.status === 409) {
+        setPhase('locked')
+        setMessage('这份文档正在被另一位用户编辑。请稍后重试，或让管理员接管。')
+        return
+      }
+      if (!response.ok) {
+        setPhase('error')
+        setMessage(`无法获取编辑锁（HTTP ${response.status}）。`)
+        return
+      }
+      const data = (await response.json()) as { token: string }
+      tokenRef.current = data.token
+      setPhase('ready')
+      heartbeat = window.setInterval(async () => {
+        const response = await fetch(`/api/office/documents/${docId}/lock`, {
+          method: 'POST',
+          credentials: 'same-origin',
+        })
+        if (response.status === 409) {
+          setPhase('locked')
+          setMessage('编辑锁已过期或被接管，请重新打开。')
+        } else if (response.ok) {
+          tokenRef.current = ((await response.json()) as { token: string }).token
+        }
+      }, 60_000)
+    }
+    void lock()
+    return () => {
+      cancelled = true
+      window.clearInterval(heartbeat)
+      release()
+    }
+  }, [docId])
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return
+      if (event.data?.type === 'office:saved') {
+        setSaved(true)
+        onSaved()
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [onSaved])
+
+  const loadVersions = async () => {
+    const response = await fetch(`/api/office/documents/${docId}/versions`, { credentials: 'same-origin' })
+    if (!response.ok) return
+    setVersions(((await response.json()) as { versions: { id: string; size: number; created: number }[] }).versions)
+    setShowVersions(true)
+  }
+
+  const restore = async (version: string) => {
+    const response = await fetch(`/api/office/documents/${docId}/versions/${encodeURIComponent(version)}/restore`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'X-Office-Token': tokenRef.current },
+    })
+    if (!response.ok) {
+      setMessage(`恢复失败（HTTP ${response.status}）。`)
+      return
+    }
+    setShowVersions(false)
+    setVersions(null)
+    setNonce((value) => value + 1)
+    setSaved(false)
+    onSaved()
+  }
+
+  return (
+    <div className="wb-office-editor">
+      <header>
+        <b>在线编辑</b>
+        {phase === 'ready' && saved ? <span>已保存</span> : null}
+        {phase === 'ready' ? (
+          <button type="button" className="wb-link" onClick={() => void loadVersions()}>
+            版本
+          </button>
+        ) : null}
+        <button type="button" className="wb-button" onClick={onClose}>关闭</button>
+      </header>
+      {phase === 'ready' ? (
+        <iframe
+          key={nonce}
+          title="Office editor"
+          src={`/office/?embed=1&doc=${encodeURIComponent(docId)}`}
+          sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-modals"
+        />
+      ) : (
+        <div className="wb-office-status">
+          <p>{phase === 'locking' ? '正在获取编辑锁…' : message}</p>
+          {phase !== 'locking' ? <button type="button" className="wb-button" onClick={onClose}>关闭</button> : null}
+        </div>
+      )}
+      {showVersions ? (
+        <div className="wb-office-versions">
+          <header>
+            <b>历史版本</b>
+            <button type="button" className="wb-link" onClick={() => setShowVersions(false)}>收起</button>
+          </header>
+          {versions?.length ? (
+            <ul>
+              {versions.map((version) => (
+                <li key={version.id}>
+                  <span>{new Date(version.created * 1000).toLocaleString()}</span>
+                  <small>{(version.size / 1024).toFixed(0)} KB</small>
+                  <button type="button" className="wb-link" onClick={() => void restore(version.id)}>恢复</button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="wb-muted">还没有历史版本；保存一次后会在这里出现。</p>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function ArtifactPane({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }) {
   const [items, setItems] = useState<ArtifactRow[] | null>(null)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
@@ -1105,6 +1270,7 @@ function ArtifactPane({ workspaceId, onClose }: { workspaceId: string; onClose: 
   const [markdownMode, setMarkdownMode] = useState(false)
   const [slides, setSlides] = useState<SlidePreviewRow[] | null>(null)
   const [sheets, setSheets] = useState<SheetPreviewRow[] | null>(null)
+  const [officePath, setOfficePath] = useState<string | null>(null)
   const [activeSheet, setActiveSheet] = useState(0)
 
   const load = () => {
@@ -1422,7 +1588,16 @@ function ArtifactPane({ workspaceId, onClose }: { workspaceId: string; onClose: 
             </div>
           ) : (
             <div className="wb-artifact-binary">
-              <p className="wb-muted">这个产物暂不支持在线预览，可下载后用对应工具打开。</p>
+              <p className="wb-muted">
+                {selected.extension === 'docx'
+                  ? 'Word 文档可以在线编辑；保存会写回当前工作空间。'
+                  : '这个产物暂不支持在线预览，可下载后用对应工具打开。'}
+              </p>
+              {selected.extension === 'docx' ? (
+                <button type="button" className="wb-button" onClick={() => setOfficePath(selected.path)}>
+                  在线编辑
+                </button>
+              ) : null}
               <a className="wb-button" href={download}>下载文件</a>
             </div>
           )}
@@ -1440,6 +1615,14 @@ function ArtifactPane({ workspaceId, onClose }: { workspaceId: string; onClose: 
           <p className="wb-muted">选择一个产物查看。</p>
         </div>
       )}
+      {officePath ? (
+        <OfficeEditor
+          workspaceId={workspaceId}
+          path={officePath}
+          onClose={() => setOfficePath(null)}
+          onSaved={load}
+        />
+      ) : null}
     </aside>
   )
 }

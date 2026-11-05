@@ -33,3 +33,10 @@ logs/
 .DS_Store
 .idea/
 .vscode/
+
+# Local agent dirs / secrets
+.local/
+
+# office build artifacts / local deps
+office/node_modules
+office-dist/

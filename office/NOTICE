@@ -1,0 +1,25 @@
+pi-office
+=========
+
+This directory is a trimmed fork of the docs editor from AIOffice
+(https://github.com/AIOffice, reference checkout at /Users/admin/git/AIOffice),
+licensed under the Apache License, Version 2.0.
+
+Upstream modules reused:
+- frontend/apps/docs/src/renderer
+- frontend/apps/docs/src/shared
+- frontend/packages/docx-engine
+- frontend/packages/pptx-engine
+- frontend/packages/pptx-render
+- frontend/packages/agent-core
+- frontend/packages/project-store
+- frontend/packages/ui
+- frontend/packages/i18n
+
+Modifications for python-pi:
+- added embed entry (query: embed=1&doc=<opaque-id>)
+- replaced document/auth adapter with /api/office
+- disabled the AI panel in embed mode
+- flattened the workspace build (Vite aliases to vendored packages)
+
+The original copyright notices remain in the source files.

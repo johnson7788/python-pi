@@ -34,6 +34,7 @@ import re
 import shutil
 import time
 import tempfile
+import secrets
 import uuid
 import zipfile
 from xml.etree import ElementTree
@@ -43,7 +44,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -57,6 +58,7 @@ from pi_coding_agent.session_manager import SessionManager
 
 from . import apps as app_catalog
 from . import market as market_catalog
+from . import office as office_store
 from . import plugins as plugin_catalog
 from . import schedules as schedule_catalog
 from . import auth
@@ -2159,6 +2161,140 @@ def create_app(
             ]
         }
 
+    # -- office editor ----------------------------------------------------------------
+
+    def office_target(request: Request, doc_id: str, *, must_exist: bool = True) -> tuple[str, Any, str]:
+        try:
+            ref = office_store.decode_doc_id(doc_id)
+        except office_store.OfficeIdError as error:
+            raise HTTPException(status_code=400, detail={"error": str(error)}) from None
+        if database is None:
+            user_uid = LOCAL_UID
+            resolve_workspace(LOCAL_UID, ref.workspace)
+            root = options.cwd
+        else:
+            user = auth.current_user(request)
+            if user is None:
+                raise auth.reject_unauthenticated()
+            user_uid = user.uid
+            workspace = resolve_workspace(user.uid, ref.workspace)
+            root = str(workspace_row(user.uid, workspace)["path"])
+        workspace_obj = Workspace(root, create=False)
+        try:
+            path = workspace_obj.path_for(ref.path, must_exist=must_exist)
+        except Exception as error:  # noqa: BLE001 - workspace errors are handled by the app
+            raise HTTPException(status_code=404, detail={"error": str(error)}) from None
+        return path, ref, root
+
+    @app.get("/api/office/documents/{doc_id}")
+    async def office_metadata(doc_id: str, request: Request) -> dict[str, Any]:
+        path, ref, _root = office_target(request, doc_id)
+        stat = os.stat(path)
+        return {
+            "id": doc_id,
+            "name": os.path.basename(path),
+            "path": ref.path,
+            "size": stat.st_size,
+            "modified": stat.st_mtime,
+            "sha": office_store.sha256_file(path),
+        }
+
+    @app.get("/api/office/documents/{doc_id}/blob")
+    async def office_blob(doc_id: str, request: Request) -> Response:
+        path, _ref, _root = office_target(request, doc_id)
+        with open(path, "rb") as handle:
+            data = handle.read()
+        return Response(content=data, media_type="application/octet-stream")
+
+    @app.put("/api/office/documents/{doc_id}/blob")
+    async def office_save(doc_id: str, request: Request) -> dict[str, Any]:
+        path, ref, root = office_target(request, doc_id, must_exist=False)
+        if database is not None:
+            lock = database.office_lock(doc_id)
+            supplied = (request.headers.get("x-office-token") or "").strip()
+            if lock is not None and float(lock["expires_at"]) > time.time():
+                if lock["token"] != supplied:
+                    raise HTTPException(status_code=409, detail={"error": "document is locked"})
+        data = await request.body()
+        if not data or len(data) > office_store.MAX_OFFICE_BYTES:
+            raise HTTPException(status_code=413, detail={"error": "office file must be 1 byte - 50 MB"})
+        if os.path.exists(path):
+            current = office_store.sha256_file(path)
+            expected = (request.headers.get("if-match") or "").strip().strip('"')
+            if expected and expected != current:
+                raise HTTPException(status_code=409, detail={"error": "document changed on disk"})
+            office_store.backup_version(root, doc_id, path)
+        office_store.atomic_write(path, data)
+        return {
+            "id": doc_id,
+            "path": ref.path,
+            "size": len(data),
+            "sha": office_store.sha256_file(path),
+        }
+
+    @app.post("/api/office/documents/{doc_id}/lock")
+    async def office_lock(doc_id: str, request: Request) -> dict[str, Any]:
+        path, _ref, _root = office_target(request, doc_id)
+        if database is None:
+            return {"token": "single", "expiresAt": time.time() + 3600, "owner": "single"}
+        user = auth.current_user(request)
+        if user is None:
+            raise auth.reject_unauthenticated()
+        token = secrets.token_urlsafe(24)
+        row = database.acquire_office_lock(doc_id, user.uid, token, ttl_seconds=120)
+        if row["uid"] != user.uid:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "document is being edited by another user", "owner": row["uid"]},
+            )
+        return {"token": token, "expiresAt": float(row["expires_at"]), "owner": user.uid}
+
+    @app.delete("/api/office/documents/{doc_id}/lock")
+    async def office_unlock(doc_id: str, request: Request) -> dict[str, Any]:
+        office_target(request, doc_id, must_exist=False)
+        if database is None:
+            return {"released": True}
+        token = (request.headers.get("x-office-token") or "").strip()
+        return {"released": database.release_office_lock(doc_id, token)}
+
+    @app.get("/api/office/documents/{doc_id}/versions")
+    async def office_versions(doc_id: str, request: Request) -> dict[str, Any]:
+        _path, _ref, root = office_target(request, doc_id)
+        directory = Path(root) / ".pi" / "versions" / doc_id
+        versions: list[dict[str, Any]] = []
+        if directory.is_dir():
+            for entry in sorted(directory.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
+                if entry.is_file():
+                    versions.append(
+                        {
+                            "id": entry.name,
+                            "size": entry.stat().st_size,
+                            "created": entry.stat().st_mtime,
+                        }
+                    )
+        return {"versions": versions}
+
+    @app.post("/api/office/documents/{doc_id}/versions/{version}/restore")
+    async def office_restore(doc_id: str, version: str, request: Request) -> dict[str, Any]:
+        path, ref, root = office_target(request, doc_id)
+        if database is not None:
+            lock = database.office_lock(doc_id)
+            supplied = (request.headers.get("x-office-token") or "").strip()
+            if lock is not None and float(lock["expires_at"]) > time.time() and lock["token"] != supplied:
+                raise HTTPException(status_code=409, detail={"error": "document is locked"})
+        directory = (Path(root) / ".pi" / "versions" / doc_id).resolve()
+        candidate = (directory / version).resolve()
+        if candidate.parent != directory or not candidate.is_file():
+            raise HTTPException(status_code=404, detail={"error": "version not found"})
+        office_store.backup_version(root, doc_id, path)
+        office_store.atomic_write(path, candidate.read_bytes())
+        return {
+            "id": doc_id,
+            "path": ref.path,
+            "sha": office_store.sha256_file(path),
+            "size": candidate.stat().st_size,
+        }
+
     @app.get("/api/workspaces")
     async def list_workspaces(request: Request) -> dict[str, Any]:
         if database is None:
@@ -2255,6 +2391,7 @@ def create_app(
     _ARTIFACT_EXTENSIONS = {
         "md": "document",
         "mdx": "document",
+        "docx": "document",
         "txt": "document",
         "html": "document",
         "htm": "document",
@@ -2595,8 +2732,22 @@ async def _pump(connection: Connection) -> None:
         return
 
 
+def resolve_office_dir() -> Path | None:
+    """Where the forked AIOffice docs build lives (``office-dist``)."""
+    override = os.environ.get("PI_OFFICE_DIST")
+    if override and (Path(override) / "index.html").is_file():
+        return Path(override)
+    repo = Path(__file__).resolve().parents[4] / "office-dist"
+    if (repo / "index.html").is_file():
+        return repo
+    return None
+
+
 def _mount_spa(app: FastAPI) -> None:
     """Serve the built SPA, with a history fallback for client-side routes."""
+    office_dir = resolve_office_dir()
+    if office_dir is not None:
+        app.mount("/office", StaticFiles(directory=str(office_dir), html=True), name="office")
     static_dir = resolve_static_dir()
     if static_dir is None:
         @app.get("/")

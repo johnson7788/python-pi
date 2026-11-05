@@ -652,3 +652,21 @@
 .wb-section-toggle .wb-icon { margin-left: 2px; transition: transform .18s; color: var(--wb-muted-2); }
 .wb-section-toggle[aria-expanded="false"] .wb-icon { transform: rotate(-90deg); }
 .wb-section-head { align-items: center; }
+
+.wb-office-editor { position: fixed; inset: 0; z-index: 300; background: #fff; display: flex; flex-direction: column; }
+.wb-office-editor header { height: 44px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--wb-line); }
+.wb-office-editor header b { font-size: 13px; }
+.wb-office-editor header span { font-size: 11px; color: #2f7d4a; }
+.wb-office-editor header .wb-button { margin-left: auto; }
+.wb-office-editor iframe { flex: 1; width: 100%; border: 0; background: #f5f7fb; }
+.wb-artifacts { position: relative; }
+
+.wb-office-status { flex: 1; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 24px; color: #555; font-size: 13px; }
+.wb-office-versions { position: absolute; top: 44px; right: 12px; width: 360px; max-height: 60vh; overflow: auto; background: #fff; border: 1px solid var(--wb-line); border-radius: 10px; box-shadow: 0 16px 44px rgba(20,30,60,.16); z-index: 2; }
+.wb-office-versions header { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--wb-line); }
+.wb-office-versions ul { margin: 0; padding: 6px 12px; list-style: none; }
+.wb-office-versions li { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--wb-line); font-size: 12px; }
+.wb-office-versions li:last-child { border-bottom: 0; }
+.wb-office-versions li span { flex: 1; }
+.wb-office-versions small { color: var(--wb-muted); }
+.wb-office-versions > p { padding: 12px; }
