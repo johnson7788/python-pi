@@ -7,7 +7,7 @@ import { fileURLToPath, URL } from 'node:url'
 const pkg = (name: string) => fileURLToPath(new URL(`./packages/${name}/src`, import.meta.url))
 
 export default defineConfig({
-  root: 'src/renderer',
+  root: fileURLToPath(new URL('./src/renderer', import.meta.url)),
   base: '/office/',
   plugins: [react()],
   resolve: {
@@ -27,5 +27,5 @@ export default defineConfig({
     ],
   },
   server: { port: 3590, strictPort: true },
-  build: { outDir: '../../../office-dist', emptyOutDir: true, sourcemap: false },
+  build: { outDir: fileURLToPath(new URL('../office-dist', import.meta.url)), emptyOutDir: true, sourcemap: false },
 })

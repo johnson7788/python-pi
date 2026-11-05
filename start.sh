@@ -79,6 +79,16 @@ if [[ ! -f "$ROOT/web/dist/index.html" ]]; then
   ( cd "$ROOT/web" && npm install --no-audit --no-fund && npm run build )
 fi
 
+# Office 编辑器是独立构建；缺失时不阻塞主界面，但产物面板会打不开。
+if [[ -f "$ROOT/office/package.json" ]] && { [[ ! -f "$ROOT/office-dist/index.html" ]] || [[ ! -f "$ROOT/office-dist/slides/index.html" ]] || [[ ! -f "$ROOT/office-dist/sheets/index.html" ]]; }; then
+  echo "[start.sh] Office 编辑器尚未构建，正在构建（首次会比较慢）…"
+  "$ROOT/scripts/build-office.sh"
+fi
+if [[ ! -x "$ROOT/office/xlsx-engine/target/release/xlsx-sidecar" ]]; then
+  echo "[start.sh] 提示：xlsx sidecar 未构建，XLSX 在线编辑会返回 503。" >&2
+  echo "           运行 ./scripts/build-xlsx-sidecar.sh 构建。" >&2
+fi
+
 # 端口被占用时给一句人话，而不是让 uvicorn 抛一堆栈
 if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "[start.sh] 端口 $PORT 已被占用，换一个：PORT=9000 $0" >&2

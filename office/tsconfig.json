@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
@@ -11,11 +15,37 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
-    "types": ["vite/client", "node"],
+    "types": [
+      "vite/client",
+      "node"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@genoffice/*": ["packages/*/src/index.ts"]
+      "@genoffice/pptx-render/preset-geometry": [
+        "packages/pptx-render/src/preset-geometry.ts"
+      ],
+      "@genoffice/pptx-engine/table-grid": [
+        "packages/pptx-engine/src/table-grid.ts"
+      ],
+      "@genoffice/pptx-engine/background-promote": [
+        "packages/pptx-engine/src/background-promote.ts"
+      ],
+      "@genoffice/docx-engine/math": [
+        "packages/docx-engine/src/math.ts"
+      ],
+      "@genoffice/*": [
+        "packages/*/src/index.ts"
+      ]
     }
   },
-  "include": ["src", "packages", "vite.config.ts"]
+  "include": [
+    "src",
+    "packages",
+    "vite.config.ts"
+  ],
+  "exclude": [
+    "packages/**/tests/**",
+    "packages/**/vitest.config.ts",
+    "packages/**/vite.config.ts"
+  ]
 }

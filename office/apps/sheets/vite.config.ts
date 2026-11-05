@@ -6,7 +6,7 @@ const pkg = (name: string) => fileURLToPath(new URL(`../../packages/${name}/src`
 const shim = (name: string) => fileURLToPath(new URL(`./src/renderer/shims/${name}`, import.meta.url))
 
 export default defineConfig({
-  root: 'src/renderer',
+  root: fileURLToPath(new URL('./src/renderer', import.meta.url)),
   base: '/office/sheets/',
   plugins: [react()],
   resolve: {
@@ -29,5 +29,5 @@ export default defineConfig({
       { find: 'node:fs/promises', replacement: shim('node-empty.ts') },
     ],
   },
-  build: { outDir: '../../../../../office-dist/sheets', emptyOutDir: false, sourcemap: false },
+  build: { outDir: fileURLToPath(new URL('../../../office-dist/sheets', import.meta.url)), emptyOutDir: false, sourcemap: false },
 })
