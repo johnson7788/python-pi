@@ -30,6 +30,11 @@ Output goes to `office-dist/` at the repo root. FastAPI serves it at `/office`
 
 ## Scope
 
-P0/P1 DOCX: open, edit, save, lock, version list/restore.
+- `docs/` (DOCX): open, edit, save, lock, versions.
+- `slides/` (PPTX): open, edit, save.
+- `sheets/` (XLSX): Univer + Rust sidecar; open, edit, save.
 
-Not yet: xlsx/pptx, editor ticket, unsaved-close guard, AI bridge.
+Build all three with `npm run build` (writes `office-dist/{,slides,sheets}`).
+The XLSX sidecar is built separately: `./scripts/build-xlsx-sidecar.sh`.
+
+Not yet: editor ticket, unsaved-close guard, AI bridge.

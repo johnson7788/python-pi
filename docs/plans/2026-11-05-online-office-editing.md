@@ -1,6 +1,6 @@
 # 在线 Office 编辑接入计划（参考 AIOffice）
 
-> 状态：**已审核**。P0 见 `2026-11-05-office-p0.md`；P1 进行中。
+> 状态：**已实现**。P0/P1 见 `2026-11-05-office-p0.md`，P2/P3 见 `2026-11-05-office-p2-p3.md`。
 > 参考仓库：`/Users/admin/git/AIOffice`
 > 目标：在 python-pi 工作台的产物面板里，直接在线编辑 `.docx` / `.xlsx` / `.pptx`，保存回当前工作空间，并保留版本/锁/回滚能力。
 

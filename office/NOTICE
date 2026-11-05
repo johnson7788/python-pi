@@ -7,7 +7,10 @@ licensed under the Apache License, Version 2.0.
 
 Upstream modules reused:
 - frontend/apps/docs/src/renderer
-- frontend/apps/docs/src/shared
+- frontend/apps/slides/src/renderer
+- frontend/apps/sheets/src/renderer
+- frontend/apps/*/src/shared
+- backend/xlsx-engine
 - frontend/packages/docx-engine
 - frontend/packages/pptx-engine
 - frontend/packages/pptx-render

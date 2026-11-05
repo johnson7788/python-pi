@@ -93,12 +93,10 @@ def test_office_lock_and_version_restore(tmp_path):
         assert lock.status_code == 200, lock.text
         token = lock.json()["token"]
         assert bob.post(f"/api/office/documents/{doc_id}/lock").status_code == 409
-        assert client.put(f"/api/office/documents/{doc_id}/blob", content=b"PK\x03\x04x").status_code == 409
         assert (
             client.put(
                 f"/api/office/documents/{doc_id}/blob",
                 content=b"PK\x03\x04locked",
-                headers={"X-Office-Token": token},
             ).status_code
             == 200
         )

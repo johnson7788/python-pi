@@ -34,6 +34,8 @@ import re
 import shutil
 import time
 import tempfile
+import base64
+import shutil
 import secrets
 import uuid
 import zipfile
@@ -59,6 +61,7 @@ from pi_coding_agent.session_manager import SessionManager
 from . import apps as app_catalog
 from . import market as market_catalog
 from . import office as office_store
+from . import xlsx_sidecar as xlsx_engine
 from . import plugins as plugin_catalog
 from . import schedules as schedule_catalog
 from . import auth
@@ -923,6 +926,8 @@ def create_app(
         server_config.ensure_layout()
         database = Database(server_config.db_path)
         database.purge_expired_sessions()
+
+    sheets_sessions: dict[str, dict[str, Any]] = {}
 
     def _audit_sink(entry: dict[str, Any]) -> int | None:
         """Write one policy decision to the audit log; never let it break a turn."""
@@ -2213,7 +2218,8 @@ def create_app(
             lock = database.office_lock(doc_id)
             supplied = (request.headers.get("x-office-token") or "").strip()
             if lock is not None and float(lock["expires_at"]) > time.time():
-                if lock["token"] != supplied:
+                user = auth.current_user(request)
+                if user is None or lock["uid"] != user.uid:
                     raise HTTPException(status_code=409, detail={"error": "document is locked"})
         data = await request.body()
         if not data or len(data) > office_store.MAX_OFFICE_BYTES:
@@ -2280,8 +2286,10 @@ def create_app(
         if database is not None:
             lock = database.office_lock(doc_id)
             supplied = (request.headers.get("x-office-token") or "").strip()
-            if lock is not None and float(lock["expires_at"]) > time.time() and lock["token"] != supplied:
-                raise HTTPException(status_code=409, detail={"error": "document is locked"})
+            if lock is not None and float(lock["expires_at"]) > time.time():
+                user = auth.current_user(request)
+                if user is None or lock["uid"] != user.uid:
+                    raise HTTPException(status_code=409, detail={"error": "document is locked"})
         directory = (Path(root) / ".pi" / "versions" / doc_id).resolve()
         candidate = (directory / version).resolve()
         if candidate.parent != directory or not candidate.is_file():
@@ -2294,6 +2302,192 @@ def create_app(
             "sha": office_store.sha256_file(path),
             "size": candidate.stat().st_size,
         }
+
+    # -- xlsx sidecar sessions --------------------------------------------------------
+
+    def sheet_uid(request: Request) -> str:
+        if database is None:
+            return LOCAL_UID
+        user = auth.current_user(request)
+        if user is None:
+            raise auth.reject_unauthenticated()
+        return user.uid
+
+    def sheet_session(request: Request, session_id: str) -> dict[str, Any]:
+        session = sheets_sessions.get(session_id)
+        if session is None or session["uid"] != sheet_uid(request):
+            raise HTTPException(status_code=404, detail={"error": "workbook session not found"})
+        return session
+
+    async def sheet_call(command: str, **fields: Any) -> Any:
+        try:
+            return await xlsx_engine.sidecar().request(command, **fields)
+        except xlsx_engine.SidecarError as error:
+            raise HTTPException(status_code=503, detail={"error": f"xlsx engine: {error}"}) from None
+
+    @app.post("/api/office/sheets/open")
+    async def sheets_open(request: Request) -> dict[str, Any]:
+        data = await request.body()
+        if not data or len(data) > office_store.MAX_OFFICE_BYTES:
+            raise HTTPException(status_code=413, detail={"error": "workbook is empty or too large"})
+        work_dir = Path(tempfile.mkdtemp(prefix="pi-xlsx-"))
+        path = work_dir / "workbook.xlsx"
+        path.write_bytes(data)
+        result = await sheet_call("open", path=str(path))
+        sheets_sessions[result["sessionId"]] = {
+            "sessionId": result["sessionId"],
+            "uid": sheet_uid(request),
+            "dir": work_dir,
+            "path": path,
+        }
+        return result
+
+    @app.post("/api/office/sheets/read-range")
+    async def sheets_read_range(request: Request) -> Any:
+        body = await request.json()
+        session = sheet_session(request, str(body.get("sessionId") or ""))
+        return await sheet_call(
+            "read_range",
+            sessionId=session["sessionId"],
+            sheetId=body.get("sheetId"),
+            range=body.get("range"),
+        )
+
+    @app.post("/api/office/sheets/read-formulas")
+    async def sheets_read_formulas(request: Request) -> Any:
+        body = await request.json()
+        session = sheet_session(request, str(body.get("sessionId") or ""))
+        return await sheet_call(
+            "read_formula_cells", sessionId=session["sessionId"], sheetId=body.get("sheetId")
+        )
+
+    @app.post("/api/office/sheets/read-media")
+    async def sheets_read_media(request: Request) -> Any:
+        body = await request.json()
+        session = sheet_session(request, str(body.get("sessionId") or ""))
+        return await sheet_call(
+            "read_media", sessionId=session["sessionId"], visualId=body.get("visualId")
+        )
+
+    @app.post("/api/office/sheets/recalc")
+    async def sheets_recalc(request: Request) -> Any:
+        body = await request.json()
+        session = sheet_session(request, str(body.get("sessionId") or ""))
+        return await sheet_call(
+            "recalc_cells",
+            path=str(session["path"]),
+            edits=body.get("edits") or [],
+            reads=body.get("reads") or [],
+        )
+
+    @app.post("/api/office/sheets/manifest")
+    async def sheets_manifest(request: Request) -> Any:
+        body = await request.json()
+        session = sheet_session(request, str(body.get("sessionId") or ""))
+        return await sheet_call("archive_manifest", path=str(session["path"]))
+
+    @app.post("/api/office/sheets/read-entries")
+    async def sheets_read_entries(request: Request) -> Any:
+        body = await request.json()
+        session = sheet_session(request, str(body.get("sessionId") or ""))
+        entries = body.get("entries") or []
+        if not entries:
+            return {"entries": []}
+        out_dir = Path(tempfile.mkdtemp(prefix="pi-xlsx-read-", dir=session["dir"]))
+        try:
+            result = await sheet_call(
+                "read_entries",
+                path=str(session["path"]),
+                entries=entries,
+                outputDir=str(out_dir),
+            )
+            return {
+                "entries": [
+                    {
+                        "name": entry["name"],
+                        "contentB64": base64.b64encode(Path(entry["path"]).read_bytes()).decode(),
+                    }
+                    for entry in result.get("entries", [])
+                ]
+            }
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+    @app.post("/api/office/sheets/scan-entries")
+    async def sheets_scan_entries(request: Request) -> Any:
+        body = await request.json()
+        session = sheet_session(request, str(body.get("sessionId") or ""))
+        return await sheet_call(
+            "scan_entries",
+            path=str(session["path"]),
+            entries=body.get("entries") or [],
+            needle=body.get("needle") or "",
+        )
+
+    @app.post("/api/office/sheets/save")
+    async def sheets_save(request: Request) -> dict[str, Any]:
+        body = await request.json()
+        session = sheet_session(request, str(body.get("sessionId") or ""))
+        doc_id = str(body.get("docId") or "")
+        if not doc_id:
+            raise HTTPException(status_code=422, detail={"error": "save requires an existing document"})
+        path, _ref, root = office_target(request, doc_id, must_exist=True)
+        if database is not None:
+            lock = database.office_lock(doc_id)
+            if lock is not None and float(lock["expires_at"]) > time.time() and lock["uid"] != sheet_uid(request):
+                raise HTTPException(status_code=409, detail={"error": "document is locked"})
+
+        def materialize(items: list[dict[str, Any]], tag: str) -> list[dict[str, str]]:
+            output: list[dict[str, str]] = []
+            for index, item in enumerate(items):
+                target = Path(session["dir"]) / f"{tag}-{index}.bin"
+                target.write_bytes(base64.b64decode(item.get("contentB64") or ""))
+                output.append({"name": str(item.get("name") or ""), "contentPath": str(target)})
+            return output
+
+        replacements = materialize(body.get("replacements") or [], "replace")
+        additions = materialize(body.get("additions") or [], "add")
+        target = Path(session["dir"]) / "saved.xlsx"
+        await sheet_call(
+            "save_archive",
+            sourcePath=str(session["path"]),
+            targetPath=str(target),
+            replacements=replacements,
+            removals=body.get("removals") or [],
+            additions=additions,
+        )
+        data = target.read_bytes()
+        office_store.backup_version(root, doc_id, path)
+        office_store.atomic_write(path, data)
+
+        # Reset the sidecar session on the saved file, like AIOffice.
+        await sheet_call("close", sessionId=session["sessionId"])
+        reopened = await sheet_call("open", path=str(target))
+        sheets_sessions.pop(session["sessionId"], None)
+        sheets_sessions[reopened["sessionId"]] = {
+            "sessionId": reopened["sessionId"],
+            "uid": sheet_uid(request),
+            "dir": session["dir"],
+            "path": target,
+        }
+        return {
+            "docId": doc_id,
+            "size": len(data),
+            "sha": office_store.sha256_file(path),
+            "workbook": reopened,
+        }
+
+    @app.post("/api/office/sheets/close")
+    async def sheets_close(request: Request) -> dict[str, Any]:
+        body = await request.json()
+        session = sheets_sessions.pop(str(body.get("sessionId") or ""), None)
+        if session is not None:
+            try:
+                await sheet_call("close", sessionId=body.get("sessionId"))
+            except HTTPException:
+                pass
+            shutil.rmtree(session["dir"], ignore_errors=True)
+        return {"closed": True}
 
     @app.get("/api/workspaces")
     async def list_workspaces(request: Request) -> dict[str, Any]:

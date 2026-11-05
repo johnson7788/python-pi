@@ -1111,6 +1111,11 @@ function OfficeEditor({
   onSaved: () => void
 }) {
   const docId = officeDocId(workspaceId, path)
+  const lower = path.toLowerCase()
+  const kind = lower.endsWith('.pptx') ? 'slides' : lower.endsWith('.xlsx') ? 'sheets' : ''
+  const editorUrl = kind
+    ? `/office/${kind}/?embed=1&open=${encodeURIComponent(docId)}`
+    : `/office/?embed=1&doc=${encodeURIComponent(docId)}`
   const [phase, setPhase] = useState<'locking' | 'ready' | 'locked' | 'error'>('locking')
   const [message, setMessage] = useState('')
   const [saved, setSaved] = useState(false)
@@ -1223,7 +1228,7 @@ function OfficeEditor({
         <iframe
           key={nonce}
           title="Office editor"
-          src={`/office/?embed=1&doc=${encodeURIComponent(docId)}`}
+          src={editorUrl}
           sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-modals"
         />
       ) : (
@@ -1432,6 +1437,9 @@ function ArtifactPane({ workspaceId, onClose }: { workspaceId: string; onClose: 
             </div>
           ) : selected.kind === 'slides' && selected.extension === 'pptx' ? (
             <div className="wb-slide-preview">
+              <button type="button" className="wb-button" onClick={() => setOfficePath(selected.path)}>
+                在线编辑
+              </button>
               {slides === null ? (
                 <p className="wb-muted">正在读取幻灯片…</p>
               ) : (
@@ -1449,6 +1457,9 @@ function ArtifactPane({ workspaceId, onClose }: { workspaceId: string; onClose: 
             </div>
           ) : selected.kind === 'sheet' && selected.extension === 'xlsx' ? (
             <div className="wb-xlsx-preview">
+              <button type="button" className="wb-button" onClick={() => setOfficePath(selected.path)}>
+                在线编辑
+              </button>
               {sheets === null ? (
                 <p className="wb-muted">正在读取工作表…</p>
               ) : sheets.length === 0 ? (
@@ -1589,11 +1600,11 @@ function ArtifactPane({ workspaceId, onClose }: { workspaceId: string; onClose: 
           ) : (
             <div className="wb-artifact-binary">
               <p className="wb-muted">
-                {selected.extension === 'docx'
-                  ? 'Word 文档可以在线编辑；保存会写回当前工作空间。'
+                {['docx', 'pptx'].includes(selected.extension)
+                  ? '文档可以在线编辑；保存会写回当前工作空间。'
                   : '这个产物暂不支持在线预览，可下载后用对应工具打开。'}
               </p>
-              {selected.extension === 'docx' ? (
+              {['docx', 'pptx'].includes(selected.extension) ? (
                 <button type="button" className="wb-button" onClick={() => setOfficePath(selected.path)}>
                   在线编辑
                 </button>

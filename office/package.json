@@ -6,7 +6,10 @@
   "description": "Embedded AIOffice docs editor for python-pi (Apache-2.0 fork)",
   "scripts": {
     "dev": "vite --config vite.config.ts",
-    "build": "vite --config vite.config.ts build",
+    "build": "npm run build:docs && npm run build:slides && npm run build:sheets",
+    "build:docs": "vite --config vite.config.ts build",
+    "build:slides": "vite --config apps/slides/vite.config.ts build",
+    "build:sheets": "vite --config apps/sheets/vite.config.ts build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -21,7 +24,28 @@
     "opentype.js": "^2.0.0",
     "pdf-lib": "^1.17.1",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "acorn": "^8.18.0",
+    "harfbuzzjs": "^1.4.0",
+    "konva": "^9.3.20",
+    "pngjs": "^7.0.0",
+    "react-konva": "^19.0.10",
+    "utif2": "^4.1.0",
+    "@univerjs/core": "0.25.1",
+    "@univerjs/preset-sheets-conditional-formatting": "0.25.1",
+    "@univerjs/preset-sheets-core": "0.25.1",
+    "@univerjs/preset-sheets-data-validation": "0.25.1",
+    "@univerjs/preset-sheets-drawing": "0.25.1",
+    "@univerjs/preset-sheets-filter": "0.25.1",
+    "@univerjs/preset-sheets-find-replace": "0.25.1",
+    "@univerjs/preset-sheets-note": "0.25.1",
+    "@univerjs/preset-sheets-sort": "0.25.1",
+    "@univerjs/preset-sheets-table": "0.25.1",
+    "@univerjs/sheets-filter": "0.25.1",
+    "@univerjs/themes": "0.25.1",
+    "rxjs": "^7.8.1",
+    "zod": "^4.3.6",
+    "@fluentui/react-icons": "^2.0.333"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

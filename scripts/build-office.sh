@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the forked AIOffice docs editor served at /office.
+# Build the forked AIOffice editors (docs/slides/sheets) served at /office.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT/office"

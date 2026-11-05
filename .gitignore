@@ -40,3 +40,6 @@ logs/
 # office build artifacts / local deps
 office/node_modules
 office-dist/
+
+office/xlsx-engine/target/
+office/apps/*/node_modules/
