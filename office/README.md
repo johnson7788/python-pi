@@ -9,6 +9,8 @@ Embedded DOCX editor for python-pi, forked from AIOffice's docs renderer
 cd office
 npm install
 npm run build
+# or from the repo root:
+./scripts/build-office.sh
 ```
 
 Output goes to `office-dist/` at the repo root. FastAPI serves it at `/office`

@@ -19,6 +19,7 @@ export default defineConfig({
       { find: '@genoffice/docx-engine', replacement: `${pkg('docx-engine')}/index.ts` },
       { find: '@genoffice/pptx-engine', replacement: `${pkg('pptx-engine')}/index.ts` },
       { find: '@genoffice/pptx-render', replacement: `${pkg('pptx-render')}/index.ts` },
+      { find: '@genoffice/ai-provider', replacement: `${pkg('ai-provider')}/index.ts` },
       { find: '@genoffice/agent-core', replacement: `${pkg('agent-core')}/index.ts` },
       { find: '@genoffice/project-store', replacement: `${pkg('project-store')}/index.ts` },
       { find: '@genoffice/ui', replacement: `${pkg('ui')}/index.ts` },

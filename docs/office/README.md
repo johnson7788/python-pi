@@ -1,6 +1,6 @@
 # Office P0 (DOCX)
 
-- Build: `cd office && npm install && npm run build` (outputs `office-dist/`)
+- Build: `./scripts/build-office.sh` (or `cd office && npm install && npm run build`) → `office-dist/`
 - Serve: FastAPI mounts `office-dist` at `/office`
 - Workbench: `.docx` artifact → 在线编辑 → iframe `/office/?embed=1&doc=<opaque-id>`
 - API: `/api/office/documents/{id}` and `/blob` (GET/PUT, If-Match)
