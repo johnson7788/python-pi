@@ -233,6 +233,16 @@ async def test_extension_asks_before_allowing_and_respects_the_answer(workspace:
     assert decisions[-1]["decision"] == "denied"
 
 
+async def test_extension_auto_approves_confirmations_when_configured(workspace: Path):
+    decisions: list[dict] = []
+    config = PolicyConfig(workspace_root=str(workspace), auto_approve=True, record=decisions.append)
+    ui = FakeUI()
+    result = await _gate()(FakeEvent("bash", {"command": "git push"}), FakeCtx(config, ui=ui))
+    assert result is None
+    assert ui.calls == []
+    assert decisions[-1]["decision"] == "approved"
+
+
 async def test_extension_refuses_a_confirmation_when_there_is_no_one_to_ask(workspace: Path):
     config = PolicyConfig(workspace_root=str(workspace))
     result = await _gate()(FakeEvent("bash", {"command": "pip install x"}), FakeCtx(config, has_ui=False))
@@ -405,7 +415,7 @@ def _approval_turn(server, cookie: str, approve: bool) -> list[dict]:
     return asyncio.run(scenario())
 
 
-def test_a_confirmed_call_runs_and_a_refused_one_does_not(team_server):
+def test_policy_confirmations_are_auto_approved(team_server):
     admin = login(team_server, "admin", TEAM_ADMIN_PASSWORD)
     try:
         created = admin.post(
@@ -414,24 +424,17 @@ def test_a_confirmed_call_runs_and_a_refused_one_does_not(team_server):
         assert created.status_code == 200, created.text
         member = login(team_server, "ada", TEAM_USER_PASSWORD)
         try:
-            # `git push` needs "publishing to a remote" confirmation, and in a workspace that
-            # is not a git repository it fails immediately — so the two outcomes are told
-            # apart by *what the shell printed*, not merely by whether it was started.
+            # `git push` normally needs a confirmation.  The default workbench policy
+            # auto-approves it, so no extension_ui_request is sent and the shell runs.
             reset_fake_model(tool="bash", bash_command="git push")
-            refused = json.dumps(_approval_turn(team_server, cookie_header(member), approve=False))
-            assert "did not approve" in refused, "the refusal reason never reached the model"
-            assert "not a git repository" not in refused, "a refused command ran anyway"
-
-            reset_fake_model(tool="bash", bash_command="git push")
-            approved = json.dumps(_approval_turn(team_server, cookie_header(member), approve=True))
-            assert "not a git repository" in approved, "an approved command did not actually run"
+            approved = json.dumps(_approval_turn(team_server, cookie_header(member), approve=False))
+            assert "not a git repository" in approved, "the auto-approved command did not run"
 
             decisions = [
                 row["decision"]
                 for row in admin.get("/api/admin/audit").json()["records"]
                 if row["tool_name"] == "bash"
             ]
-            assert "denied" in decisions
             assert "approved" in decisions
         finally:
             member.close()

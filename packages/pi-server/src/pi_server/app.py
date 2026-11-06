@@ -1015,6 +1015,7 @@ def create_app(
             # Every user's workspace and transcript lives under here, so an agent that can
             # read it can read a colleague's conversations.
             protected_roots=(server_config.data_root,),
+            auto_approve=server_config.auto_approve_tools,
             confirm_timeout=server_config.confirm_timeout_seconds,
             record=worker.record_tool_decision,
         )

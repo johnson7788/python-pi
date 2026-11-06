@@ -3731,6 +3731,11 @@ function HelpView({ authMode }: { authMode: string }) {
             <p>单机模式下任务同样保存在本地，不需要登录。</p>
           </section>
           <section>
+            <h3>命令执行</h3>
+            <p>命令默认自动批准，不再逐条弹权限确认；<code>sudo</code>、容器控制、读取密钥等硬安全规则仍会拒绝。</p>
+            <p>如需恢复逐条确认，启动时设置 <code>PI_AUTO_APPROVE_TOOLS=0</code>。</p>
+          </section>
+          <section>
             <h3>快捷键</h3>
             <p><kbd>Enter</kbd> 发送，<kbd>Shift</kbd> + <kbd>Enter</kbd> 换行；<kbd>Esc</kbd> 关闭当前弹层。</p>
           </section>

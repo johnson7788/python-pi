@@ -140,6 +140,9 @@ class PolicyConfig:
     protected_roots: tuple[str, ...] = ()
     #: Extra refusal regexes, for a deployment with its own no-go commands.
     extra_deny: tuple[str, ...] = ()
+    #: Auto-approve calls that would otherwise ask for confirmation.  Hard-deny
+    #: patterns still apply; this only removes the interactive prompt.
+    auto_approve: bool = False
     #: Seconds to wait for a human answer before treating a confirmation as refused.
     confirm_timeout: float = 300.0
     record: Callable[[dict[str, Any]], None] | None = None

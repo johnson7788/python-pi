@@ -137,6 +137,8 @@ class ServerConfig:
     #: runs in a container: the Docker daemon resolves bind mounts on the host, so the path
     #: the server knows is not the path the daemon can mount.
     host_data_root: str | None = None
+    #: Auto-approve policy confirmations.  Hard-deny rules remain in force.
+    auto_approve_tools: bool = True
     #: How long a confirmation dialog may stay unanswered before the call is refused.
     #: A turn that waits forever on a closed browser tab is worse than a denied command.
     confirm_timeout_seconds: float = 300.0
@@ -266,6 +268,7 @@ class ServerConfig:
             "data_root": resolve_data_root(os.environ.get("PI_DATA_ROOT")),
             "auth_mode": (os.environ.get("PI_AUTH_MODE") or "single").strip().lower(),
             "single_workspace": os.environ.get("PI_SINGLE_WORKSPACE") or None,
+            "auto_approve_tools": _bool_env("PI_AUTO_APPROVE_TOOLS", True),
             "cookie_secure": _bool_env("PI_COOKIE_SECURE"),
             "admin_username": os.environ.get("PI_ADMIN_USERNAME") or "admin",
             "api_key": _secret("PI_API_KEY"),

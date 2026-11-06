@@ -42,7 +42,13 @@ def setup(pi: Any) -> None:
             _record(config, event, "allow", "", summary)
             return None
 
-        # CONFIRM.  No UI, a refusal and a timeout all mean "no": a shared deployment must
+        # CONFIRM.  A deployment can explicitly opt into auto-approval (the default
+        # for the interactive workbench); hard denies above still apply.
+        if config.auto_approve:
+            _record(config, event, "approved", f"{verdict.reason} (auto-approved)", summary)
+            return None
+
+        # No UI, a refusal and a timeout all mean "no": a shared deployment must
         # fail closed when nobody is there to answer, and an unanswered dialog would
         # otherwise leave the turn hanging forever.
         approved = False
