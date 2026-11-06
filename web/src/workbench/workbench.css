@@ -782,3 +782,12 @@
 @media (min-width: 1101px) {
   .wb-artifacts { width: 46%; min-width: 420px; max-width: 760px; }
 }
+
+/* Artifact pane has two states: full-height list, then full-pane viewer. */
+.wb-artifacts.is-list .wb-artifact-list { flex: 1; max-height: none; }
+.wb-artifacts-back { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--wb-ink-2); }
+.wb-artifacts-back:hover { color: var(--wb-primary); }
+.wb-artifacts-current { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-artifacts.is-viewer .wb-artifact-editor { padding: 12px 14px 14px; }
+.wb-artifacts.is-viewer .wb-artifact-editor-head { flex: none; }
+.wb-artifacts.is-viewer .wb-artifact-editor-head b { font-size: 13px; }

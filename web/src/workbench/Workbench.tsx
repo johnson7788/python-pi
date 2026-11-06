@@ -1399,6 +1399,7 @@ function ArtifactPane({
   const [slides, setSlides] = useState<SlidePreviewRow[] | null>(null)
   const [sheets, setSheets] = useState<SheetPreviewRow[] | null>(null)
   const [officePath, setOfficePath] = useState<string | null>(null)
+  const [viewerOpen, setViewerOpen] = useState(false)
   const [activeSheet, setActiveSheet] = useState(0)
 
   const load = () => {
@@ -1427,6 +1428,7 @@ function ArtifactPane({
     const item = items.find((entry) => entry.path.replace(/^\/+/, '') === target)
     if (!item) return
     setSelectedPath(item.path)
+    setViewerOpen(true)
     if (['docx', 'xlsx', 'pptx'].includes(item.extension)) setOfficePath(item.path)
     onFocusHandled?.()
   }, [focusPath, items, onFocusHandled])
@@ -1522,16 +1524,28 @@ function ArtifactPane({
     : ''
 
   return (
-    <aside className="wb-artifacts">
+    <aside className={`wb-artifacts${viewerOpen ? ' is-viewer' : ' is-list'}`}>
       <header className="wb-artifacts-head">
-        <b>产物</b>
-        <span>{items?.length ?? 0}</span>
+        {viewerOpen ? (
+          <button
+            type="button"
+            className="wb-artifacts-back"
+            onClick={() => setViewerOpen(false)}
+            aria-label="返回产物列表"
+          >
+            <Icon name="chevronLeft" size={15} />
+            产物
+          </button>
+        ) : (
+          <b>产物</b>
+        )}
+        {!viewerOpen ? <span>{items?.length ?? 0}</span> : <b className="wb-artifacts-current">{selected?.name || ''}</b>}
         <button type="button" className="wb-icon-button" onClick={onClose} aria-label="关闭产物">
           ×
         </button>
       </header>
 
-      <div className="wb-artifact-list">
+      {!viewerOpen ? <div className="wb-artifact-list">
         {items === null ? (
           <p className="wb-muted">正在读取…</p>
         ) : items.length === 0 ? (
@@ -1542,7 +1556,10 @@ function ArtifactPane({
               key={item.path}
               type="button"
               className={`wb-artifact-item${item.path === selectedPath ? ' is-active' : ''}`}
-              onClick={() => setSelectedPath(item.path)}
+              onClick={() => {
+                setSelectedPath(item.path)
+                setViewerOpen(true)
+              }}
               title={item.path}
             >
               <span className={`wb-file-icon is-${item.kind === 'sheet' ? 'data' : item.kind === 'slides' ? 'doc' : 'file'}`}>
@@ -1555,9 +1572,9 @@ function ArtifactPane({
             </button>
           ))
         )}
-      </div>
+      </div> : null}
 
-      {selected ? (
+      {viewerOpen && selected ? (
         <div className="wb-artifact-editor">
           <div className="wb-artifact-editor-head">
             <b>{selected.name}</b>
