@@ -699,3 +699,33 @@
 .wb-office-versions li span { flex: 1; }
 .wb-office-versions small { color: var(--wb-muted); }
 .wb-office-versions > p { padding: 12px; }
+
+/* ── turn process (DSH-style) ── */
+.wb-turn { display: flex; flex-direction: column; gap: 12px; }
+.wb-turn + .wb-turn { margin-top: 22px; }
+.wb-turn-process { display: flex; flex-direction: column; gap: 6px; }
+.wb-turn-process-head {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 0 9px;
+  border-bottom: 1px solid var(--wb-line);
+  color: var(--wb-muted);
+  font-size: 13px;
+  text-align: left;
+}
+.wb-turn-process-head:hover { color: var(--wb-ink-2); }
+.wb-turn-process-head span { flex: 1; }
+.wb-turn-process-head svg { flex: none; transition: transform .15s ease; }
+.wb-turn-process.is-open .wb-turn-process-head svg { transform: rotate(180deg); }
+.wb-turn-process-body { display: flex; flex-direction: column; gap: 8px; padding: 2px 0 0; }
+.wb-turn-process-body .wb-msg-ai .wb-msg-avatar,
+.wb-turn-process-body .wb-msg-ai .wb-msg-name { display: none; }
+.wb-turn-process-body .wb-msg-ai { gap: 0; }
+.wb-turn-process-body .wb-msg-tool { padding-left: 0; }
+.wb-turn-process-body .wb-msg-content { font-size: 13px; }
+.wb-msg-ai.is-answer .wb-msg-avatar,
+.wb-msg-ai.is-answer .wb-msg-name { display: none; }
+.wb-msg-ai.is-answer .wb-msg-content { font-size: 14px; }

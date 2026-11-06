@@ -1838,6 +1838,111 @@ function WbThinking({ text, running }: { text: string; running: boolean }) {
   )
 }
 
+type ChatTurn = {
+  key: string
+  user?: TranscriptEntry
+  entries: TranscriptEntry[]
+  final?: TranscriptEntry
+  start: number
+  end: number
+  running: boolean
+}
+
+function messageTime(entry: TranscriptEntry | undefined): number | undefined {
+  const value = asRecord(entry?.message).timestamp
+  return typeof value === 'number' ? value : undefined
+}
+
+function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(1, Math.round(milliseconds / 1000))
+  if (seconds >= 3600) {
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    return `${hours}小时${minutes}分`
+  }
+  if (seconds >= 60) {
+    return `${Math.floor(seconds / 60)}分${seconds % 60}秒`
+  }
+  return `${seconds}秒`
+}
+
+function buildTurns(entries: TranscriptEntry[], streaming: boolean): ChatTurn[] {
+  const turns: ChatTurn[] = []
+  let current: ChatTurn | null = null
+  const push = (entry: TranscriptEntry) => {
+    if (entry.message.role === 'user') {
+      current = {
+        key: entry.key,
+        user: entry,
+        entries: [],
+        start: messageTime(entry) ?? Date.now(),
+        end: messageTime(entry) ?? Date.now(),
+        running: false,
+      }
+      turns.push(current)
+      return
+    }
+    if (current === null) {
+      current = {
+        key: `turn-${entry.key}`,
+        entries: [],
+        start: messageTime(entry) ?? Date.now(),
+        end: messageTime(entry) ?? Date.now(),
+        running: false,
+      }
+      turns.push(current)
+    }
+    current.entries.push(entry)
+    const time = messageTime(entry)
+    if (time !== undefined) current.end = Math.max(current.end, time)
+  }
+  for (const entry of entries) push(entry)
+  for (const [index, turn] of turns.entries()) {
+    const finalIndex = [...turn.entries]
+      .map((entry, position) => ({ entry, position }))
+      .reverse()
+      .find(({ entry }) =>
+        entry.message.role === 'assistant'
+        && entry.message.content.some((block) => isTextBlock(block) && block.text.trim().length > 0),
+      )?.position
+    if (finalIndex !== undefined) turn.final = turn.entries[finalIndex]
+    turn.running = streaming && index === turns.length - 1
+    if (turn.end < turn.start) turn.end = turn.start
+  }
+  return turns
+}
+
+function TurnProcess({
+  turn,
+  children,
+  now,
+}: {
+  turn: ChatTurn
+  children: ReactNode
+  now: number
+}) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    setOpen(turn.running)
+  }, [turn.running])
+  const elapsed = formatElapsed((turn.running ? now : turn.end) - turn.start)
+  const label = turn.running ? `处理中，用时 ${elapsed}` : `已完成，用时 ${elapsed}`
+  return (
+    <div className={`wb-turn-process${open ? ' is-open' : ''}`}>
+      <button
+        type="button"
+        className="wb-turn-process-head"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span>{label}</span>
+        <Icon name="chevronDown" size={14} />
+      </button>
+      {open ? <div className="wb-turn-process-body">{children}</div> : null}
+    </div>
+  )
+}
+
 function WbTranscript({
   agent,
   workspaceId,
@@ -1901,6 +2006,14 @@ function WbTranscript({
     if (node && pinned.current) node.scrollTop = node.scrollHeight
   }, [visible, agent.toolExecutions])
 
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (!agent.isStreaming) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [agent.isStreaming])
+  const turns = useMemo(() => buildTurns(visible, agent.isStreaming), [visible, agent.isStreaming])
+
   return (
     <div
       className="wb-messages"
@@ -1918,16 +2031,60 @@ function WbTranscript({
         </div>
       ) : (
         <div className="wb-thread">
-          {visible.map((entry) => (
-            <WbMessage
-              key={entry.key}
-              entry={entry}
-              toolExecutions={agent.toolExecutions}
-              streaming={agent.isStreaming && entry.streaming}
-              sessionFile={sessionFile}
-              feedback={feedback}
-              onFeedback={onFeedback}
-            />
+          {turns.map((turn) => (
+            <section className="wb-turn" key={turn.key}>
+              {turn.user ? (
+                <WbMessage
+                  entry={turn.user}
+                  toolExecutions={agent.toolExecutions}
+                  streaming={false}
+                  sessionFile={sessionFile}
+                  feedback={feedback}
+                  onFeedback={onFeedback}
+                />
+              ) : null}
+              {turn.entries.length > 0 || turn.final ? (
+                <TurnProcess turn={turn} now={now}>
+                  {turn.entries.map((entry) => (
+                    <WbMessage
+                      key={entry.key}
+                      entry={entry}
+                      toolExecutions={agent.toolExecutions}
+                      streaming={agent.isStreaming && entry.streaming}
+                      sessionFile={sessionFile}
+                      feedback={feedback}
+                      onFeedback={onFeedback}
+                      mode={entry === turn.final ? 'process' : 'all'}
+                      showFeedback={false}
+                    />
+                  ))}
+                  {turn.final ? (
+                    <WbMessage
+                      key={`${turn.key}-answer`}
+                      entry={turn.final}
+                      toolExecutions={agent.toolExecutions}
+                      streaming={agent.isStreaming && turn.final.streaming}
+                      sessionFile={sessionFile}
+                      feedback={feedback}
+                      onFeedback={onFeedback}
+                      mode="answer"
+                    />
+                  ) : null}
+                </TurnProcess>
+              ) : null}
+              {turn.final ? (
+                <WbMessage
+                  key={`${turn.key}-final`}
+                  entry={turn.final}
+                  toolExecutions={agent.toolExecutions}
+                  streaming={agent.isStreaming && turn.final.streaming}
+                  sessionFile={sessionFile}
+                  feedback={feedback}
+                  onFeedback={onFeedback}
+                  mode="answer"
+                />
+              ) : null}
+            </section>
           ))}
           {presented.length > 0 ? (
             <PresentedFiles
@@ -1949,6 +2106,8 @@ function WbMessage({
   sessionFile,
   feedback,
   onFeedback,
+  mode = 'all',
+  showFeedback = true,
 }: {
   entry: TranscriptEntry
   toolExecutions: Record<string, ToolExecution>
@@ -1956,6 +2115,8 @@ function WbMessage({
   sessionFile?: string
   feedback: Record<number, number>
   onFeedback: (timestamp: number, rating: number) => void
+  mode?: 'all' | 'process' | 'answer'
+  showFeedback?: boolean
 }) {
   const message = entry.message
   if (message.role === 'user') {
@@ -1963,13 +2124,18 @@ function WbMessage({
   }
   if (message.role === 'assistant') {
     const assistant = message as AssistantMessage
+    const blocks = assistant.content.filter((block) => {
+      if (mode === 'process') return !isTextBlock(block)
+      if (mode === 'answer') return isTextBlock(block)
+      return true
+    })
     return (
-      <div className="wb-msg-ai">
+      <div className={`wb-msg-ai${mode === 'answer' ? ' is-answer' : ''}`}>
         <img className="wb-msg-avatar" src="/pi-icon.png" alt="" />
         <div className="wb-msg-body">
           <div className="wb-msg-name">Pi <span>助手</span></div>
           <div className="wb-msg-content">
-            {assistant.content.map((block, index) => (
+            {blocks.map((block, index) => (
               <WbBlock
                 key={`${block.type}-${index}`}
                 block={block}
@@ -1977,11 +2143,13 @@ function WbMessage({
                 streaming={streaming}
               />
             ))}
-            {assistant.content.length === 0 && streaming ? <span className="wb-caret" /> : null}
+            {blocks.length === 0 && streaming ? <span className="wb-caret" /> : null}
             {assistant.errorMessage ? <div className="wb-msg-error">{assistant.errorMessage}</div> : null}
           </div>
-          {usageLine(assistant.usage) ? <div className="wb-msg-usage">{usageLine(assistant.usage)}</div> : null}
-          {sessionFile ? (
+          {mode !== 'process' && usageLine(assistant.usage) ? (
+            <div className="wb-msg-usage">{usageLine(assistant.usage)}</div>
+          ) : null}
+          {showFeedback && mode !== 'process' && sessionFile ? (
             <div className="wb-feedback">
               {[1, -1].map((rating) => (
                 <button
