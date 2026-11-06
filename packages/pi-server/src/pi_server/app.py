@@ -807,6 +807,12 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    displayName: str = ""
+
+
 class PasswordChangeRequest(BaseModel):
     currentPassword: str
     newPassword: str
@@ -1285,7 +1291,7 @@ def create_app(
     # Fail closed: in team mode everything under /api/ needs a live session, except the
     # two endpoints a browser must reach before it has one.  Enumerating protected paths
     # instead would mean a new endpoint is public until someone remembers to list it.
-    _PUBLIC_PATHS = frozenset({"/api/health", "/api/auth/login"})
+    _PUBLIC_PATHS = frozenset({"/api/health", "/api/auth/login", "/api/auth/register"})
 
     @app.middleware("http")
     async def _require_authentication(request: Request, call_next: Any) -> Any:
@@ -1324,6 +1330,36 @@ def create_app(
         response = JSONResponse({"user": user.to_json()})
         auth.set_cookie(response, token, server_config)
         return response
+
+    @app.post("/api/auth/register", status_code=201)
+    async def register(payload: RegisterRequest) -> dict[str, Any]:
+        """Open LAN registration: a new member creates their own account.
+
+        Registration is intentionally available only in team mode.  It creates a
+        member (never an administrator), and the chosen password is final — the
+        user is not forced to change it again.
+        """
+        db = require_team_mode()
+        username = payload.username.strip()
+        display_name = payload.displayName.strip() or username
+        if not 2 <= len(username) <= 64 or any(char.isspace() for char in username):
+            raise HTTPException(status_code=422, detail={"error": "username must be 2-64 characters without spaces"})
+        if len(payload.password) < _MIN_PASSWORD_LENGTH:
+            raise HTTPException(status_code=422, detail={"error": f"password must be at least {_MIN_PASSWORD_LENGTH} characters"})
+        try:
+            uid = db.create_user(
+                username=username,
+                password_hash=auth.hash_password(payload.password),
+                display_name=display_name,
+                role="user",
+                must_change_password=False,
+            )
+        except DuplicateUsername:
+            raise HTTPException(status_code=409, detail={"error": "username already exists"}) from None
+        ensure_default_workspace(uid)
+        created = db.get_user(uid)
+        assert created is not None
+        return {"user": _user_row_to_json(created)}
 
     @app.post("/api/auth/logout")
     async def logout(request: Request) -> JSONResponse:

@@ -3736,8 +3736,9 @@ function HelpView({ authMode }: { authMode: string }) {
           </section>
           <section>
             <h3>团队成员</h3>
-            <p>团队模式默认只有 <code>admin</code>；管理员打开「更多 → 用户管理」，输入用户名、显示名和初始密码创建成员。</p>
-            <p>成员打开同一地址，用管理员分配的账号登录；首次登录会强制修改密码。</p>
+            <p>团队模式默认只有 <code>admin</code>。登录页现在开放自助注册，成员可以自己创建账号并直接登录。</p>
+            <p>管理员也可以在「更多 → 用户管理」里创建成员、分配初始密码。</p>
+            <p>用 <code>PI_ADMIN_PASSWORD</code> 预设管理员密码时，首次登录不会强制改密；随机生成的管理员密码才会要求改密。</p>
           </section>
           <section>
             <h3>单机模式与登录</h3>

@@ -81,6 +81,8 @@ def test_script_starts_a_server(tmp_path):
     port = _free_port()
     env = {k: v for k, v in os.environ.items() if k not in ("MODEL", "PORT")}
     env["PI_API_KEY"] = "sk-test-not-a-real-key"
+    env["PI_ADMIN_PASSWORD"] = "pw123456"
+    env["PI_DATA_ROOT"] = str(tmp_path / "data")
 
     proc = subprocess.Popen(
         ["bash", str(START_SH), str(tmp_path)],
@@ -107,8 +109,16 @@ def test_script_starts_a_server(tmp_path):
         # /api/models goes through the full bootstrap (settings, trust, resources,
         # extensions, model resolution, credential check) — a stronger signal that
         # the script's environment plumbing is actually correct.
-        models = httpx.get(f"http://127.0.0.1:{port}/api/models", timeout=30).json()["models"]
-        assert any(model["id"] == "deepseek-v4-flash" for model in models)
+        client = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=30)
+        try:
+            login = client.post(
+                "/api/auth/login", json={"username": "admin", "password": "pw123456"}
+            )
+            assert login.status_code == 200, login.text
+            models = client.get("/api/models").json()["models"]
+            assert any(model["id"] == "deepseek-v4-flash" for model in models)
+        finally:
+            client.close()
     finally:
         if proc.poll() is None:
             proc.terminate()

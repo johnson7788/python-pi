@@ -1678,3 +1678,8 @@ h1, h2, h3 { letter-spacing: -.018em; }
   --gutter: max(20px, calc((100% - var(--measure)) / 2 + 24px));
   --page-gutter: max(20px, calc((100% - var(--page-measure)) / 2 + 24px));
 }
+
+/* Auth: login / register switch */
+.auth__switch { display: flex; gap: 2px; padding: 3px; margin-bottom: 18px; border-radius: 8px; background: var(--bg-inset); }
+.auth__switch button { flex: 1; height: 30px; border-radius: 6px; font-size: 12.5px; color: var(--label-3); }
+.auth__switch button.is-active { background: var(--bg-elevated); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.08); }

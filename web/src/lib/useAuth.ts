@@ -49,6 +49,7 @@ export interface AuthApi {
   error: string | null
   notice: string | null
   login: (username: string, password: string) => Promise<void>
+  register: (username: string, password: string, displayName?: string) => Promise<void>
   logout: () => Promise<void>
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>
   refresh: () => Promise<void>
@@ -110,6 +111,18 @@ export function useAuth(): AuthApi {
     }
   }, [])
 
+  const register = useCallback(async (username: string, password: string, displayName?: string) => {
+    setError(null)
+    try {
+      await api.post('/api/auth/register', { username, password, displayName: displayName || '' })
+      await login(username, password)
+      setNotice('注册成功，已登录。')
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '注册失败')
+      throw failure
+    }
+  }, [login])
+
   const logout = useCallback(async () => {
     try {
       await api.post('/api/auth/logout')
@@ -146,6 +159,7 @@ export function useAuth(): AuthApi {
     error,
     notice,
     login,
+    register,
     logout,
     changePassword,
     refresh: load,
