@@ -31,7 +31,7 @@ import type { AgentApi, ToolExecution, TranscriptEntry } from '../lib/useAgent'
 import type { AuthApi } from '../lib/useAuth'
 import './workbench.css'
 
-type View = 'home' | 'chat' | 'apps' | 'skills' | 'plugins' | 'scheduled' | 'files' | 'help'
+type View = 'home' | 'chat' | 'apps' | 'skills' | 'plugins' | 'scheduled' | 'files' | 'help' | 'users'
 
 interface WorkspaceRow {
   id: string
@@ -297,6 +297,7 @@ function viewFromRoute(route: string): View {
   if (section === 'scheduled') return 'scheduled'
   if (section === 'files') return 'files'
   if (section === 'help') return 'help'
+  if (section === 'users') return 'users'
   return 'home'
 }
 
@@ -622,6 +623,11 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
                 <div className="wb-more" onClick={(event) => event.stopPropagation()}>
                   {auth.authMode === 'team' ? (
                     <>
+                      {auth.user?.isAdmin ? (
+                        <button type="button" onClick={() => { setMoreOpen(false); go('/workbench/users') }}>
+                          用户管理
+                        </button>
+                      ) : null}
                       <button type="button" onClick={() => { setMoreOpen(false); go('/account') }}>
                         修改密码
                       </button>
@@ -879,6 +885,7 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
           ) : null}
           {view === 'files' ? <LibraryView workspace={activeWorkspace} /> : null}
           {view === 'help' ? <HelpView authMode={auth.authMode} /> : null}
+          {view === 'users' ? <UsersView isAdmin={Boolean(auth.user?.isAdmin)} /> : null}
         </main>
       </div>
 
@@ -3602,6 +3609,99 @@ interface PluginRow {
   enabled: boolean
 }
 
+interface AdminUser {
+  uid: string
+  username: string
+  displayName: string
+  role: string
+  status: string
+  mustChangePassword: boolean
+  createdAt: string
+  lastLoginAt: string | null
+}
+
+function UsersView({ isAdmin }: { isAdmin: boolean }) {
+  const [users, setUsers] = useState<AdminUser[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [form, setForm] = useState({ username: '', displayName: '', password: '' })
+
+  const load = () => {
+    if (!isAdmin) return
+    setError(null)
+    api
+      .get<{ users: AdminUser[] }>('/api/admin/users')
+      .then((payload) => setUsers(payload.users))
+      .catch((failure: unknown) => {
+        setUsers([])
+        setError(failure instanceof Error ? failure.message : '读取用户失败')
+      })
+  }
+
+  useEffect(load, [isAdmin])
+
+  const create = async () => {
+    const username = form.username.trim()
+    if (!username || form.password.length < 8) {
+      setError('用户名不能为空，密码至少 8 位。')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      await api.post('/api/admin/users', {
+        username,
+        displayName: form.displayName.trim() || username,
+        password: form.password,
+        role: 'user',
+        mustChangePassword: true,
+      })
+      setForm({ username: '', displayName: '', password: '' })
+      load()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '创建用户失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="wb-page"><div className="wb-page-inner"><header className="wb-page-head"><div><h2>用户管理</h2><p>只有管理员可以创建和管理用户。</p></div></header></div></div>
+    )
+  }
+
+  return (
+    <div className="wb-page">
+      <div className="wb-page-inner wb-users-page">
+        <header className="wb-page-head">
+          <div>
+            <h2>用户管理</h2>
+            <p>团队成员的账号由管理员创建；新用户首次登录必须修改密码。</p>
+          </div>
+          <span className="wb-chip">{users?.length ?? 0} 个用户</span>
+        </header>
+        {error ? <div className="wb-alert">{error}</div> : null}
+        <div className="wb-user-form">
+          <label>用户名<input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="例如 zhangsan" /></label>
+          <label>显示名<input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="例如 张三" /></label>
+          <label>初始密码<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="至少 8 位" /></label>
+          <button type="button" className="wb-button" onClick={() => void create()} disabled={busy}>{busy ? '创建中…' : '创建用户'}</button>
+        </div>
+        <div className="wb-user-table">
+          <div className="wb-user-row is-head"><span>用户名</span><span>显示名</span><span>角色</span><span>状态</span><span>最近登录</span></div>
+          {users === null ? <p className="wb-muted">正在读取…</p> : users.map((user) => (
+            <div className="wb-user-row" key={user.uid}>
+              <b>{user.username}</b><span>{user.displayName}</span><span>{user.role === 'user' ? '成员' : '管理员'}</span><span>{user.status === 'disabled' ? '已停用' : '正常'}</span><span>{user.lastLoginAt ? formatWhen(user.lastLoginAt) : '从未'}</span>
+            </div>
+          ))}
+        </div>
+        <p className="wb-muted wb-user-hint">给同事分配用户名和初始密码后，对方打开同一地址即可登录；首次登录会要求改成自己的密码。</p>
+      </div>
+    </div>
+  )
+}
+
 function HelpView({ authMode }: { authMode: string }) {
   return (
     <div className="wb-page">
@@ -3633,6 +3733,11 @@ function HelpView({ authMode }: { authMode: string }) {
           <section>
             <h3>快捷键</h3>
             <p><kbd>Enter</kbd> 发送，<kbd>Shift</kbd> + <kbd>Enter</kbd> 换行；<kbd>Esc</kbd> 关闭当前弹层。</p>
+          </section>
+          <section>
+            <h3>团队成员</h3>
+            <p>团队模式默认只有 <code>admin</code>；管理员打开「更多 → 用户管理」，输入用户名、显示名和初始密码创建成员。</p>
+            <p>成员打开同一地址，用管理员分配的账号登录；首次登录会强制修改密码。</p>
           </section>
           <section>
             <h3>单机模式与登录</h3>

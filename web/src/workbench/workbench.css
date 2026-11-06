@@ -806,3 +806,17 @@
 .wb-help-grid p:last-child { margin-bottom: 0; }
 .wb-help-grid code, .wb-help-grid kbd { padding: 1px 5px; border-radius: 4px; background: var(--wb-surface); border: 1px solid var(--wb-line); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
 @media (max-width: 900px) { .wb-help-grid { grid-template-columns: 1fr; } }
+
+/* Admin: team users */
+.wb-users-page { max-width: 980px; }
+.wb-user-form { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) auto; gap: 10px; align-items: end; padding: 14px; border: 1px solid var(--wb-line); border-radius: 9px; background: #fff; margin-bottom: 12px; }
+.wb-user-form label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; color: var(--wb-muted); }
+.wb-user-form input { height: 34px; padding: 0 9px; border: 1px solid var(--wb-line); border-radius: 6px; font-size: 13px; color: var(--wb-ink); outline: none; }
+.wb-user-form input:focus { border-color: var(--wb-blue); box-shadow: 0 0 0 3px rgba(68,140,252,.08); }
+.wb-user-table { border: 1px solid var(--wb-line); border-radius: 9px; overflow: hidden; background: #fff; }
+.wb-user-row { display: grid; grid-template-columns: 1fr 1fr .7fr .7fr 1fr; gap: 10px; align-items: center; min-height: 38px; padding: 0 14px; border-bottom: 1px solid var(--wb-line); font-size: 12px; color: var(--wb-ink-2); }
+.wb-user-row:last-child { border-bottom: 0; }
+.wb-user-row.is-head { min-height: 34px; background: var(--wb-surface); color: var(--wb-muted); font-size: 11px; }
+.wb-user-row b { color: var(--wb-ink); font-weight: 500; }
+.wb-user-hint { margin-top: 10px; }
+@media (max-width: 760px) { .wb-user-form { grid-template-columns: 1fr; } .wb-user-row { grid-template-columns: 1fr 1fr 1fr; } .wb-user-row span:nth-child(4), .wb-user-row span:nth-child(5) { display: none; } }
