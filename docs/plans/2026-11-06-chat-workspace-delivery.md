@@ -1,0 +1,63 @@
+# 工作台修正：思考折叠 / 产物交付 / 用户工作空间 / 空间对话展开
+
+> 2026-11-06。针对实际生成 PPT 时的四个问题修正。
+
+## 1. 思考块自动折叠
+
+- 思考块改为默认折叠的窄行：图标 +「思考」+ 状态 + 首行摘要；
+- 运行中显示「思考中…」，回合结束后自动折叠；
+- 展开后按 Markdown 渲染，不再是一整块原始文本；
+- 工具卡参数默认折叠，失败结果才自动展开，减少长参数占屏。
+
+![聊天交付](../workbench-chat-delivery.png)
+
+## 2. 产物交付协议
+
+新增内置 `present` 工具（`packages/pi-coding-agent/src/pi_coding_agent/tools/present.py`）：
+
+```json
+{"files": [{"path": "生日祝福.pptx", "description": "一页生日祝福 PPT"}]}
+```
+
+- 模型在文件最终完成后调用；
+- 工具校验路径必须在当前 workspace、文件真实存在；
+- 工作台从 transcript 的 `present` 工具调用生成「交付文件」卡片，固定显示在**本轮消息最后**；
+- 卡片支持「在线编辑」（DOCX/XLSX/PPTX 走 `/office`）和下载；
+- `present` 工具调用本身不再重复显示普通工具卡。
+
+## 3. 每个用户独立工作空间
+
+| 模式 | 默认工作空间 |
+|---|---|
+| 单人（start.sh） | `~/.pi/workspaces/<OS 用户名>` |
+| 团队 | `<data_root>/workspaces/<用户名>` |
+
+- `start.sh` 自动设置 `PI_SINGLE_WORKSPACE`，不再把 python-pi checkout 暴露给资料库；
+- 单人模式保留旧的 session 目录，历史对话仍可见；
+- 团队新用户使用用户名目录；已有用户的旧目录保持不动，避免移动对话；
+- `/api/workspaces` 返回 `path`，侧栏 hover 可看到实际目录；
+- 旧 `output/生日快乐.pptx` 已复制到本机新工作空间，避免丢失。
+
+## 4. 空间对话可展开
+
+- 每个空间行新增展开/收起按钮；
+- 展开时按空间请求 `/api/sessions?workspace=...`；
+- 子列表显示对话标题、时间，点击直接打开；
+- 活动空间显示当前会话数，其他空间在加载后显示数量。
+
+![空间展开](../workbench-workspace-expand.png)
+
+## 验证
+
+- 完整套件：**672 passed**（含 sandbox）；
+- `web` typecheck/build 通过；
+- 手工 mock 验证：
+  - 思考块默认折叠，回合结束自动收起；
+  - `present` 卡片出现在聊天最后；
+  - 空间展开后显示 3 个对话并可点击。
+
+## 已知边界
+
+- `present` 需要模型主动调用；若模型忽略该工具，本轮不会自动生成卡片；
+- 团队旧用户目录不会迁移，只影响新用户；
+- 单人的历史 session 目录沿用旧路径，新工作空间文件从空目录开始。

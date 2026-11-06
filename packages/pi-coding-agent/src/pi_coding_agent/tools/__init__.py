@@ -18,6 +18,7 @@ from .edit import create_edit_tool, prepare_edit_arguments
 from .find import create_find_tool
 from .grep import create_grep_tool
 from .ls import create_ls_tool
+from .present import create_present_tool
 from .path_utils import error_result, render_path, resolve_path, text_result
 from .read import create_read_tool
 from .truncate import (
@@ -35,10 +36,10 @@ from .truncate import (
 from .write import FileMutationQueue, create_write_tool, get_file_mutation_queue
 
 #: Every built-in tool this package can build, in prompt order.
-BUILTIN_TOOL_NAMES: tuple[str, ...] = ("read", "bash", "edit", "write", "grep", "find", "ls")
+BUILTIN_TOOL_NAMES: tuple[str, ...] = ("read", "bash", "edit", "write", "present", "grep", "find", "ls")
 
 #: The subset enabled by default; the search tools are opt-in.
-DEFAULT_ACTIVE_TOOL_NAMES: tuple[str, ...] = ("read", "bash", "edit", "write")
+DEFAULT_ACTIVE_TOOL_NAMES: tuple[str, ...] = ("read", "bash", "edit", "write", "present")
 
 
 def create_builtin_tools(
@@ -80,6 +81,8 @@ def create_builtin_tools(
             tools.append(create_edit_tool(cwd, queue))
         elif name == "write":
             tools.append(create_write_tool(cwd, queue))
+        elif name == "present":
+            tools.append(create_present_tool(cwd))
         elif name == "grep":
             tools.append(create_grep_tool(cwd))
         elif name == "find":
@@ -103,6 +106,7 @@ __all__ = [
     "create_find_tool",
     "create_grep_tool",
     "create_ls_tool",
+    "create_present_tool",
     "create_read_tool",
     "create_write_tool",
     "error_result",

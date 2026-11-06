@@ -56,7 +56,7 @@ from pi_coding_agent.modes.rpc_mode import RpcMode, model_to_json
 from pi_coding_agent.policy import POLICY_EXTENSION_PATH, PolicyConfig
 from pi_coding_agent.resource_loader import ResourceLoader
 from pi_coding_agent.settings import SettingsManager
-from pi_coding_agent.session_manager import SessionManager
+from pi_coding_agent.session_manager import SessionManager, get_default_session_dir
 
 from . import apps as app_catalog
 from . import market as market_catalog
@@ -492,6 +492,7 @@ class SessionRegistry:
         disabled_skills_lookup: Callable[[str, str], Sequence[str]] | None = None,
         plugin_paths_lookup: Callable[[str, str], Sequence[str]] | None = None,
         composition_lookup: Callable[[str, str, str], tuple[str, tuple[str, ...] | None]] | None = None,
+        workspace_path_lookup: Callable[[str, str], str | None] | None = None,
         policy_factory: Callable[[SessionWorker], Any] | None = None,
         on_audit: Callable[[dict[str, Any]], int | None] | None = None,
         on_audit_finish: Callable[[int, bool, int], None] | None = None,
@@ -505,6 +506,7 @@ class SessionRegistry:
         self._disabled_skills_lookup = disabled_skills_lookup
         self._plugin_paths_lookup = plugin_paths_lookup
         self._composition_lookup = composition_lookup
+        self._workspace_path_lookup = workspace_path_lookup
         self._policy_factory = policy_factory
         self._on_audit = on_audit
         self._on_audit_finish = on_audit_finish
@@ -602,7 +604,12 @@ class SessionRegistry:
                 app_skills=app_skills,
             )
         workspace, agent = self.config.ensure_user_layout(uid)
-        if workspace_id != "default":
+        if self._workspace_path_lookup is not None:
+            looked_up = self._workspace_path_lookup(uid, workspace_id)
+            if looked_up:
+                workspace = looked_up
+                os.makedirs(workspace, exist_ok=True)
+        if workspace_id != "default" and self._workspace_path_lookup is None:
             workspace = self.config.ensure_workspace_path(uid, workspace_id)
         resume = (
             self._resume_lookup(uid, workspace_id, app_id, mode_id)
@@ -919,6 +926,19 @@ def create_app(
     # putting a secret in argv: the environment is readable only by the process owner.
     if server_config.api_key and not options.api_key:
         options = dataclasses.replace(options, api_key=server_config.api_key)
+    # A personal install gets its own workspace too.  The old default was the
+    # process cwd, which exposed the python-pi checkout (and everything else)
+    # through the file browser.  Keep the historical session directory so the
+    # conversations created before this move remain visible.
+    if not server_config.requires_auth and server_config.single_workspace:
+        previous_cwd = options.cwd
+        single_cwd = server_config.single_workspace_dir()
+        os.makedirs(single_cwd, exist_ok=True)
+        if options.session_dir is None:
+            session_dir = get_default_session_dir(previous_cwd, options.agent_dir)
+        else:
+            session_dir = options.session_dir
+        options = dataclasses.replace(options, cwd=single_cwd, session_dir=session_dir)
     # Accounts only exist in team mode, so single mode does not create a database (or a
     # data root) behind the user's back — the personal flow stays byte-for-byte what it was.
     database: Database | None = None
@@ -1050,6 +1070,15 @@ def create_app(
             if database is not None
             else None
         ),
+        workspace_path_lookup=(
+            (
+                lambda uid, workspace: database.get_workspace(uid, workspace)["path"]
+                if database.get_workspace(uid, workspace) is not None
+                else None
+            )
+            if database is not None
+            else None
+        ),
         plugin_paths_lookup=(
             (
                 lambda uid, app_id: plugin_catalog.entry_paths(
@@ -1123,11 +1152,23 @@ def create_app(
         return database
 
     def ensure_default_workspace(uid: str) -> None:
-        """Seed the implicit workspace row for an existing or new account."""
+        """Seed the implicit workspace row for an existing or new account.
+
+        New accounts get a directory named after their username.  Existing rows
+        keep their path so conversations and files are not moved behind the
+        user's back.
+        """
         if database is None:
             return
-        root, _agent = server_config.ensure_user_layout(uid)
-        database.ensure_default_workspace(uid, root)
+        existing = database.get_workspace(uid, "default")
+        if existing is not None:
+            os.makedirs(str(existing["path"]), exist_ok=True)
+            return
+        user = database.get_user(uid)
+        username = str(user["username"]) if user is not None else uid
+        root = server_config.workspace_dir_for(uid, username)
+        os.makedirs(root, exist_ok=True)
+        database.ensure_default_workspace(uid, root, f"{username} 的工作空间")
 
     def resolve_workspace(uid: str, requested: str | None) -> str:
         """Validate a workspace id from a query string, defaulting to ``default``."""
@@ -2494,7 +2535,7 @@ def create_app(
         if database is None:
             return {
                 "workspaces": [
-                    {"id": "default", "name": "默认工作空间", "isDefault": True}
+                    {"id": "default", "name": "默认工作空间", "isDefault": True, "path": options.cwd}
                 ],
                 "canCreate": False,
             }
@@ -2509,6 +2550,7 @@ def create_app(
                     "id": str(row["id"]),
                     "name": str(row["name"]),
                     "isDefault": bool(row["is_default"]),
+                    "path": str(row["path"]),
                 }
                 for row in rows
             ],
@@ -2558,7 +2600,11 @@ def create_app(
         worker = await worker_for(request)
         # `agent_dir` is what keeps this list per-user: the same call in single mode falls
         # back to the default agent dir because the option is None there.
-        listed = await SessionManager.list(worker.state.cwd, agent_dir=worker.options.agent_dir)
+        listed = await SessionManager.list(
+            worker.state.cwd,
+            agent_dir=worker.options.agent_dir,
+            session_dir=worker.options.session_dir,
+        )
         return {
             "sessions": [
                 {

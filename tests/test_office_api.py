@@ -27,7 +27,8 @@ def test_office_blob_roundtrip_and_sha_guard(tmp_path):
     with TestClient(app) as client:
         login = client.post("/api/auth/login", json={"username": "admin", "password": "pw123456"})
         uid = login.json()["user"]["uid"]
-        workspace, _agent = config.ensure_user_layout(uid)
+        client.get("/api/workspaces")
+        workspace = app.state.db.get_workspace(uid, "default")["path"]
         target = Path(workspace) / "report.docx"
         target.write_bytes(FIXTURE.read_bytes())
         doc_id = office.encode_doc_id("default", "/report.docx")
@@ -78,17 +79,18 @@ def test_office_lock_and_version_restore(tmp_path):
     with TestClient(app) as client:
         admin = client.post("/api/auth/login", json={"username": "admin", "password": "pw123456"})
         uid = admin.json()["user"]["uid"]
-        workspace, _agent = config.ensure_user_layout(uid)
+        client.get("/api/workspaces")
+        workspace = app.state.db.get_workspace(uid, "default")["path"]
         target = Path(workspace) / "paper.docx"
         target.write_bytes(FIXTURE.read_bytes())
         doc_id = office.encode_doc_id("default", "/paper.docx")
 
         bob_id = app.state.db.create_user(username="bob", password_hash=auth.hash_password("pw123456"))
-        bob_workspace, _bob_agent = config.ensure_user_layout(bob_id)
-        (Path(bob_workspace) / "paper.docx").write_bytes(FIXTURE.read_bytes())
         bob = TestClient(app)
         bob.post("/api/auth/login", json={"username": "bob", "password": "pw123456"})
-
+        bob.get("/api/workspaces")
+        bob_workspace = app.state.db.get_workspace(bob_id, "default")["path"]
+        (Path(bob_workspace) / "paper.docx").write_bytes(FIXTURE.read_bytes())
         lock = client.post(f"/api/office/documents/{doc_id}/lock")
         assert lock.status_code == 200, lock.text
         token = lock.json()["token"]

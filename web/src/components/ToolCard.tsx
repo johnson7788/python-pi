@@ -35,12 +35,15 @@ export function ToolCard({
 
   // Streamed output can be long; collapsing keeps the transcript scannable.
   const [outputOpen, setOutputOpen] = useState(false)
+  const [argsOpen, setArgsOpen] = useState(false)
 
   // A running tool should reveal its output automatically, but only once: after
-  // that the user's own toggle wins.
+  // that the user's own toggle wins. Errors open too; seeing the failure is the
+  // reason the row exists.
   useEffect(() => {
     if (status === 'running' && (execution?.partialResult || execution?.result)) setOutputOpen(true)
-  }, [status, execution?.partialResult, execution?.result])
+    if (isError) setOutputOpen(true)
+  }, [status, execution?.partialResult, execution?.result, isError])
 
   const argsText =
     args !== undefined && args !== null
@@ -66,8 +69,15 @@ export function ToolCard({
 
       {argsText ? (
         <div className="tool-card__section">
-          <div className="tool-card__label">参数</div>
-          <pre className="tool-card__pre">{argsText}</pre>
+          <button
+            type="button"
+            className="tool-card__toggle"
+            onClick={() => setArgsOpen((open) => !open)}
+            aria-expanded={argsOpen}
+          >
+            {argsOpen ? '▾' : '▸'} 参数
+          </button>
+          {argsOpen ? <pre className="tool-card__pre">{argsText}</pre> : null}
         </div>
       ) : null}
 

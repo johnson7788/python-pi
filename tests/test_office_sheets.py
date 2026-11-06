@@ -28,7 +28,8 @@ def test_sheets_open_save(tmp_path):
     with TestClient(app) as client:
         login = client.post("/api/auth/login", json={"username": "admin", "password": "pw123456"})
         uid = login.json()["user"]["uid"]
-        workspace, _agent = config.ensure_user_layout(uid)
+        client.get("/api/workspaces")
+        workspace = app.state.db.get_workspace(uid, "default")["path"]
         target = Path(workspace) / "sheet.xlsx"
         target.write_bytes(FIXTURE.read_bytes())
         doc_id = office.encode_doc_id("default", "/sheet.xlsx")

@@ -737,11 +737,11 @@ def test_truncate_line_boundary() -> None:
 
 
 def test_builtin_tool_names_and_defaults(tmp_path: Path) -> None:
-    assert BUILTIN_TOOL_NAMES == ("read", "bash", "edit", "write", "grep", "find", "ls")
-    assert DEFAULT_ACTIVE_TOOL_NAMES == ("read", "bash", "edit", "write")
+    assert BUILTIN_TOOL_NAMES == ("read", "bash", "edit", "write", "present", "grep", "find", "ls")
+    assert DEFAULT_ACTIVE_TOOL_NAMES == ("read", "bash", "edit", "write", "present")
 
     tools = create_builtin_tools(str(tmp_path))
-    assert [tool.name for tool in tools] == ["read", "bash", "edit", "write"]
+    assert [tool.name for tool in tools] == ["read", "bash", "edit", "write", "present"]
 
     everything = create_builtin_tools(str(tmp_path), BUILTIN_TOOL_NAMES)
     assert [tool.name for tool in everything] == list(BUILTIN_TOOL_NAMES)
@@ -900,3 +900,14 @@ async def test_a_scrubbed_bash_tool_cannot_read_the_shared_credential(
     assert "shared-company-key" not in output
     assert "gh-token" not in output
     assert "done" in output
+
+
+def test_present_tool_records_workspace_files(tmp_path: Path) -> None:
+    import asyncio
+
+    from pi_coding_agent.tools.present import create_present_tool
+
+    (tmp_path / "deck.pptx").write_bytes(b"PK\x03\x04")
+    tool = create_present_tool(str(tmp_path))
+    result = asyncio.run(tool.execute("call-1", {"files": [{"path": "deck.pptx", "description": "生日卡片"}]}))
+    assert result.details == {"files": [{"path": "deck.pptx", "description": "生日卡片"}]}

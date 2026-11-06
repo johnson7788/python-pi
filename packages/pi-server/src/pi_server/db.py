@@ -647,7 +647,7 @@ class Database:
 
     # -- workspaces ------------------------------------------------------------------
 
-    def ensure_default_workspace(self, uid: str, path: str) -> None:
+    def ensure_default_workspace(self, uid: str, path: str, name: str = "默认工作空间") -> None:
         """Create the implicit default row and keep its path current.
 
         The path is stored for display/debugging only; callers still compute it from
@@ -657,8 +657,8 @@ class Database:
         self._write(
             "INSERT OR IGNORE INTO workspaces"
             " (uid, id, name, path, is_default, created_at, updated_at)"
-            " VALUES (?, 'default', '默认工作空间', ?, 1, ?, ?)",
-            (uid, path, now, now),
+            " VALUES (?, 'default', ?, ?, 1, ?, ?)",
+            (uid, name, path, now, now),
         )
         row = self._one("SELECT path FROM workspaces WHERE uid = ? AND id = 'default'", (uid,))
         if row is not None and str(row["path"]) != path:

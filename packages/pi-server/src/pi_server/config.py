@@ -23,6 +23,7 @@ keeps a crafted id from escaping the data root lives here too.
 
 from __future__ import annotations
 
+import getpass
 import os
 import re
 import shutil
@@ -94,6 +95,9 @@ class ServerConfig:
 
     data_root: str
     auth_mode: str = "single"
+    #: Optional dedicated directory for the account-less (single) workspace.
+    #: ``start.sh`` sets it; tests and direct CLI use the supplied cwd.
+    single_workspace: str | None = None
     cookie_secure: bool = False
     session_ttl_hours: int = 24 * 14
     admin_username: str = "admin"
@@ -163,6 +167,29 @@ class ServerConfig:
         """The agent's ``cwd`` for one user — this is the tenant boundary."""
         return os.path.join(self.workspace_root, _checked_uid(uid))
 
+    def workspace_dir_for(self, uid: str, username: str) -> str:
+        """A readable per-user workspace named after the account.
+
+        A short uid suffix keeps two case-different usernames from colliding on a
+        case-insensitive filesystem without putting the random uid first.
+        """
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", username.strip()).strip(".-") or "user"
+        return os.path.join(self.workspace_root, slug)
+
+    def single_workspace_dir(self) -> str:
+        """The local (account-less) user's own workspace.
+
+        It deliberately lives outside the repository: the agent should see the
+        user's files, not python-pi's source tree.  Without an explicit
+        ``PI_SINGLE_WORKSPACE`` this is only known when ``start.sh`` sets it;
+        direct CLI/tests keep their supplied cwd.
+        """
+        if self.single_workspace:
+            return os.path.abspath(os.path.expanduser(self.single_workspace))
+        username = os.environ.get("PI_USERNAME") or getpass.getuser()
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", username.strip()).strip(".-") or "local"
+        return os.path.join(os.path.expanduser("~"), ".pi", "workspaces", slug)
+
     def agent_dir(self, uid: str) -> str:
         """Per-user replacement for ``~/.pi/agent`` (sessions, settings, models)."""
         return os.path.join(self.agent_root, _checked_uid(uid))
@@ -195,14 +222,14 @@ class ServerConfig:
         for path in (self.data_root, self.workspace_root, self.agent_root):
             os.makedirs(path, exist_ok=True)
 
-    def ensure_user_layout(self, uid: str) -> tuple[str, str]:
+    def ensure_user_layout(self, uid: str, username: str | None = None) -> tuple[str, str]:
         """Create (and return) one user's workspace and agent dirs.
 
         A new agent dir is primed from :attr:`template_path` so provider overrides and
         settings are not silently lost just because the agent dir moved per user.  Only
         missing files are added, so re-running never overwrites a user's own edits.
         """
-        workspace = self.workspace_dir(uid)
+        workspace = self.workspace_dir_for(uid, username) if username else self.workspace_dir(uid)
         agent = self.agent_dir(uid)
         os.makedirs(workspace, exist_ok=True)
         os.makedirs(agent, exist_ok=True)
@@ -238,6 +265,7 @@ class ServerConfig:
         values: dict[str, object] = {
             "data_root": resolve_data_root(os.environ.get("PI_DATA_ROOT")),
             "auth_mode": (os.environ.get("PI_AUTH_MODE") or "single").strip().lower(),
+            "single_workspace": os.environ.get("PI_SINGLE_WORKSPACE") or None,
             "cookie_secure": _bool_env("PI_COOKIE_SECURE"),
             "admin_username": os.environ.get("PI_ADMIN_USERNAME") or "admin",
             "api_key": _secret("PI_API_KEY"),

@@ -61,6 +61,13 @@ PORT="${PORT:-$DEFAULT_PORT}"
 AGENT_DIR="${PI_AGENT_DIR:-$DEFAULT_AGENT_DIR}"
 API_KEY="${PI_API_KEY:-}"
 
+# Every account-less install gets its own workspace, named after the OS user,
+# instead of exposing the python-pi checkout to the file browser.
+if [[ -z "${PI_SINGLE_WORKSPACE:-}" ]]; then
+  PI_SINGLE_WORKSPACE="$HOME/.pi/workspaces/$(id -un)"
+fi
+export PI_SINGLE_WORKSPACE
+
 # --- 启动前检查 -----------------------------------------------------------------
 PY="$ROOT/.venv/bin/python"
 if [[ ! -x "$PY" ]]; then
@@ -146,6 +153,7 @@ echo "[start.sh] 工作目录 : $PROJECT_DIR"
 echo "[start.sh] 模型     : $MODEL"
 echo "[start.sh] 凭据     : $KEY_SOURCE"
 echo "[start.sh] 配置目录 : $AGENT_DIR"
+echo "[start.sh] 工作空间 : $PI_SINGLE_WORKSPACE"
 if [[ -n "$NO_SKILLS_NOTE" ]]; then
   echo "[start.sh] 附加行为 : $NO_SKILLS_NOTE"
 fi

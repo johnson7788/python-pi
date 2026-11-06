@@ -384,12 +384,21 @@ async function replay(socket, session) {
     })
 
     // 4. authoritative assistant message: replaces everything accumulated above
+    const presentBlock = (session.pendingPrompt || '').toLowerCase().includes('ppt')
+      ? {
+          type: 'toolCall',
+          id: 'call_mock_present',
+          name: 'present',
+          arguments: { files: [{ path: 'demo.pptx', description: '一页生日祝福 PPT' }] },
+        }
+      : null
     const finalAssistant = {
       role: 'assistant',
       content: [
         { type: 'thinking', thinking: THINKING_TEXT },
         { type: 'text', text: ANSWER_TEXT },
         { type: 'toolCall', id: toolCallId, name: 'read_file', arguments: toolArgs },
+        ...(presentBlock ? [presentBlock] : []),
       ],
       stopReason: 'toolUse',
       usage: USAGE,

@@ -36,6 +36,7 @@ interface WorkspaceRow {
   id: string
   name: string
   isDefault: boolean
+  path?: string
 }
 
 interface AppCapsule {
@@ -332,6 +333,14 @@ function usageLine(usage: Usage | undefined): string {
     .join(' · ')
 }
 
+interface WorkspaceSession {
+  path: string
+  id: string
+  name?: string | null
+  firstMessage?: string | null
+  modified?: number | string
+}
+
 export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([
     { id: 'default', name: '默认工作空间', isDefault: true },
@@ -359,6 +368,8 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [tasksOpen, setTasksOpen] = useState(true)
   const [spacesOpen, setSpacesOpen] = useState(true)
+  const [expandedSpaces, setExpandedSpaces] = useState<Record<string, boolean>>({})
+  const [workspaceSessions, setWorkspaceSessions] = useState<Record<string, WorkspaceSession[]>>({})
   const [draft, setDraft] = useState('')
   const [chatDraft, setChatDraft] = useState('')
 
@@ -386,6 +397,28 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
         setWorkspaceError(failure instanceof Error ? failure.message : '读取空间失败')
       })
   }, [activeWorkspace])
+
+  useEffect(() => {
+    setWorkspaceSessions((current) => ({ ...current, [activeWorkspace]: agent.sessions }))
+  }, [agent.sessions, activeWorkspace])
+
+  const loadWorkspaceSessions = async (workspace: string) => {
+    if (workspaceSessions[workspace]) return
+    try {
+      const payload = await api.get<{ sessions: WorkspaceSession[] }>(
+        `/api/sessions?workspace=${encodeURIComponent(workspace)}`,
+      )
+      setWorkspaceSessions((current) => ({ ...current, [workspace]: payload.sessions }))
+    } catch {
+      setWorkspaceSessions((current) => ({ ...current, [workspace]: [] }))
+    }
+  }
+
+  const toggleWorkspace = (workspace: string) => {
+    const opening = !expandedSpaces[workspace]
+    setExpandedSpaces((current) => ({ ...current, [workspace]: opening }))
+    if (opening) void loadWorkspaceSessions(workspace)
+  }
 
   const loadApps = () => {
     api
@@ -644,19 +677,61 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
             {spacesOpen ? (
               <>
                 {workspaceError ? <p className="wb-side-empty">{workspaceError}</p> : null}
-                {workspaces.map((workspace) => (
-                  <button
-                    key={workspace.id}
-                    type="button"
-                    className={`wb-space${workspace.id === activeWorkspace ? ' is-active' : ''}`}
-                    onClick={() => switchWorkspace(workspace.id)}
-                    title={workspace.name}
-                  >
-                    <Icon name="house" size={17} />
-                    <span>{workspace.name}</span>
-                    {workspace.id === activeWorkspace ? <i>{agent.sessions.length}</i> : null}
-                  </button>
-                ))}
+                {workspaces.map((workspace) => {
+                  const expanded = Boolean(expandedSpaces[workspace.id])
+                  const listed = workspaceSessions[workspace.id]
+                  const count = workspace.id === activeWorkspace ? agent.sessions.length : listed?.length
+                  return (
+                    <div className="wb-space-block" key={workspace.id}>
+                      <div className={`wb-space-row${workspace.id === activeWorkspace ? ' is-active' : ''}`}>
+                        <button
+                          type="button"
+                          className="wb-space"
+                          onClick={() => {
+                            switchWorkspace(workspace.id)
+                            if (!expanded) void loadWorkspaceSessions(workspace.id)
+                          }}
+                          title={workspace.path || workspace.name}
+                        >
+                          <Icon name="house" size={17} />
+                          <span>{workspace.name}</span>
+                          {typeof count === 'number' ? <i>{count}</i> : null}
+                        </button>
+                        <button
+                          type="button"
+                          className="wb-space-toggle"
+                          aria-label={expanded ? '收起对话' : '展开对话'}
+                          aria-expanded={expanded}
+                          onClick={() => toggleWorkspace(workspace.id)}
+                        >
+                          <Icon name="chevronDown" size={12} />
+                        </button>
+                      </div>
+                      {expanded ? (
+                        <div className="wb-space-sessions">
+                          {listed === undefined ? (
+                            <p className="wb-side-empty">读取对话…</p>
+                          ) : listed.length === 0 ? (
+                            <p className="wb-side-empty">还没有对话</p>
+                          ) : (
+                            listed.map((session) => (
+                              <button
+                                key={session.path || session.id}
+                                type="button"
+                                className="wb-space-session"
+                                title={sessionTitle(session)}
+                                onClick={() => openSession(session.path)}
+                              >
+                                <span>{sessionTitle(session)}</span>
+                                <time>{formatWhen(session.modified)}</time>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  )
+                })}
               </>
             ) : null}
           </div>
@@ -919,6 +994,7 @@ function ChatView({
 }) {
   const title = agent.state?.sessionName?.trim() || '新任务'
   const [artifactsOpen, setArtifactsOpen] = useState(false)
+  const [presentedOfficePath, setPresentedOfficePath] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<Record<number, number>>({})
   const sessionFile = agent.state?.sessionFile
 
@@ -980,9 +1056,14 @@ function ChatView({
         <div className="wb-chat-main">
           <WbTranscript
             agent={agent}
+            workspaceId={workspaceId}
             sessionFile={sessionFile}
             feedback={feedback}
             onFeedback={(timestamp, rating) => void rate(timestamp, rating)}
+            onOpenPresented={(path) => {
+              if (/\.(docx|xlsx|pptx)$/i.test(path)) setPresentedOfficePath(path)
+              else setArtifactsOpen(true)
+            }}
           />
           <div className="wb-chat-composer">
             <WbComposer
@@ -1002,6 +1083,14 @@ function ChatView({
           <ArtifactPane workspaceId={workspaceId} onClose={() => setArtifactsOpen(false)} />
         ) : null}
       </div>
+      {presentedOfficePath ? (
+        <OfficeEditor
+          workspaceId={workspaceId}
+          path={presentedOfficePath}
+          onClose={() => setPresentedOfficePath(null)}
+          onSaved={() => undefined}
+        />
+      ) : null}
     </div>
   )
 }
@@ -1638,19 +1727,144 @@ function ArtifactPane({ workspaceId, onClose }: { workspaceId: string; onClose: 
   )
 }
 
+interface PresentedFile {
+  path: string
+  description: string
+}
+
+function parsePresentFiles(block: ContentBlock): PresentedFile[] {
+  const record = asRecord(block)
+  let args: unknown = record.arguments
+  if (typeof record.argumentsRaw === 'string' && !args) {
+    try {
+      args = JSON.parse(record.argumentsRaw) as unknown
+    } catch {
+      args = null
+    }
+  }
+  const rawFiles = asRecord(args).files
+  if (!Array.isArray(rawFiles)) return []
+  return rawFiles
+    .map((item) => {
+      const file = asRecord(item)
+      return {
+        path: typeof file.path === 'string' ? file.path : '',
+        description: typeof file.description === 'string' ? file.description : '',
+      }
+    })
+    .filter((file) => file.path.length > 0)
+}
+
+function collectPresented(transcript: TranscriptEntry[]): PresentedFile[] {
+  const files = new Map<string, PresentedFile>()
+  for (const entry of transcript) {
+    if (entry.message.role !== 'assistant') continue
+    for (const block of entry.message.content) {
+      if (!isToolCallBlock(block) || block.name !== 'present') continue
+      for (const file of parsePresentFiles(block)) {
+        files.set(file.path, file)
+      }
+    }
+  }
+  return [...files.values()]
+}
+
+function PresentedFiles({
+  files,
+  workspaceId,
+  onOpen,
+}: {
+  files: PresentedFile[]
+  workspaceId: string
+  onOpen: (path: string) => void
+}) {
+  return (
+    <div className="wb-presented">
+      <div className="wb-presented-title">
+        <Icon name="book" size={14} />
+        <span>交付文件</span>
+      </div>
+      {files.map((file) => {
+        const name = file.path.split('/').filter(Boolean).pop() || file.path
+        const extension = name.includes('.') ? name.split('.').pop()!.toUpperCase() : 'FILE'
+        const office = /\.(docx|xlsx|pptx)$/i.test(name)
+        const href = `/api/workspace/download?workspace=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(file.path)}`
+        return (
+          <div className="wb-presented-card" key={file.path}>
+            <span className="wb-presented-icon"><Icon name={extension === 'PPTX' ? 'slides' : extension === 'XLSX' ? 'sheet' : 'file'} size={20} /></span>
+            <span className="wb-presented-body">
+              <b>{name}</b>
+              <small>{file.description || extension}</small>
+            </span>
+            <button type="button" className="wb-button" onClick={() => onOpen(file.path)}>
+              {office ? '在线编辑' : '查看'}
+            </button>
+            <a className="wb-link" href={href} download>下载</a>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function WbThinking({ text, running }: { text: string; running: boolean }) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!running) setOpen(false)
+  }, [running])
+  const summary =
+    text
+      .split(/\n+/)
+      .map((line) => line.replace(/[*#`>]/g, '').trim())
+      .filter(Boolean)[0] || '思考过程'
+  return (
+    <div className={`wb-thinking${open ? ' is-open' : ''}`} data-running={running || undefined}>
+      <button
+        type="button"
+        className="wb-thinking-head"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Icon name="spark" size={14} />
+        <span>思考</span>
+        <em>{running ? '思考中…' : '已完成'}</em>
+        {!open ? <small>{summary}</small> : null}
+        <Icon name="chevronDown" size={12} />
+      </button>
+      {open ? (
+        <div className="wb-thinking-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />
+      ) : null}
+    </div>
+  )
+}
+
 function WbTranscript({
   agent,
+  workspaceId,
   sessionFile,
   feedback,
   onFeedback,
+  onOpenPresented,
 }: {
   agent: AgentApi
+  workspaceId: string
   sessionFile?: string
   feedback: Record<number, number>
   onFeedback: (timestamp: number, rating: number) => void
+  onOpenPresented: (path: string) => void
 }) {
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
+  const presented = useMemo(() => {
+    let lastUser = -1
+    for (let index = agent.transcript.length - 1; index >= 0; index -= 1) {
+      if (agent.transcript[index].message.role === 'user') {
+        lastUser = index
+        break
+      }
+    }
+    return collectPresented(agent.transcript.slice(lastUser + 1))
+  }, [agent.transcript])
   const inlineToolCalls = useMemo(() => {
     const ids = new Set<string>()
     for (const entry of agent.transcript) {
@@ -1662,12 +1876,24 @@ function WbTranscript({
     return ids
   }, [agent.transcript])
 
+  const presentIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const entry of agent.transcript) {
+      if (entry.message.role !== 'assistant') continue
+      for (const block of entry.message.content) {
+        if (isToolCallBlock(block) && block.name === 'present' && block.id) ids.add(block.id)
+      }
+    }
+    return ids
+  }, [agent.transcript])
+
   const visible = useMemo(
     () =>
       agent.transcript.filter(
-        (entry) => !(entry.message.role === 'toolResult' && inlineToolCalls.has(entry.message.toolCallId)),
+        (entry) =>
+          !(entry.message.role === 'toolResult' && (inlineToolCalls.has(entry.message.toolCallId) || presentIds.has(entry.message.toolCallId))),
       ),
-    [agent.transcript, inlineToolCalls],
+    [agent.transcript, inlineToolCalls, presentIds],
   )
 
   useEffect(() => {
@@ -1703,6 +1929,13 @@ function WbTranscript({
               onFeedback={onFeedback}
             />
           ))}
+          {presented.length > 0 ? (
+            <PresentedFiles
+              files={presented}
+              workspaceId={workspaceId}
+              onOpen={onOpenPresented}
+            />
+          ) : null}
         </div>
       )}
     </div>
@@ -1737,7 +1970,12 @@ function WbMessage({
           <div className="wb-msg-name">Pi <span>助手</span></div>
           <div className="wb-msg-content">
             {assistant.content.map((block, index) => (
-              <WbBlock key={`${block.type}-${index}`} block={block} toolExecutions={toolExecutions} />
+              <WbBlock
+                key={`${block.type}-${index}`}
+                block={block}
+                toolExecutions={toolExecutions}
+                streaming={streaming}
+              />
             ))}
             {assistant.content.length === 0 && streaming ? <span className="wb-caret" /> : null}
             {assistant.errorMessage ? <div className="wb-msg-error">{assistant.errorMessage}</div> : null}
@@ -1799,23 +2037,21 @@ function WbMessage({
 function WbBlock({
   block,
   toolExecutions,
+  streaming,
 }: {
   block: ContentBlock
   toolExecutions: Record<string, ToolExecution>
+  streaming?: boolean
 }) {
   if (isTextBlock(block)) {
     if (!block.text.trim()) return null
     return <div className="wb-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(block.text) }} />
   }
   if (isThinkingBlock(block)) {
-    return (
-      <details className="wb-thinking">
-        <summary>思考过程</summary>
-        <div>{block.thinking}</div>
-      </details>
-    )
+    return <WbThinking text={block.thinking} running={Boolean(streaming)} />
   }
   if (isToolCallBlock(block)) {
+    if (block.name === 'present') return null
     return (
       <ToolCard
         toolCallId={block.id}

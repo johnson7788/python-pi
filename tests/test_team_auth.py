@@ -17,6 +17,8 @@ import time
 import httpx
 import pytest
 import websockets
+from fastapi.testclient import TestClient
+from pi_server.app import create_app
 from conftest import (
     TEAM_ADMIN_PASSWORD,
     TEAM_USER_PASSWORD,
@@ -357,10 +359,10 @@ def test_two_users_share_nothing(team_server):
             ada_state = ada.get("/api/state").json()
             bob_state = bob.get("/api/state").json()
 
-            # The tenant boundary is the workspace path, and it is derived from the uid.
+            # The tenant boundary is the workspace path, named after the account.
             assert ada_state["cwd"] != bob_state["cwd"]
-            assert ada_state["cwd"] == str(team_server.data_root / "workspaces" / uids["ada"])
-            assert bob_state["cwd"] == str(team_server.data_root / "workspaces" / uids["bob"])
+            assert ada_state["cwd"] == str(team_server.data_root / "workspaces" / "ada")
+            assert bob_state["cwd"] == str(team_server.data_root / "workspaces" / "bob")
 
             # Each user's agent really writes into its own workspace.
             reset_fake_model()
@@ -368,8 +370,8 @@ def test_two_users_share_nothing(team_server):
             reset_fake_model()
             ws_prompt(team_server, _cookie(bob))
 
-            ada_workspace = team_server.data_root / "workspaces" / uids["ada"]
-            bob_workspace = team_server.data_root / "workspaces" / uids["bob"]
+            ada_workspace = team_server.data_root / "workspaces" / "ada"
+            bob_workspace = team_server.data_root / "workspaces" / "bob"
             assert (ada_workspace / "e2e.txt").is_file()
             assert (bob_workspace / "e2e.txt").is_file()
 
@@ -459,7 +461,7 @@ def test_the_worker_cap_is_enforced(tmp_path):
 
 
 def test_single_mode_passes_the_command_line_through(tmp_path):
-    """The personal flow must not acquire per-user directories by accident."""
+    """Without an explicit single workspace, direct CLI/tests keep their cwd."""
     config = ServerConfig(data_root=str(tmp_path), auth_mode="single")
     base = BootstrapOptions(cwd="/tmp/somewhere", agent_dir="/tmp/agent")
     registry = SessionRegistry(base, config)
@@ -468,6 +470,17 @@ def test_single_mode_passes_the_command_line_through(tmp_path):
     assert options.agent_dir == base.agent_dir
     # Composition is additive: the command-line paths are untouched, the app prompt is added.
     assert options.app_prompt
+
+
+def test_single_mode_can_use_a_dedicated_workspace(tmp_path):
+    config = ServerConfig(
+        data_root=str(tmp_path),
+        auth_mode="single",
+        single_workspace=str(tmp_path / "mine"),
+    )
+    base = BootstrapOptions(cwd="/tmp/somewhere", agent_dir=str(tmp_path / "agent"))
+    app = create_app(base, config=config)
+    assert app.state.registry.options_for("local").cwd == str(tmp_path / "mine")
 
 
 def test_team_mode_scrubs_the_shell_environment(tmp_path):

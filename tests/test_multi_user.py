@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -116,7 +117,7 @@ def test_users_run_at_the_same_time_without_interfering(fake_openai, tmp_path):
                     assert "agent_start" in kinds and "agent_end" in kinds, (name, kinds)
 
                     # The path it was told is its own, and the transcript it got is its own.
-                    assert result["ready"]["cwd"] == str(server.data_root / "workspaces" / uids[name])
+                    assert result["ready"]["cwd"] == str(server.data_root / "workspaces" / name)
                     assert str(server.data_root / "agents" / uids[name]) in result["state"]["data"]["sessionFile"]
 
                     # The prompt was acknowledged, not dropped under load.
@@ -171,7 +172,7 @@ def test_each_user_sees_only_their_own_workspace_and_sessions(fake_openai, tmp_p
 
                 # The file on disk is where that user's own workspace is, and nowhere else.
                 for name in names:
-                    expected = server.data_root / "workspaces" / uids[name] / f"{name}.txt"
+                    expected = server.data_root / "workspaces" / name / f"{name}.txt"
                     assert expected.read_text(encoding="utf-8") == f"written by {name}"
             finally:
                 for client in clients.values():

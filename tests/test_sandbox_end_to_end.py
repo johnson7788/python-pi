@@ -280,7 +280,7 @@ def test_bash_works_with_the_same_paths_the_agent_is_told(sandboxed_server):
             transcript = _prompt(server, cookie_header(member))
 
             # `pwd` must print the path the read/write tools use, and `ls` must work there.
-            assert str(server.data_root / "workspaces" / uid) in transcript
+            assert str(server.data_root / "workspaces" / "ada") in transcript
             assert "hi" in transcript
             assert "No such container" not in transcript
             assert "cannot access" not in transcript

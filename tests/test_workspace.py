@@ -217,7 +217,7 @@ def test_a_user_can_upload_edit_and_download_a_file(team_server):
             assert uploaded.json()["path"] == "/data/notes.txt"
 
             # It really landed in this user's workspace, and nowhere else.
-            on_disk = team_server.workspace(uid) / "data" / "notes.txt"
+            on_disk = team_server.data_root / "workspaces" / "ada" / "data" / "notes.txt"
             assert on_disk.read_bytes() == b"raw bytes"
 
             # JSON form: the text editor's path through the same endpoint.
@@ -309,7 +309,7 @@ def test_a_symlink_planted_by_the_agent_cannot_escape(team_server):
         try:
             uid = member.get("/api/auth/me").json()["user"]["uid"]
             member.get("/api/workspace/tree")  # materialises the workspace directory
-            workspace = team_server.workspace(uid)
+            workspace = team_server.data_root / "workspaces" / "ada"
             outside = team_server.data_root / "template"
             os.symlink(outside, workspace / "escape")
 

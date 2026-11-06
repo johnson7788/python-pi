@@ -108,6 +108,19 @@
 .wb-session:hover { background: #eef2f8; color: var(--wb-ink); }
 .wb-session.is-active { background: #fff; border: 1px solid var(--wb-line); color: var(--wb-ink); font-weight: 500; }
 
+.wb-space-block { margin: 2px 0; }
+.wb-space-row { display: flex; align-items: center; gap: 2px; border-radius: 8px; }
+.wb-space-row.is-active { background: #fff; border: 1px solid var(--wb-line); box-shadow: 0 1px 2px rgba(18, 24, 38, 0.04); }
+.wb-space-row .wb-space { width: auto; flex: 1; min-width: 0; }
+.wb-space-toggle { width: 24px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 5px; color: var(--wb-muted-2); }
+.wb-space-toggle:hover { background: #eef2f8; color: var(--wb-ink); }
+.wb-space-toggle svg { transition: transform .15s ease; }
+.wb-space-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.wb-space-sessions { margin: 2px 0 6px 26px; padding-left: 8px; border-left: 1px solid var(--wb-line); display: flex; flex-direction: column; gap: 1px; }
+.wb-space-session { display: flex; align-items: center; gap: 8px; min-height: 27px; padding: 2px 6px; border-radius: 5px; text-align: left; color: var(--wb-ink-2); font-size: 11px; }
+.wb-space-session:hover { background: #eef2f8; }
+.wb-space-session span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-space-session time { flex: none; font-size: 10px; color: var(--wb-muted-2); }
 .wb-space {
   width: 100%;
   height: 38px;
@@ -303,9 +316,25 @@
 .wb-md table { border-collapse: collapse; width: 100%; margin: 2px 0 12px; font-size: 13px; }
 .wb-md th, .wb-md td { border: 1px solid var(--wb-line); padding: 8px 10px; text-align: left; }
 .wb-md th { background: var(--wb-surface); font-weight: 600; }
-.wb-thinking { margin-bottom: 10px; border: 1px solid var(--wb-line); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: var(--wb-ink-2); }
-.wb-thinking summary { cursor: pointer; color: var(--wb-muted); }
-.wb-thinking div { margin-top: 6px; white-space: pre-wrap; }
+.wb-thinking { margin: 2px 0 10px; font-size: 12px; color: var(--wb-muted); }
+.wb-thinking-head { width: 100%; display: flex; align-items: center; gap: 7px; min-width: 0; padding: 3px 0; color: var(--wb-muted); text-align: left; }
+.wb-thinking-head > span { flex: none; }
+.wb-thinking-head em { flex: none; font-style: normal; font-size: 11px; color: var(--wb-muted-2); }
+.wb-thinking-head small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #8b8f99; }
+.wb-thinking-head svg { flex: none; transition: transform .15s ease; }
+.wb-thinking.is-open .wb-thinking-head svg { transform: rotate(180deg); }
+.wb-thinking-body { margin: 4px 0 8px 21px; padding: 8px 12px; border-left: 2px solid #e4e7ee; color: var(--wb-ink-2); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.wb-thinking-body p { margin: 0 0 6px; }
+.wb-thinking-body p:last-child { margin-bottom: 0; }
+.wb-thinking[data-running] .wb-thinking-head > span { color: var(--wb-primary); }
+.wb-presented { margin-top: 18px; border-top: 1px solid var(--wb-line); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.wb-presented-title { display: flex; align-items: center; gap: 6px; color: var(--wb-muted); font-size: 12px; }
+.wb-presented-card { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--wb-line); border-radius: 9px; background: #fff; }
+.wb-presented-icon { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: 8px; background: #eef3ff; color: var(--wb-primary); }
+.wb-presented-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.wb-presented-body b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: var(--wb-ink); }
+.wb-presented-body small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--wb-muted); font-size: 11px; }
+.wb-presented-card .wb-link { flex: none; }
 .wb-block-unknown { padding: 8px; border-radius: 6px; background: #f7f8fa; font-size: 11px; overflow: auto; }
 .wb-caret { display: inline-block; width: 2px; height: 15px; background: var(--wb-primary); animation: wb-blink 1s steps(2) infinite; }
 @keyframes wb-blink { 50% { opacity: 0; } }
