@@ -820,3 +820,15 @@
 .wb-user-row b { color: var(--wb-ink); font-weight: 500; }
 .wb-user-hint { margin-top: 10px; }
 @media (max-width: 760px) { .wb-user-form { grid-template-columns: 1fr; } .wb-user-row { grid-template-columns: 1fr 1fr 1fr; } .wb-user-row span:nth-child(4), .wb-user-row span:nth-child(5) { display: none; } }
+
+/* DSH-style running footer, under the active process rows. */
+.wb-turn-live { display: flex; align-items: center; gap: 6px; padding: 8px 0 2px; color: var(--wb-primary); font-size: 13px; }
+.wb-turn-live svg { animation: wb-live-blink 1s ease-in-out infinite; }
+.wb-turn-live span { color: var(--wb-primary); }
+.wb-turn-live i { color: var(--wb-primary); font-style: normal; letter-spacing: 1px; opacity: .65; }
+.wb-turn-live.is-quiet, .wb-turn-process.is-quiet .wb-turn-live span, .wb-turn-process.is-quiet .wb-turn-live i { color: #a26b2a; }
+.wb-turn-process.is-quiet .wb-turn-live svg { animation: none; color: #a26b2a; }
+.wb-turn-process.is-stuck .wb-turn-live, .wb-turn-process.is-stuck .wb-turn-live span, .wb-turn-process.is-stuck .wb-turn-live i { color: #b33a3a; }
+.wb-turn-process.is-stuck .wb-turn-live svg { animation: none; color: #b33a3a; }
+
+.wb-html-preview { flex: 1; width: 100%; min-height: 0; border: 1px solid var(--wb-line); border-radius: 6px; background: #fff; }

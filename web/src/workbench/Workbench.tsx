@@ -1408,6 +1408,7 @@ function ArtifactPane({
   const [tableRows, setTableRows] = useState<string[][]>([])
   const [tableMode, setTableMode] = useState(false)
   const [markdownMode, setMarkdownMode] = useState(false)
+  const [htmlPreview, setHtmlPreview] = useState(true)
   const [slides, setSlides] = useState<SlidePreviewRow[] | null>(null)
   const [sheets, setSheets] = useState<SheetPreviewRow[] | null>(null)
   const [officePath, setOfficePath] = useState<string | null>(null)
@@ -1464,7 +1465,8 @@ function ArtifactPane({
         const kind = delimitedKind(extension)
         setTableRows(kind ? parseDelimited(content, kind.delimiter) : [])
         setTableMode(Boolean(kind))
-        setMarkdownMode(false)
+        setMarkdownMode(extension === 'md' || extension === 'mdx')
+        setHtmlPreview(true)
       })
       .catch((failure: unknown) => setError(failure instanceof Error ? failure.message : '预览失败'))
   }, [selectedPath, workspaceId])
@@ -1661,6 +1663,23 @@ function ArtifactPane({
                 </>
               )}
             </div>
+          ) : selected.extension === 'html' || selected.extension === 'htm' ? (
+            htmlPreview ? (
+              <iframe
+                className="wb-html-preview"
+                title={selected.name}
+                sandbox="allow-same-origin"
+                srcDoc={text}
+              />
+            ) : (
+              <textarea
+                className="wb-artifact-text"
+                value={text}
+                onChange={(event) => setText(event.target.value)}
+                spellCheck={false}
+                aria-label={`编辑 ${selected.name}`}
+              />
+            )
           ) : selected.editable ? (
             <div className="wb-artifact-edit">
               <div className="wb-artifact-toolbar">
@@ -1689,6 +1708,15 @@ function ArtifactPane({
                     onClick={() => setMarkdownMode((value) => !value)}
                   >
                     {markdownMode ? '编辑' : '预览'}
+                  </button>
+                ) : null}
+                {selected.extension === 'html' || selected.extension === 'htm' ? (
+                  <button
+                    type="button"
+                    className={htmlPreview ? 'is-active' : ''}
+                    onClick={() => setHtmlPreview((value) => !value)}
+                  >
+                    {htmlPreview ? '编辑' : '预览'}
                   </button>
                 ) : null}
                 {tableMode ? (
@@ -2015,28 +2043,37 @@ function TurnProcess({
 }) {
   const [open, setOpen] = useState(false)
   useEffect(() => {
-    setOpen(turn.running)
+    if (!turn.running) setOpen(false)
   }, [turn.running])
   const elapsed = formatElapsed((turn.running ? now : turn.end) - turn.start)
   const quiet = turn.running && now - lastActivityAt > 20_000
   const stuck = turn.running && now - lastActivityAt > 45_000
-  const label = turn.running
-    ? stuck
-      ? `可能卡住，用时 ${elapsed}`
-      : quiet
-        ? `等待输出，用时 ${elapsed}`
-        : `处理中，用时 ${elapsed}`
-    : `已完成，用时 ${elapsed}`
+  const liveLabel = stuck
+    ? `可能卡住，用时 ${elapsed}`
+    : quiet
+      ? `等待输出，用时 ${elapsed}`
+      : `深度求索中，用时 ${elapsed}`
+  if (turn.running) {
+    return (
+      <div className={`wb-turn-process is-running${quiet ? ' is-quiet' : ''}${stuck ? ' is-stuck' : ''}`}>
+        <div className="wb-turn-process-body">{children}</div>
+        <div className="wb-turn-live" role="status" aria-live="polite">
+          <Icon name="spark" size={14} />
+          <span>{liveLabel}</span>
+          {!quiet ? <i aria-hidden="true">···</i> : null}
+        </div>
+      </div>
+    )
+  }
   return (
-    <div className={`wb-turn-process${open ? ' is-open' : ''}${quiet ? ' is-quiet' : ''}${stuck ? ' is-stuck' : ''}`}>
+    <div className={`wb-turn-process${open ? ' is-open' : ''}`}>
       <button
         type="button"
         className="wb-turn-process-head"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        <span>{label}</span>
-        {turn.running && !quiet ? <i className="wb-live-dot" aria-label="正在输出" /> : null}
+        <span>已完成，用时 {elapsed}</span>
         <Icon name="chevronDown" size={14} />
       </button>
       {open ? <div className="wb-turn-process-body">{children}</div> : null}
