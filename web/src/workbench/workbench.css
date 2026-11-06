@@ -757,3 +757,18 @@
 .wb-process-text { padding: 3px 0 6px 23px; color: var(--wb-ink-2); font-size: 12.5px; line-height: 1.65; }
 .wb-process-text p { margin: 0 0 6px; }
 .wb-process-text p:last-child { margin-bottom: 0; }
+
+/* Live activity: the glyph blinks while a tool/model is producing output. */
+.wb-process-glyph.is-running { color: var(--wb-primary); animation: wb-live-blink 1s ease-in-out infinite; }
+.wb-process-row.is-stalled .wb-process-glyph { color: #b7791f; animation: none; }
+.wb-process-row.is-stalled em { color: #b7791f; }
+.wb-turn-process.is-quiet .wb-turn-process-head span { color: #a26b2a; }
+.wb-live-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--wb-primary); animation: wb-live-blink 1s ease-in-out infinite; }
+@keyframes wb-live-blink { 0%, 100% { opacity: .28; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .wb-process-glyph.is-running, .wb-live-dot { animation: none; }
+}
+
+.wb-process-row.is-stuck .wb-process-glyph { color: #b33a3a; }
+.wb-process-row.is-stuck em { color: #b33a3a; }
+.wb-turn-process.is-stuck .wb-turn-process-head span { color: #b33a3a; }

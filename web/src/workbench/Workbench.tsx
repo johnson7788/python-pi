@@ -1917,19 +1917,29 @@ function TurnProcess({
   turn,
   children,
   now,
+  lastActivityAt,
 }: {
   turn: ChatTurn
   children: ReactNode
   now: number
+  lastActivityAt: number
 }) {
   const [open, setOpen] = useState(false)
   useEffect(() => {
     setOpen(turn.running)
   }, [turn.running])
   const elapsed = formatElapsed((turn.running ? now : turn.end) - turn.start)
-  const label = turn.running ? `处理中，用时 ${elapsed}` : `已完成，用时 ${elapsed}`
+  const quiet = turn.running && now - lastActivityAt > 20_000
+  const stuck = turn.running && now - lastActivityAt > 45_000
+  const label = turn.running
+    ? stuck
+      ? `可能卡住，用时 ${elapsed}`
+      : quiet
+        ? `等待输出，用时 ${elapsed}`
+        : `处理中，用时 ${elapsed}`
+    : `已完成，用时 ${elapsed}`
   return (
-    <div className={`wb-turn-process${open ? ' is-open' : ''}`}>
+    <div className={`wb-turn-process${open ? ' is-open' : ''}${quiet ? ' is-quiet' : ''}${stuck ? ' is-stuck' : ''}`}>
       <button
         type="button"
         className="wb-turn-process-head"
@@ -1937,6 +1947,7 @@ function TurnProcess({
         onClick={() => setOpen((value) => !value)}
       >
         <span>{label}</span>
+        {turn.running && !quiet ? <i className="wb-live-dot" aria-label="正在输出" /> : null}
         <Icon name="chevronDown" size={14} />
       </button>
       {open ? <div className="wb-turn-process-body">{children}</div> : null}
@@ -2000,13 +2011,24 @@ function ProcessToolRow({
   const args = toolArgs(block)
   const argsText = Object.keys(args).length > 0 ? JSON.stringify(args, null, 2) : ''
   const resultText = toolResultText(execution?.result) || toolResultText(execution?.partialResult) || ''
+  const [now, setNow] = useState(Date.now())
+  const running = execution?.status === 'running'
+  useEffect(() => {
+    if (!running) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [running])
+  const idleMs = now - (execution?.lastActivityAt ?? execution?.startedAt ?? now)
+  const stalled = running && idleMs > 15_000
+  const stuck = running && idleMs > 45_000
+  const label = stuck ? '可能卡住' : stalled ? '等待输出' : toolStatus(execution)
   return (
-    <details className={`wb-process-row is-${toolStatus(execution) === '失败' ? 'error' : execution?.status || 'done'}`}>
+    <details className={`wb-process-row is-${toolStatus(execution) === '失败' ? 'error' : execution?.status || 'done'}${stalled ? ' is-stalled' : ''}${stuck ? ' is-stuck' : ''}`}>
       <summary>
-        <span className="wb-process-glyph"><Icon name={(block as { name?: string }).name === 'bash' ? 'code' : (block as { name?: string }).name === 'present' ? 'book' : 'file'} size={14} /></span>
+        <span className={`wb-process-glyph${running && !stalled ? ' is-running' : ''}`}><Icon name={(block as { name?: string }).name === 'bash' ? 'code' : (block as { name?: string }).name === 'present' ? 'book' : 'file'} size={14} /></span>
         <b>{title}</b>
         <span className="wb-process-summary">{summary}</span>
-        <em>{toolStatus(execution)}</em>
+        <em>{label}</em>
       </summary>
       {argsText ? <pre className="wb-process-pre">{argsText}</pre> : null}
       {resultText ? <pre className="wb-process-pre">{resultText}</pre> : null}
@@ -2147,6 +2169,10 @@ function WbTranscript({
   }, [visible, agent.toolExecutions])
 
   const [now, setNow] = useState(Date.now())
+  const lastActivity = useRef(Date.now())
+  useEffect(() => {
+    if (agent.isStreaming) lastActivity.current = Date.now()
+  }, [agent.transcript, agent.toolExecutions, agent.isStreaming])
   useEffect(() => {
     if (!agent.isStreaming) return
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
@@ -2184,7 +2210,7 @@ function WbTranscript({
                 />
               ) : null}
               {turn.entries.length > 0 || turn.final ? (
-                <TurnProcess turn={turn} now={now}>
+                <TurnProcess turn={turn} now={now} lastActivityAt={lastActivity.current}>
                   <ProcessEntries turn={turn} toolExecutions={agent.toolExecutions} />
                 </TurnProcess>
               ) : null}

@@ -36,6 +36,8 @@ export interface ToolExecution {
   partialResult?: ToolResultPayload
   isError: boolean
   startedAt: number
+  /** Last time the tool reported output; the UI uses this to detect a silent command. */
+  lastActivityAt?: number
 }
 
 export interface TranscriptEntry {
@@ -337,6 +339,7 @@ function addOrphanToolExecution(
       partialResult: existing?.partialResult,
       isError: Boolean(message.isError),
       startedAt: existing?.startedAt ?? Date.now(),
+      lastActivityAt: existing?.lastActivityAt ?? Date.now(),
     },
   }
 }
@@ -547,6 +550,7 @@ function reduceServerEvent(state: AgentStore, event: ServerEvent): AgentStore {
             status: 'running',
             isError: false,
             startedAt: Date.now(),
+            lastActivityAt: Date.now(),
           },
         },
       }
@@ -568,6 +572,7 @@ function reduceServerEvent(state: AgentStore, event: ServerEvent): AgentStore {
             partialResult: update.partialResult,
             isError: existing?.isError ?? false,
             startedAt: existing?.startedAt ?? Date.now(),
+            lastActivityAt: Date.now(),
           },
         },
       }
@@ -589,6 +594,7 @@ function reduceServerEvent(state: AgentStore, event: ServerEvent): AgentStore {
             partialResult: existing?.partialResult,
             isError: Boolean(end.isError),
             startedAt: existing?.startedAt ?? Date.now(),
+            lastActivityAt: existing?.lastActivityAt ?? Date.now(),
           },
         },
       }
