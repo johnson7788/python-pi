@@ -2,7 +2,8 @@
 #
 # 一键启动 python-pi 的浏览器 UI。
 #
-#   ./start.sh                     # 首次会自动构建 web/office/xlsx-sidecar，然后启动
+#   ./start.sh                     # 默认团队模式；首次自动构建并创建管理员
+#   PI_AUTH_MODE=single ./start.sh # 临时切回无账号的单机模式
 #   ./start.sh ~/git/my-project    # 指定工作目录
 #   PORT=9000 ./start.sh           # 换端口
 #   PI_SKIP_OFFICE_BUILD=1 ./start.sh      # 跳过 Office 编辑器构建
@@ -28,6 +29,9 @@ DEFAULT_MODEL="deepseek/deepseek-v4-flash"
 DEFAULT_HOST="127.0.0.1"
 DEFAULT_PORT="8787"
 DEFAULT_AGENT_DIR="$HOME/.pi/agent"
+DEFAULT_AUTH_MODE="team"
+DEFAULT_DATA_ROOT="$HOME/.pi/team"
+DEFAULT_ADMIN_USERNAME="admin"
 
 # --- 先记住命令行上显式传入的值（它们优先级最高）---------------------------------
 # `set -u` 下用 :- 取默认，避免未定义变量报错。
@@ -37,6 +41,9 @@ _explicit_host="${HOST:-}"
 _explicit_port="${PORT:-}"
 _explicit_agent_dir="${PI_AGENT_DIR:-}"
 _explicit_no_skills="${PI_NO_SKILLS:-}"
+_explicit_auth_mode="${PI_AUTH_MODE:-}"
+_explicit_data_root="${PI_DATA_ROOT:-}"
+_explicit_admin_username="${PI_ADMIN_USERNAME:-}"
 
 # --- 读取 .env ------------------------------------------------------------------
 ENV_FILE="$ROOT/.env"
@@ -54,19 +61,35 @@ fi
 [[ -n "$_explicit_port" ]]      && PORT="$_explicit_port"
 [[ -n "$_explicit_agent_dir" ]] && PI_AGENT_DIR="$_explicit_agent_dir"
 [[ -n "$_explicit_no_skills" ]] && PI_NO_SKILLS="$_explicit_no_skills"
+[[ -n "$_explicit_auth_mode" ]] && PI_AUTH_MODE="$_explicit_auth_mode"
+[[ -n "$_explicit_data_root" ]] && PI_DATA_ROOT="$_explicit_data_root"
+[[ -n "$_explicit_admin_username" ]] && PI_ADMIN_USERNAME="$_explicit_admin_username"
 
 MODEL="${MODEL:-$DEFAULT_MODEL}"
 HOST="${HOST:-$DEFAULT_HOST}"
 PORT="${PORT:-$DEFAULT_PORT}"
 AGENT_DIR="${PI_AGENT_DIR:-$DEFAULT_AGENT_DIR}"
 API_KEY="${PI_API_KEY:-}"
+AUTH_MODE="${PI_AUTH_MODE:-$DEFAULT_AUTH_MODE}"
+DATA_ROOT="${PI_DATA_ROOT:-$DEFAULT_DATA_ROOT}"
+ADMIN_USERNAME="${PI_ADMIN_USERNAME:-$DEFAULT_ADMIN_USERNAME}"
+export PI_AUTH_MODE="$AUTH_MODE"
+export PI_DATA_ROOT="$DATA_ROOT"
+export PI_ADMIN_USERNAME="$ADMIN_USERNAME"
 
-# Every account-less install gets its own workspace, named after the OS user,
-# instead of exposing the python-pi checkout to the file browser.
-if [[ -z "${PI_SINGLE_WORKSPACE:-}" ]]; then
-  PI_SINGLE_WORKSPACE="$HOME/.pi/workspaces/$(id -un)"
+# Single mode gets its own workspace named after the OS user.  Team mode
+# creates a workspace per account under DATA_ROOT instead.
+if [[ "$AUTH_MODE" == "single" ]]; then
+  if [[ -z "${PI_SINGLE_WORKSPACE:-}" ]]; then
+    PI_SINGLE_WORKSPACE="$HOME/.pi/workspaces/$(id -un)"
+  fi
+  export PI_SINGLE_WORKSPACE
+else
+  unset PI_SINGLE_WORKSPACE
+  # Team users get their own agent dirs; seed them from the operator's
+  # configured agent dir so model/provider overrides are not lost.
+  export PI_TEMPLATE_AGENT_DIR="${PI_TEMPLATE_AGENT_DIR:-$AGENT_DIR}"
 fi
-export PI_SINGLE_WORKSPACE
 
 # --- 启动前检查 -----------------------------------------------------------------
 PY="$ROOT/.venv/bin/python"
@@ -129,7 +152,10 @@ else
 fi
 
 ARGS=(--cwd "$PROJECT_DIR" --model "$MODEL" --agent-dir "$AGENT_DIR"
-      --host "$HOST" --port "$PORT")
+      --host "$HOST" --port "$PORT" --auth-mode "$AUTH_MODE")
+if [[ "$AUTH_MODE" != "single" ]]; then
+  ARGS+=(--data-root "$DATA_ROOT")
+fi
 
 # 凭据走环境变量，不走命令行参数。
 #
@@ -150,10 +176,16 @@ if [[ -n "${PI_NO_SKILLS:-}" && "${PI_NO_SKILLS}" != "0" ]]; then
 fi
 
 echo "[start.sh] 工作目录 : $PROJECT_DIR"
+echo "[start.sh] 模式     : $AUTH_MODE"
+if [[ "$AUTH_MODE" == "single" ]]; then
+  echo "[start.sh] 工作空间 : $PI_SINGLE_WORKSPACE"
+else
+  echo "[start.sh] 数据目录 : $DATA_ROOT"
+  echo "[start.sh] 管理员   : $ADMIN_USERNAME"
+fi
 echo "[start.sh] 模型     : $MODEL"
 echo "[start.sh] 凭据     : $KEY_SOURCE"
 echo "[start.sh] 配置目录 : $AGENT_DIR"
-echo "[start.sh] 工作空间 : $PI_SINGLE_WORKSPACE"
 if [[ -n "$NO_SKILLS_NOTE" ]]; then
   echo "[start.sh] 附加行为 : $NO_SKILLS_NOTE"
 fi
