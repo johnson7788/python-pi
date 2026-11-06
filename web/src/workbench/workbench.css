@@ -791,3 +791,18 @@
 .wb-artifacts.is-viewer .wb-artifact-editor { padding: 12px 14px 14px; }
 .wb-artifacts.is-viewer .wb-artifact-editor-head { flex: none; }
 .wb-artifacts.is-viewer .wb-artifact-editor-head b { font-size: 13px; }
+
+/* More menu is anchored to its nav row, not the sidebar footer. */
+.wb-more-anchor { position: relative; }
+.wb-more-anchor .wb-more { top: calc(100% + 4px); bottom: auto; left: 0; }
+.wb-more small { display: block; padding: 5px 9px 2px; color: var(--wb-muted-2); font-size: 10px; }
+.wb.is-folded .wb-more-anchor .wb-more { left: 6px; }
+
+.wb-help-page { max-width: 980px; }
+.wb-help-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.wb-help-grid section { border: 1px solid var(--wb-line); border-radius: 9px; background: #fff; padding: 16px 18px; }
+.wb-help-grid h3 { margin: 0 0 8px; font-size: 14px; color: var(--wb-ink); }
+.wb-help-grid p { margin: 0 0 8px; font-size: 12.5px; line-height: 1.7; color: var(--wb-ink-2); }
+.wb-help-grid p:last-child { margin-bottom: 0; }
+.wb-help-grid code, .wb-help-grid kbd { padding: 1px 5px; border-radius: 4px; background: var(--wb-surface); border: 1px solid var(--wb-line); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+@media (max-width: 900px) { .wb-help-grid { grid-template-columns: 1fr; } }

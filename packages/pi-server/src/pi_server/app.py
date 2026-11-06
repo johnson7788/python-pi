@@ -947,6 +947,27 @@ def create_app(
         database = Database(server_config.db_path)
         database.purge_expired_sessions()
 
+    # Schedules and notifications are useful in the account-less install too.
+    # Keep their small SQLite store separate so single mode still has no
+    # accounts/login surface and team mode continues to use the main database.
+    local_schedule_db: Database | None = None
+    if database is None:
+        os.makedirs(server_config.data_root, exist_ok=True)
+        local_schedule_db = Database(
+            os.path.join(server_config.data_root, "local-schedules.db")
+        )
+        if local_schedule_db.get_user(LOCAL_UID) is None:
+            try:
+                local_schedule_db.create_user(
+                    uid=LOCAL_UID,
+                    username="local",
+                    password_hash="!",
+                    display_name="本地用户",
+                )
+            except DuplicateUsername:
+                pass
+    schedule_db = database or local_schedule_db
+
     sheets_sessions: dict[str, dict[str, Any]] = {}
 
     def _audit_sink(entry: dict[str, Any]) -> int | None:
@@ -1096,7 +1117,7 @@ def create_app(
     )
 
     schedule_runner = (
-        schedule_catalog.ScheduleRunner(database, registry) if database is not None else None
+        schedule_catalog.ScheduleRunner(schedule_db, registry) if schedule_db is not None else None
     )
 
     @asynccontextmanager
@@ -1125,6 +1146,8 @@ def create_app(
             await registry.shutdown()
             if database is not None:
                 database.close()
+            elif local_schedule_db is not None:
+                local_schedule_db.close()
 
     app = FastAPI(title="python-pi", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.registry = registry
@@ -1150,6 +1173,19 @@ def create_app(
                 detail={"error": "accounts are disabled (auth mode is 'single')"},
             )
         return database
+
+    def schedule_uid(request: Request) -> str:
+        if database is None:
+            return LOCAL_UID
+        user = auth.current_user(request)
+        if user is None:
+            raise auth.reject_unauthenticated()
+        return user.uid
+
+    def schedule_store() -> Database:
+        if schedule_db is None:
+            raise HTTPException(status_code=503, detail={"error": "scheduler is not configured"})
+        return schedule_db
 
     def ensure_default_workspace(uid: str) -> None:
         """Seed the implicit workspace row for an existing or new account.
@@ -1575,55 +1611,44 @@ def create_app(
 
     @app.get("/api/notifications")
     async def list_notifications(request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
+        db = schedule_store()
+        uid = schedule_uid(request)
         return {
             "notifications": [
-                _notification_json(row) for row in db.list_notifications(user.uid)
+                _notification_json(row) for row in db.list_notifications(uid)
             ],
-            "unread": db.unread_notifications(user.uid),
+            "unread": db.unread_notifications(uid),
         }
 
     @app.post("/api/notifications/{notification_id}/read")
     async def read_notification(notification_id: str, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        db.mark_notification(user.uid, notification_id)
+        db = schedule_store()
+        uid = schedule_uid(request)
+        db.mark_notification(uid, notification_id)
         return {"id": notification_id, "read": True}
 
     @app.post("/api/notifications/read-all")
     async def read_all_notifications(request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        db.mark_all_notifications(user.uid)
+        db = schedule_store()
+        db.mark_all_notifications(schedule_uid(request))
         return {"read": True}
 
     # -- schedules -------------------------------------------------------------------
 
     @app.get("/api/schedules")
     async def list_schedules(request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
+        db = schedule_store()
+        uid = schedule_uid(request)
         return {
             "schedules": [
-                schedule_catalog.schedule_json(row) for row in db.list_schedules(user.uid)
+                schedule_catalog.schedule_json(row) for row in db.list_schedules(uid)
             ]
         }
 
     @app.post("/api/schedules", status_code=201)
     async def create_schedule(payload: CreateScheduleRequest, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
+        db = schedule_store()
+        uid = schedule_uid(request)
         name = payload.name.strip()
         prompt = payload.prompt.strip()
         if not 1 <= len(name) <= 80 or not prompt:
@@ -1642,8 +1667,8 @@ def create_app(
             payload.intervalMinutes is None or not 1 <= payload.intervalMinutes <= 10080
         ):
             raise HTTPException(status_code=422, detail={"error": "intervalMinutes must be 1-10080"})
-        workspace = resolve_workspace(user.uid, payload.workspace)
-        app_id, mode_id = resolve_app_mode(user.uid, payload.appId, payload.modeId)
+        workspace = resolve_workspace(uid, payload.workspace)
+        app_id, mode_id = resolve_app_mode(uid, payload.appId, payload.modeId)
         if kind == "once" and schedule_catalog.parse_iso(payload.runAt) is None:
             raise HTTPException(status_code=422, detail={"error": "runAt must be ISO-8601"})
         next_at = schedule_catalog.next_run_at(
@@ -1657,7 +1682,7 @@ def create_app(
         if next_at is None:
             raise HTTPException(status_code=422, detail={"error": "runAt must be in the future"})
         schedule_id = db.create_schedule(
-            uid=user.uid,
+            uid=uid,
             workspace=workspace,
             app_id=app_id,
             mode_id=mode_id,
@@ -1671,18 +1696,16 @@ def create_app(
             interval_minutes=payload.intervalMinutes,
             next_run_at=next_at,
         )
-        row = db.get_schedule(user.uid, schedule_id)
+        row = db.get_schedule(uid, schedule_id)
         return schedule_catalog.schedule_json(row)
 
     @app.patch("/api/schedules/{schedule_id}")
     async def update_schedule(
         schedule_id: str, payload: UpdateScheduleRequest, request: Request
     ) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        row = db.get_schedule(user.uid, schedule_id)
+        db = schedule_store()
+        uid = schedule_uid(request)
+        row = db.get_schedule(uid, schedule_id)
         if row is None:
             raise HTTPException(status_code=404, detail={"error": "unknown schedule"})
         next_at = None
@@ -1697,27 +1720,23 @@ def create_app(
             )
             if next_at is None:
                 raise HTTPException(status_code=422, detail={"error": "schedule has no future run"})
-        db.set_schedule_enabled(user.uid, schedule_id, payload.enabled, next_at)
-        return schedule_catalog.schedule_json(db.get_schedule(user.uid, schedule_id))
+        db.set_schedule_enabled(uid, schedule_id, payload.enabled, next_at)
+        return schedule_catalog.schedule_json(db.get_schedule(uid, schedule_id))
 
     @app.delete("/api/schedules/{schedule_id}")
     async def delete_schedule(schedule_id: str, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        if db.get_schedule(user.uid, schedule_id) is None:
+        db = schedule_store()
+        uid = schedule_uid(request)
+        if db.get_schedule(uid, schedule_id) is None:
             raise HTTPException(status_code=404, detail={"error": "unknown schedule"})
-        db.delete_schedule(user.uid, schedule_id)
+        db.delete_schedule(uid, schedule_id)
         return {"deleted": schedule_id}
 
     @app.post("/api/schedules/{schedule_id}/run", status_code=202)
     async def run_schedule(schedule_id: str, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        row = db.get_schedule(user.uid, schedule_id)
+        db = schedule_store()
+        uid = schedule_uid(request)
+        row = db.get_schedule(uid, schedule_id)
         if row is None:
             raise HTTPException(status_code=404, detail={"error": "unknown schedule"})
         if schedule_runner is None:
@@ -1727,11 +1746,9 @@ def create_app(
 
     @app.get("/api/schedules/{schedule_id}/runs")
     async def schedule_runs(schedule_id: str, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        if db.get_schedule(user.uid, schedule_id) is None:
+        db = schedule_store()
+        uid = schedule_uid(request)
+        if db.get_schedule(uid, schedule_id) is None:
             raise HTTPException(status_code=404, detail={"error": "unknown schedule"})
         return {
             "runs": [

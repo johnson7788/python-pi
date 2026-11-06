@@ -31,7 +31,7 @@ import type { AgentApi, ToolExecution, TranscriptEntry } from '../lib/useAgent'
 import type { AuthApi } from '../lib/useAuth'
 import './workbench.css'
 
-type View = 'home' | 'chat' | 'apps' | 'skills' | 'plugins' | 'scheduled' | 'files'
+type View = 'home' | 'chat' | 'apps' | 'skills' | 'plugins' | 'scheduled' | 'files' | 'help'
 
 interface WorkspaceRow {
   id: string
@@ -296,6 +296,7 @@ function viewFromRoute(route: string): View {
   if (section === 'plugins') return 'plugins'
   if (section === 'scheduled') return 'scheduled'
   if (section === 'files') return 'files'
+  if (section === 'help') return 'help'
   return 'home'
 }
 
@@ -605,17 +606,39 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
                 {item.view === 'scheduled' ? <i className="wb-dot" /> : null}
               </button>
             ))}
-            <button
-              type="button"
-              className="wb-nav-item"
-              onClick={(event) => {
-                event.stopPropagation()
-                setMoreOpen((value) => !value)
-              }}
-            >
-              <Icon name="more" size={19} />
-              <span>更多</span>
-            </button>
+            <div className="wb-more-anchor">
+              <button
+                type="button"
+                className="wb-nav-item"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setMoreOpen((value) => !value)
+                }}
+              >
+                <Icon name="more" size={19} />
+                <span>更多</span>
+              </button>
+              {moreOpen ? (
+                <div className="wb-more" onClick={(event) => event.stopPropagation()}>
+                  {auth.authMode === 'team' ? (
+                    <>
+                      <button type="button" onClick={() => { setMoreOpen(false); go('/account') }}>
+                        修改密码
+                      </button>
+                      <div className="wb-more-line" />
+                      <button type="button" onClick={() => void auth.logout()}>
+                        退出登录
+                      </button>
+                      <div className="wb-more-line" />
+                    </>
+                  ) : null}
+                  <button type="button" onClick={() => { setMoreOpen(false); go('/workbench/help') }}>
+                    帮助
+                  </button>
+                  {auth.authMode !== 'team' ? <small>单机模式 · 无需登录</small> : null}
+                </div>
+              ) : null}
+            </div>
           </nav>
 
           <div className="wb-scroll">
@@ -788,25 +811,6 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
             </div>
           ) : null}
 
-          {moreOpen ? (
-            <div className="wb-more" onClick={(event) => event.stopPropagation()}>
-              {auth.authMode === 'team' ? (
-                <button type="button" onClick={() => go('/account')}>
-                  修改密码
-                </button>
-              ) : null}
-              <div className="wb-more-line" />
-              {auth.authMode === 'team' ? (
-                <button type="button" onClick={() => void auth.logout()}>
-                  退出登录
-                </button>
-              ) : (
-                <button type="button" onClick={() => setMoreOpen(false)}>
-                  帮助
-                </button>
-              )}
-            </div>
-          ) : null}
         </aside>
 
         <div className="wb-scrim" onClick={() => setNavOpen(false)} />
@@ -874,6 +878,7 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
             />
           ) : null}
           {view === 'files' ? <LibraryView workspace={activeWorkspace} /> : null}
+          {view === 'help' ? <HelpView authMode={auth.authMode} /> : null}
         </main>
       </div>
 
@@ -3595,6 +3600,49 @@ interface PluginRow {
   description: string
   capabilities: string[]
   enabled: boolean
+}
+
+function HelpView({ authMode }: { authMode: string }) {
+  return (
+    <div className="wb-page">
+      <div className="wb-page-inner wb-help-page">
+        <header className="wb-page-head">
+          <div>
+            <h2>帮助</h2>
+            <p>常用操作、产物和定时任务说明。</p>
+          </div>
+          <span className="wb-chip">{authMode === 'team' ? '团队模式' : '单机模式 · 无需登录'}</span>
+        </header>
+        <div className="wb-help-grid">
+          <section>
+            <h3>开始使用</h3>
+            <p>在首页输入任务，选择工作模式或场景胶囊；发送后会创建一条会话。</p>
+            <p>左侧「任务」列出当前空间的会话，「空间」可以切换或展开查看每个空间的对话。</p>
+          </section>
+          <section>
+            <h3>产物与在线编辑</h3>
+            <p>模型生成的文件通过 <code>present</code> 声明为交付文件，显示在回答最后。</p>
+            <p>点击「在线编辑」会在右侧打开编辑器；「产物」按钮可以浏览当前空间的全部文件。</p>
+            <p>DOCX/XLSX/PPTX 支持在线编辑，PDF 和图片支持右侧预览。</p>
+          </section>
+          <section>
+            <h3>定时任务</h3>
+            <p>「定时任务」按一次性、间隔、每天或每周运行 prompt，结果显示在「运行历史」和通知中心。</p>
+            <p>单机模式下任务同样保存在本地，不需要登录。</p>
+          </section>
+          <section>
+            <h3>快捷键</h3>
+            <p><kbd>Enter</kbd> 发送，<kbd>Shift</kbd> + <kbd>Enter</kbd> 换行；<kbd>Esc</kbd> 关闭当前弹层。</p>
+          </section>
+          <section>
+            <h3>单机模式与登录</h3>
+            <p>单机模式没有账号和登录页，侧栏显示「本地用户」是正常的；工作空间在 <code>~/.pi/workspaces/&lt;系统用户名&gt;</code>。</p>
+            <p>需要多用户登录时，用团队模式启动：设置 <code>PI_AUTH_MODE=team</code> 和管理员密码。</p>
+          </section>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function PluginsView({ appId }: { appId: string }) {

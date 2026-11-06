@@ -133,3 +133,23 @@ def test_schedule_http_surface(tmp_path):
             json={"name": "bad", "prompt": "go", "kind": "cron"},
         )
         assert bad.status_code == 422
+
+
+def test_single_mode_schedules_use_a_local_store(tmp_path):
+    from pi_coding_agent.bootstrap import BootstrapOptions
+    from pi_server.app import create_app
+    from pi_server.config import ServerConfig
+
+    config = ServerConfig(data_root=str(tmp_path), auth_mode="single")
+    app = create_app(BootstrapOptions(cwd=str(tmp_path), agent_dir=str(tmp_path / "agent")), config=config)
+    with TestClient(app) as client:
+        assert client.get("/api/schedules").json()["schedules"] == []
+        created = client.post(
+            "/api/schedules",
+            json={"name": "本地巡检", "prompt": "检查状态", "kind": "interval", "intervalMinutes": 60},
+        )
+        assert created.status_code == 201, created.text
+        schedule = created.json()
+        listed = client.get("/api/schedules").json()["schedules"]
+        assert [item["id"] for item in listed] == [schedule["id"]]
+        assert client.delete(f"/api/schedules/{schedule['id']}").status_code == 200
