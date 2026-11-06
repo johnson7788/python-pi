@@ -14,6 +14,7 @@ import { DialogHost } from '../components/Dialog'
 import { Toasts } from '../components/Toasts'
 import { ToolCard } from '../components/ToolCard'
 import { api } from '../lib/api'
+import { toolResultText } from '../lib/useAgent'
 import { resolveApiBase } from '../lib/endpoints'
 import { renderMarkdown } from '../lib/markdown'
 import { asRecord, isTextBlock, isThinkingBlock, isToolCallBlock } from '../lib/protocol'
@@ -1943,6 +1944,145 @@ function TurnProcess({
   )
 }
 
+function toolArgs(block: ContentBlock): Record<string, unknown> {
+  const record = asRecord(block)
+  if (record.arguments !== undefined && record.arguments !== null) return asRecord(record.arguments)
+  if (typeof record.argumentsRaw === 'string') {
+    try {
+      return asRecord(JSON.parse(record.argumentsRaw) as unknown)
+    } catch {
+      return {}
+    }
+  }
+  return {}
+}
+
+function toolDisplay(block: ContentBlock): { title: string; summary: string } {
+  const args = toolArgs(block)
+  const name = (block as { name?: string }).name || ''
+  const value = (key: string) => (typeof args[key] === 'string' ? String(args[key]) : '')
+  switch (name) {
+    case 'bash':
+      return { title: '运行命令', summary: value('command').split(/\n/)[0] || '...' }
+    case 'read':
+      return { title: '读取文件', summary: value('path') || '...' }
+    case 'write':
+      return { title: '写入文件', summary: value('path') || '...' }
+    case 'edit':
+      return { title: '编辑文件', summary: value('path') || '...' }
+    case 'grep':
+      return { title: '搜索', summary: value('pattern') || '...' }
+    case 'find':
+      return { title: '查找', summary: value('pattern') || '...' }
+    case 'ls':
+      return { title: '列出目录', summary: value('path') || '.' }
+    case 'present':
+      return { title: '交付文件', summary: '文件已在聊天末尾展示' }
+    default:
+      return { title: name || '工具', summary: '' }
+  }
+}
+
+function toolStatus(execution?: ToolExecution): string {
+  if (execution?.status === 'running') return '运行中'
+  if (execution?.status === 'error' || execution?.isError) return '失败'
+  return '完成'
+}
+
+function ProcessToolRow({
+  block,
+  execution,
+}: {
+  block: ContentBlock
+  execution?: ToolExecution
+}) {
+  const { title, summary } = toolDisplay(block)
+  const args = toolArgs(block)
+  const argsText = Object.keys(args).length > 0 ? JSON.stringify(args, null, 2) : ''
+  const resultText = toolResultText(execution?.result) || toolResultText(execution?.partialResult) || ''
+  return (
+    <details className={`wb-process-row is-${toolStatus(execution) === '失败' ? 'error' : execution?.status || 'done'}`}>
+      <summary>
+        <span className="wb-process-glyph"><Icon name={(block as { name?: string }).name === 'bash' ? 'code' : (block as { name?: string }).name === 'present' ? 'book' : 'file'} size={14} /></span>
+        <b>{title}</b>
+        <span className="wb-process-summary">{summary}</span>
+        <em>{toolStatus(execution)}</em>
+      </summary>
+      {argsText ? <pre className="wb-process-pre">{argsText}</pre> : null}
+      {resultText ? <pre className="wb-process-pre">{resultText}</pre> : null}
+    </details>
+  )
+}
+
+function ProcessToolResult({
+  entry,
+}: {
+  entry: TranscriptEntry
+}) {
+  const message = entry.message
+  const text = message.role === 'toolResult'
+    ? message.content.filter(isTextBlock).map((block) => block.text).join('\n')
+    : ''
+  const name = message.role === 'toolResult' ? message.toolName || '工具' : '工具'
+  if (!text.trim()) return null
+  return (
+    <details className={`wb-process-row${message.role === 'toolResult' && message.isError ? ' is-error' : ''}`}>
+      <summary>
+        <span className="wb-process-glyph"><Icon name="code" size={14} /></span>
+        <b>{name}</b>
+        <span className="wb-process-summary">结果</span>
+        <em>{message.role === 'toolResult' && message.isError ? '失败' : '完成'}</em>
+      </summary>
+      <pre className="wb-process-pre">{text}</pre>
+    </details>
+  )
+}
+
+function ProcessEntries({
+  turn,
+  toolExecutions,
+}: {
+  turn: ChatTurn
+  toolExecutions: Record<string, ToolExecution>
+}) {
+  return (
+    <>
+      {turn.entries.map((entry) => {
+        const message = entry.message
+        if (message.role === 'assistant') {
+          const isFinal = entry.key === turn.final?.key
+          return (
+            <div className="wb-process-assistant" key={entry.key}>
+              {message.content.map((block, index) => {
+                if (isFinal && isTextBlock(block)) return null
+                if (isThinkingBlock(block)) {
+                  return <WbThinking key={`${entry.key}-think-${index}`} text={block.thinking} running={Boolean(entry.streaming)} />
+                }
+                if (isToolCallBlock(block)) {
+                  if (block.name === 'present') return null
+                  return <ProcessToolRow key={`${entry.key}-tool-${index}`} block={block} execution={toolExecutions[block.id]} />
+                }
+                if (isTextBlock(block)) {
+                  if (!block.text.trim()) return null
+                  return <div className="wb-process-text" key={`${entry.key}-text-${index}`} dangerouslySetInnerHTML={{ __html: renderMarkdown(block.text) }} />
+                }
+                return null
+              })}
+            </div>
+          )
+        }
+        if (message.role === 'toolResult') return <ProcessToolResult key={entry.key} entry={entry} />
+        if (message.role === 'custom') {
+          const custom = message as CustomMessage
+          const text = typeof custom.content === 'string' ? custom.content : ''
+          return text ? <div className="wb-process-text" key={entry.key}>{text}</div> : null
+        }
+        return null
+      })}
+    </>
+  )
+}
+
 function WbTranscript({
   agent,
   workspaceId,
@@ -2045,31 +2185,7 @@ function WbTranscript({
               ) : null}
               {turn.entries.length > 0 || turn.final ? (
                 <TurnProcess turn={turn} now={now}>
-                  {turn.entries.map((entry) => (
-                    <WbMessage
-                      key={entry.key}
-                      entry={entry}
-                      toolExecutions={agent.toolExecutions}
-                      streaming={agent.isStreaming && entry.streaming}
-                      sessionFile={sessionFile}
-                      feedback={feedback}
-                      onFeedback={onFeedback}
-                      mode={entry === turn.final ? 'process' : 'all'}
-                      showFeedback={false}
-                    />
-                  ))}
-                  {turn.final ? (
-                    <WbMessage
-                      key={`${turn.key}-answer`}
-                      entry={turn.final}
-                      toolExecutions={agent.toolExecutions}
-                      streaming={agent.isStreaming && turn.final.streaming}
-                      sessionFile={sessionFile}
-                      feedback={feedback}
-                      onFeedback={onFeedback}
-                      mode="answer"
-                    />
-                  ) : null}
+                  <ProcessEntries turn={turn} toolExecutions={agent.toolExecutions} />
                 </TurnProcess>
               ) : null}
               {turn.final ? (
