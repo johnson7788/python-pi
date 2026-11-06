@@ -378,6 +378,8 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const sessions = agent.sessions.slice(0, 5)
   const workspaceName =
     workspaces.find((workspace) => workspace.id === activeWorkspace)?.name || '默认工作空间'
+  const workspacePath =
+    workspaces.find((workspace) => workspace.id === activeWorkspace)?.path || ''
   const availableApps = apps.length > 0 ? apps : [FALLBACK_APP]
   const activeApp = availableApps.find((app) => app.id === activeAppId) || availableApps[0]
   const activeMode = activeApp.modes.find((item) => item.id === activeModeId) || activeApp.modes[0]
@@ -838,6 +840,7 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
               disabled={!connectionOpen}
               onHome={() => goView('home')}
               workspaceId={activeWorkspace}
+              workspacePath={workspacePath}
               workspaceName={workspaceName}
               appName={activeApp.name}
               modeName={activeMode.name}
@@ -978,6 +981,7 @@ function ChatView({
   disabled,
   onHome,
   workspaceId,
+  workspacePath,
   workspaceName,
   appName,
   modeName,
@@ -989,6 +993,7 @@ function ChatView({
   disabled: boolean
   onHome: () => void
   workspaceId: string
+  workspacePath: string
   workspaceName: string
   appName: string
   modeName: string
@@ -1058,12 +1063,18 @@ function ChatView({
           <WbTranscript
             agent={agent}
             workspaceId={workspaceId}
+            workspacePath={workspacePath}
             sessionFile={sessionFile}
             feedback={feedback}
             onFeedback={(timestamp, rating) => void rate(timestamp, rating)}
             onOpenPresented={(path) => {
-              if (/\.(docx|xlsx|pptx)$/i.test(path)) setPresentedOfficePath(path)
-              else setArtifactsOpen(true)
+              const relative = workspaceRelative(path, workspacePath)
+              if (/\.(docx|xlsx|pptx)$/i.test(relative)) {
+                setPresentedOfficePath(relative)
+                return
+              }
+              const href = `/api/workspace/download?workspace=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(relative)}&inline=1`
+              window.open(href, '_blank', 'noopener')
             }}
           />
           <div className="wb-chat-composer">
@@ -1180,6 +1191,14 @@ interface SlidePreviewRow {
 interface SheetPreviewRow {
   name: string
   rows: string[][]
+}
+
+function workspaceRelative(path: string, workspacePath: string): string {
+  const root = workspacePath.replace(/\/+$/, '')
+  if (root && (path === root || path.startsWith(`${root}/`))) {
+    return path.slice(root.length).replace(/^\/+/, '')
+  }
+  return path.replace(/^\/+/, '')
 }
 
 function officeDocId(workspace: string, path: string): string {
@@ -1773,10 +1792,12 @@ function collectPresented(transcript: TranscriptEntry[]): PresentedFile[] {
 function PresentedFiles({
   files,
   workspaceId,
+  workspacePath,
   onOpen,
 }: {
   files: PresentedFile[]
   workspaceId: string
+  workspacePath: string
   onOpen: (path: string) => void
 }) {
   return (
@@ -1789,7 +1810,8 @@ function PresentedFiles({
         const name = file.path.split('/').filter(Boolean).pop() || file.path
         const extension = name.includes('.') ? name.split('.').pop()!.toUpperCase() : 'FILE'
         const office = /\.(docx|xlsx|pptx)$/i.test(name)
-        const href = `/api/workspace/download?workspace=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(file.path)}`
+        const relative = workspaceRelative(file.path, workspacePath)
+        const href = `/api/workspace/download?workspace=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(relative)}`
         return (
           <div className="wb-presented-card" key={file.path}>
             <span className="wb-presented-icon"><Icon name={extension === 'PPTX' ? 'slides' : extension === 'XLSX' ? 'sheet' : 'file'} size={20} /></span>
@@ -1797,7 +1819,7 @@ function PresentedFiles({
               <b>{name}</b>
               <small>{file.description || extension}</small>
             </span>
-            <button type="button" className="wb-button" onClick={() => onOpen(file.path)}>
+            <button type="button" className="wb-button" onClick={() => onOpen(relative)}>
               {office ? '在线编辑' : '查看'}
             </button>
             <a className="wb-link" href={href} download>下载</a>
@@ -1828,7 +1850,7 @@ function WbThinking({ text, running }: { text: string; running: boolean }) {
       >
         <Icon name="spark" size={14} />
         <span>思考</span>
-        <em>{running ? '思考中…' : '已完成'}</em>
+        {running ? <em>思考中…</em> : null}
         {!open ? <small>{summary}</small> : null}
         <Icon name="chevronDown" size={12} />
       </button>
@@ -1843,6 +1865,7 @@ type ChatTurn = {
   key: string
   user?: TranscriptEntry
   entries: TranscriptEntry[]
+  answers: TranscriptEntry[]
   final?: TranscriptEntry
   start: number
   end: number
@@ -1876,6 +1899,7 @@ function buildTurns(entries: TranscriptEntry[], streaming: boolean): ChatTurn[] 
         key: entry.key,
         user: entry,
         entries: [],
+        answers: [],
         start: messageTime(entry) ?? Date.now(),
         end: messageTime(entry) ?? Date.now(),
         running: false,
@@ -1887,6 +1911,7 @@ function buildTurns(entries: TranscriptEntry[], streaming: boolean): ChatTurn[] 
       current = {
         key: `turn-${entry.key}`,
         entries: [],
+        answers: [],
         start: messageTime(entry) ?? Date.now(),
         end: messageTime(entry) ?? Date.now(),
         running: false,
@@ -1907,6 +1932,10 @@ function buildTurns(entries: TranscriptEntry[], streaming: boolean): ChatTurn[] 
         && entry.message.content.some((block) => isTextBlock(block) && block.text.trim().length > 0),
       )?.position
     if (finalIndex !== undefined) turn.final = turn.entries[finalIndex]
+    turn.answers = turn.entries.filter((entry) =>
+      entry.message.role === 'assistant'
+      && entry.message.content.some((block) => isTextBlock(block) && block.text.trim().length > 0),
+    )
     turn.running = streaming && index === turns.length - 1
     if (turn.end < turn.start) turn.end = turn.start
   }
@@ -2072,11 +2101,9 @@ function ProcessEntries({
       {turn.entries.map((entry) => {
         const message = entry.message
         if (message.role === 'assistant') {
-          const isFinal = entry.key === turn.final?.key
           return (
             <div className="wb-process-assistant" key={entry.key}>
               {message.content.map((block, index) => {
-                if (isFinal && isTextBlock(block)) return null
                 if (isThinkingBlock(block)) {
                   return <WbThinking key={`${entry.key}-think-${index}`} text={block.thinking} running={Boolean(entry.streaming)} />
                 }
@@ -2085,8 +2112,7 @@ function ProcessEntries({
                   return <ProcessToolRow key={`${entry.key}-tool-${index}`} block={block} execution={toolExecutions[block.id]} />
                 }
                 if (isTextBlock(block)) {
-                  if (!block.text.trim()) return null
-                  return <div className="wb-process-text" key={`${entry.key}-text-${index}`} dangerouslySetInnerHTML={{ __html: renderMarkdown(block.text) }} />
+                  return null
                 }
                 return null
               })}
@@ -2105,9 +2131,57 @@ function ProcessEntries({
   )
 }
 
+function TurnAnswer({
+  turn,
+  sessionFile,
+  feedback,
+  onFeedback,
+}: {
+  turn: ChatTurn
+  sessionFile?: string
+  feedback: Record<number, number>
+  onFeedback: (timestamp: number, rating: number) => void
+}) {
+  const blocks = turn.answers.flatMap((entry) =>
+    entry.message.role === 'assistant' ? entry.message.content.filter(isTextBlock) : [],
+  )
+  if (blocks.length === 0) return null
+  const final = turn.final?.message.role === 'assistant' ? (turn.final.message as AssistantMessage) : null
+  return (
+    <div className="wb-msg-ai is-answer">
+      <div className="wb-msg-body">
+        <div className="wb-msg-content">
+          {blocks.map((block, index) => (
+            <div className="wb-md" key={index} dangerouslySetInnerHTML={{ __html: renderMarkdown(block.text) }} />
+          ))}
+        </div>
+        {usageLine(final?.usage) ? <div className="wb-msg-usage">{usageLine(final?.usage)}</div> : null}
+        {final && sessionFile ? (
+          <div className="wb-feedback">
+            {[1, -1].map((rating) => (
+              <button
+                key={rating}
+                type="button"
+                className={feedback[final.timestamp ?? 0] === rating ? 'is-active' : ''}
+                onClick={() => onFeedback(final.timestamp ?? 0, rating)}
+                title={rating === 1 ? '有帮助' : '没帮助'}
+                aria-label={rating === 1 ? '有帮助' : '没帮助'}
+              >
+                {rating === 1 ? '👍' : '👎'}
+              </button>
+            ))}
+            {feedback[final.timestamp ?? 0] ? <span>已反馈</span> : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 function WbTranscript({
   agent,
   workspaceId,
+  workspacePath,
   sessionFile,
   feedback,
   onFeedback,
@@ -2115,6 +2189,7 @@ function WbTranscript({
 }: {
   agent: AgentApi
   workspaceId: string
+  workspacePath: string
   sessionFile?: string
   feedback: Record<number, number>
   onFeedback: (timestamp: number, rating: number) => void
@@ -2214,24 +2289,19 @@ function WbTranscript({
                   <ProcessEntries turn={turn} toolExecutions={agent.toolExecutions} />
                 </TurnProcess>
               ) : null}
-              {turn.final ? (
-                <WbMessage
-                  key={`${turn.key}-final`}
-                  entry={turn.final}
-                  toolExecutions={agent.toolExecutions}
-                  streaming={agent.isStreaming && turn.final.streaming}
-                  sessionFile={sessionFile}
-                  feedback={feedback}
-                  onFeedback={onFeedback}
-                  mode="answer"
-                />
-              ) : null}
+              <TurnAnswer
+                turn={turn}
+                sessionFile={sessionFile}
+                feedback={feedback}
+                onFeedback={onFeedback}
+              />
             </section>
           ))}
           {presented.length > 0 ? (
             <PresentedFiles
               files={presented}
               workspaceId={workspaceId}
+              workspacePath={workspacePath}
               onOpen={onOpenPresented}
             />
           ) : null}

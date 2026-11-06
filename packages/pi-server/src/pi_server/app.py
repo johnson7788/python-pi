@@ -2868,9 +2868,15 @@ def create_app(
         return workspace_for(request).create_directory(payload.parentPath, payload.name)
 
     @app.get("/api/workspace/download")
-    async def workspace_download(request: Request, path: str = Query(...)) -> FileResponse:
+    async def workspace_download(
+        request: Request, path: str = Query(...), inline: bool = Query(False)
+    ) -> FileResponse:
         target, filename = workspace_for(request).download_target(path)
-        return FileResponse(target, filename=filename)
+        return FileResponse(
+            target,
+            filename=filename,
+            content_disposition_type="inline" if inline else "attachment",
+        )
 
     @app.websocket("/api/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:
