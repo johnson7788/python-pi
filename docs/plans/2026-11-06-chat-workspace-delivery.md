@@ -20,7 +20,17 @@
 
 ![整轮过程](../workbench-turn-process.png)
 
-## 2. 产物交付协议
+## 2. 产物左右分栏
+
+- 点击交付卡片的「在线编辑/查看」不再新开页面，而是打开聊天右侧的产物栏；
+- DOCX/XLSX/PPTX 直接在右栏启动 Office 编辑器；
+- PDF 和图片在右栏预览；
+- 右栏可关闭，关闭后回到对话继续追问或重新生成；
+- 编辑器右上角提供「全屏」切换。
+
+![右侧在线编辑](../workbench-side-editor.png)
+
+## 3. 产物交付协议
 
 新增内置 `present` 工具（`packages/pi-coding-agent/src/pi_coding_agent/tools/present.py`）：
 
@@ -34,7 +44,7 @@
 - 卡片支持「在线编辑」（DOCX/XLSX/PPTX 走 `/office`）和下载；
 - `present` 工具调用本身不再重复显示普通工具卡。
 
-## 3. 每个用户独立工作空间
+## 4. 每个用户独立工作空间
 
 | 模式 | 默认工作空间 |
 |---|---|
@@ -47,7 +57,7 @@
 - `/api/workspaces` 返回 `path`，侧栏 hover 可看到实际目录；
 - 旧 `output/生日快乐.pptx` 已复制到本机新工作空间，避免丢失。
 
-## 4. 空间对话可展开
+## 5. 空间对话可展开
 
 - 每个空间行新增展开/收起按钮；
 - 展开时按空间请求 `/api/sessions?workspace=...`；

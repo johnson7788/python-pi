@@ -1000,7 +1000,7 @@ function ChatView({
 }) {
   const title = agent.state?.sessionName?.trim() || '新任务'
   const [artifactsOpen, setArtifactsOpen] = useState(false)
-  const [presentedOfficePath, setPresentedOfficePath] = useState<string | null>(null)
+  const [artifactFocus, setArtifactFocus] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<Record<number, number>>({})
   const sessionFile = agent.state?.sessionFile
 
@@ -1069,12 +1069,8 @@ function ChatView({
             onFeedback={(timestamp, rating) => void rate(timestamp, rating)}
             onOpenPresented={(path) => {
               const relative = workspaceRelative(path, workspacePath)
-              if (/\.(docx|xlsx|pptx)$/i.test(relative)) {
-                setPresentedOfficePath(relative)
-                return
-              }
-              const href = `/api/workspace/download?workspace=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(relative)}&inline=1`
-              window.open(href, '_blank', 'noopener')
+              setArtifactFocus(relative)
+              setArtifactsOpen(true)
             }}
           />
           <div className="wb-chat-composer">
@@ -1092,17 +1088,17 @@ function ChatView({
           </div>
         </div>
         {artifactsOpen ? (
-          <ArtifactPane workspaceId={workspaceId} onClose={() => setArtifactsOpen(false)} />
+          <ArtifactPane
+            workspaceId={workspaceId}
+            focusPath={artifactFocus}
+            onFocusHandled={() => setArtifactFocus(null)}
+            onClose={() => {
+              setArtifactsOpen(false)
+              setArtifactFocus(null)
+            }}
+          />
         ) : null}
       </div>
-      {presentedOfficePath ? (
-        <OfficeEditor
-          workspaceId={workspaceId}
-          path={presentedOfficePath}
-          onClose={() => setPresentedOfficePath(null)}
-          onSaved={() => undefined}
-        />
-      ) : null}
     </div>
   )
 }
@@ -1213,11 +1209,13 @@ function OfficeEditor({
   path,
   onClose,
   onSaved,
+  embedded = false,
 }: {
   workspaceId: string
   path: string
   onClose: () => void
   onSaved: () => void
+  embedded?: boolean
 }) {
   const docId = officeDocId(workspaceId, path)
   const lower = path.toLowerCase()
@@ -1231,6 +1229,7 @@ function OfficeEditor({
   const [versions, setVersions] = useState<{ id: string; size: number; created: number }[] | null>(null)
   const [showVersions, setShowVersions] = useState(false)
   const [nonce, setNonce] = useState(0)
+  const [fullscreen, setFullscreen] = useState(false)
   const tokenRef = useRef('')
 
   useEffect(() => {
@@ -1322,13 +1321,18 @@ function OfficeEditor({
   }
 
   return (
-    <div className="wb-office-editor">
+    <div className={`wb-office-editor${embedded && !fullscreen ? ' is-pane' : ' is-full'}`}>
       <header>
         <b>在线编辑</b>
         {phase === 'ready' && saved ? <span>已保存</span> : null}
         {phase === 'ready' ? (
           <button type="button" className="wb-link" onClick={() => void loadVersions()}>
             版本
+          </button>
+        ) : null}
+        {embedded ? (
+          <button type="button" className="wb-link" onClick={() => setFullscreen((value) => !value)}>
+            {fullscreen ? '退出全屏' : '全屏'}
           </button>
         ) : null}
         <button type="button" className="wb-button" onClick={onClose}>关闭</button>
@@ -1371,7 +1375,17 @@ function OfficeEditor({
   )
 }
 
-function ArtifactPane({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }) {
+function ArtifactPane({
+  workspaceId,
+  focusPath,
+  onFocusHandled,
+  onClose,
+}: {
+  workspaceId: string
+  focusPath?: string | null
+  onFocusHandled?: () => void
+  onClose: () => void
+}) {
   const [items, setItems] = useState<ArtifactRow[] | null>(null)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [preview, setPreview] = useState<FilePreview | null>(null)
@@ -1406,6 +1420,16 @@ function ArtifactPane({ workspaceId, onClose }: { workspaceId: string; onClose: 
   }
 
   useEffect(load, [workspaceId])
+
+  useEffect(() => {
+    if (!focusPath || !items) return
+    const target = focusPath.replace(/^\/+/, '')
+    const item = items.find((entry) => entry.path.replace(/^\/+/, '') === target)
+    if (!item) return
+    setSelectedPath(item.path)
+    if (['docx', 'xlsx', 'pptx'].includes(item.extension)) setOfficePath(item.path)
+    onFocusHandled?.()
+  }, [focusPath, items, onFocusHandled])
 
   useEffect(() => {
     if (!selectedPath) {
@@ -1706,6 +1730,12 @@ function ArtifactPane({ workspaceId, onClose }: { workspaceId: string; onClose: 
                 />
               )}
             </div>
+          ) : selected.extension === 'pdf' ? (
+            <iframe
+              className="wb-pdf-preview"
+              title={selected.name}
+              src={`/api/workspace/download?workspace=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(selected.path)}&inline=1`}
+            />
           ) : (
             <div className="wb-artifact-binary">
               <p className="wb-muted">
@@ -1739,6 +1769,7 @@ function ArtifactPane({ workspaceId, onClose }: { workspaceId: string; onClose: 
         <OfficeEditor
           workspaceId={workspaceId}
           path={officePath}
+          embedded
           onClose={() => setOfficePath(null)}
           onSaved={load}
         />

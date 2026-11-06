@@ -772,3 +772,13 @@
 .wb-process-row.is-stuck .wb-process-glyph { color: #b33a3a; }
 .wb-process-row.is-stuck em { color: #b33a3a; }
 .wb-turn-process.is-stuck .wb-turn-process-head span { color: #b33a3a; }
+
+/* Side-by-side artifact viewer: office editor fills the right pane by default. */
+.wb-office-editor { position: absolute; inset: 0; z-index: 30; }
+.wb-office-editor.is-full { position: fixed; inset: 0; z-index: 300; }
+.wb-office-editor header .wb-link { margin-left: auto; }
+.wb-office-editor header .wb-link + .wb-button { margin-left: 0; }
+.wb-pdf-preview { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; }
+@media (min-width: 1101px) {
+  .wb-artifacts { width: 46%; min-width: 420px; max-width: 760px; }
+}
