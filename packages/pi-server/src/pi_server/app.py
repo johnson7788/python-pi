@@ -445,6 +445,24 @@ class SessionWorker:
         await self.controller.wait_for_prompt()
         return self.session_file()
 
+    async def run_scheduled_prompt(self, text: str) -> str | None:
+        """Start a fresh conversation for one scheduled run, then prompt it.
+
+        A schedule is a task generator, not a command sent to the currently open
+        conversation: every run must produce its own session in the schedule history.
+        """
+        await self.ensure_started()
+        if self.busy:
+            raise RuntimeError("worker is already running")
+        await self.controller.handle_line(
+            json.dumps({"type": "new_session", "id": "scheduled-new"})
+        )
+        await self.controller.handle_line(
+            json.dumps({"type": "prompt", "id": "scheduled", "message": text})
+        )
+        await self.controller.wait_for_prompt()
+        return self.session_file()
+
     def state_payload(self) -> dict[str, Any]:
         """The same shape the ``get_state`` command returns."""
         session = self.controller.session
@@ -707,6 +725,43 @@ class SessionRegistry:
                 raise BootstrapError(str(error)) from error
             raise
         worker.touch()
+        return worker
+
+    async def acquire_scheduled(
+        self,
+        uid: str,
+        workspace: str = "default",
+        app_id: str = "general",
+        mode_id: str = "office",
+    ) -> SessionWorker:
+        """A disposable worker for one scheduled run.
+
+        The user's interactive worker must not be switched to the scheduled session:
+        a background run would otherwise replace the conversation they are reading.
+        This worker is not registered, is not connected to any client, and is shut
+        down by the schedule runner after its turn.
+        """
+        worker = SessionWorker(
+            uid,
+            self.options_for(uid, workspace, app_id, mode_id),
+            workspace=workspace,
+            app_id=app_id,
+            mode_id=mode_id,
+            on_warning=self._on_warning,
+            # Do not let a background run become the user's interactive resume target.
+            on_session_file=None,
+            policy_factory=self._policy_factory,
+            on_audit=self._on_audit,
+            on_audit_finish=self._on_audit_finish,
+            on_usage=self._on_usage,
+        )
+        try:
+            await worker.ensure_started()
+        except BaseException as error:
+            await worker.shutdown("scheduled bootstrap failed")
+            if isinstance(error, SystemExit):
+                raise BootstrapError(str(error)) from error
+            raise
         return worker
 
     async def _evict_idle_locked(self) -> None:
@@ -1679,6 +1734,24 @@ def create_app(
         return {
             "schedules": [
                 schedule_catalog.schedule_json(row) for row in db.list_schedules(uid)
+            ]
+        }
+
+    @app.get("/api/schedules/runs")
+    async def list_schedule_runs(request: Request, limit: int = 50) -> dict[str, Any]:
+        db = schedule_store()
+        rows = db.list_user_schedule_runs(schedule_uid(request), limit)
+        return {
+            "runs": [
+                {
+                    **schedule_catalog.run_json(row),
+                    "scheduleId": row["schedule_id"],
+                    "scheduleName": row["schedule_name"],
+                    "workspace": row["schedule_workspace"],
+                    "appId": row["schedule_app_id"],
+                    "modeId": row["schedule_mode_id"],
+                }
+                for row in rows
             ]
         }
 

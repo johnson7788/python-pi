@@ -832,3 +832,10 @@
 .wb-turn-process.is-stuck .wb-turn-live svg { animation: none; color: #b33a3a; }
 
 .wb-html-preview { flex: 1; width: 100%; min-height: 0; border: 1px solid var(--wb-line); border-radius: 6px; background: #fff; }
+
+/* DSH-like workspace rail: no boxed active row, no separate chevron. */
+.wb-space-row { border: 0 !important; background: transparent !important; box-shadow: none !important; }
+.wb-space-row.is-active .wb-space { color: var(--wb-primary); font-weight: 500; }
+.wb-space-row.is-active .wb-space .wb-icon { color: var(--wb-primary); }
+.wb-space-row .wb-space { height: 34px; padding-left: 8px; }
+.wb-space-sessions { margin-left: 22px; }

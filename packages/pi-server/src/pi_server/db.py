@@ -1130,6 +1130,16 @@ class Database:
             (utcnow(), status, session_file, error, run_id),
         )
 
+    def list_user_schedule_runs(self, uid: str, limit: int = 50) -> list[sqlite3.Row]:
+        """Recent runs across every schedule of one user, newest first."""
+        return self._query(
+            "SELECT r.*, s.name AS schedule_name, s.workspace AS schedule_workspace,"
+            " s.app_id AS schedule_app_id, s.mode_id AS schedule_mode_id"
+            " FROM schedule_runs r JOIN schedules s ON s.id = r.schedule_id"
+            " WHERE s.uid = ? ORDER BY r.started_at DESC LIMIT ?",
+            (uid, max(1, min(200, limit))),
+        )
+
     def list_schedule_runs(self, schedule_id: str, limit: int = 20) -> list[sqlite3.Row]:
         return self._query(
             "SELECT * FROM schedule_runs WHERE schedule_id = ?"

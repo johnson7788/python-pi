@@ -74,15 +74,25 @@ def test_runner_executes_headless_and_records_a_run(tmp_path):
         class FakeWorker:
             busy = False
 
-            async def run_prompt(self, text: str) -> str:
+            async def run_scheduled_prompt(self, text: str) -> str:
                 assert text == "summarize"
                 return "/tmp/session.jsonl"
 
+            async def shutdown(self, reason: str = "") -> None:
+                assert reason
+
         class FakeRegistry:
-            async def acquire(self, *args):
+            used_scheduled = False
+
+            async def acquire_scheduled(self, *args):
+                self.used_scheduled = True
                 return FakeWorker()
 
-        runner = schedules.ScheduleRunner(db, FakeRegistry())
+            async def acquire(self, *args):
+                raise AssertionError("scheduled runs must use a disposable worker")
+
+        registry = FakeRegistry()
+        runner = schedules.ScheduleRunner(db, registry)
         asyncio.run(runner._execute(schedule_id, manual=False))
 
         row = db.get_schedule_by_id(schedule_id)
@@ -91,6 +101,7 @@ def test_runner_executes_headless_and_records_a_run(tmp_path):
         runs = db.list_schedule_runs(schedule_id)
         assert len(runs) == 1 and runs[0]["status"] == "success"
         assert runs[0]["session_file"] == "/tmp/session.jsonl"
+        assert registry.used_scheduled
         notifications = db.list_notifications(uid)
         assert len(notifications) == 1
         assert notifications[0]["kind"] == "schedule_success"
@@ -120,6 +131,7 @@ def test_schedule_http_surface(tmp_path):
 
         listed = client.get("/api/schedules").json()["schedules"]
         assert [item["id"] for item in listed] == [schedule["id"]]
+        assert client.get("/api/schedules/runs").json()["runs"] == []
 
         disabled = client.patch(f"/api/schedules/{schedule['id']}", json={"enabled": False})
         assert disabled.status_code == 200

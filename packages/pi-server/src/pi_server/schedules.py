@@ -119,7 +119,12 @@ class ScheduleRunner:
         status = "success"
         error: str | None = None
         try:
-            worker = await self.registry.acquire(
+            worker = await self.registry.acquire_scheduled(
+                str(schedule["uid"]),
+                str(schedule["workspace"]),
+                str(schedule["app_id"]),
+                str(schedule["mode_id"]),
+            ) if hasattr(self.registry, "acquire_scheduled") else await self.registry.acquire(
                 str(schedule["uid"]),
                 str(schedule["workspace"]),
                 str(schedule["app_id"]),
@@ -127,11 +132,19 @@ class ScheduleRunner:
             )
             if worker.busy:
                 raise RuntimeError("worker is busy with another turn")
-            session_file = await worker.run_prompt(str(schedule["prompt"]))
+            if hasattr(worker, "run_scheduled_prompt"):
+                session_file = await worker.run_scheduled_prompt(str(schedule["prompt"]))
+            else:
+                session_file = await worker.run_prompt(str(schedule["prompt"]))
         except Exception as failure:  # noqa: BLE001
             status = "failed"
             error = str(failure)
         finally:
+            if worker is not None:
+                try:
+                    await worker.shutdown("scheduled run complete")
+                except Exception:  # noqa: BLE001 - cleanup must not hide the run result
+                    pass
             self.database.finish_schedule_run(
                 run_id, status=status, session_file=session_file, error=error
             )

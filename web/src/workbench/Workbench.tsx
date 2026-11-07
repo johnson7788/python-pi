@@ -343,6 +343,16 @@ interface WorkspaceSession {
   firstMessage?: string | null
   modified?: number | string
 }
+interface ScheduleRunRow {
+  id: string
+  scheduleId: string
+  scheduleName: string
+  startedAt: string
+  finishedAt: string | null
+  status: string
+  sessionFile: string | null
+  error: string | null
+}
 
 export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([
@@ -373,11 +383,11 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const [spacesOpen, setSpacesOpen] = useState(true)
   const [expandedSpaces, setExpandedSpaces] = useState<Record<string, boolean>>({})
   const [workspaceSessions, setWorkspaceSessions] = useState<Record<string, WorkspaceSession[]>>({})
+  const [scheduleRuns, setScheduleRuns] = useState<ScheduleRunRow[] | null>(null)
   const [draft, setDraft] = useState('')
   const [chatDraft, setChatDraft] = useState('')
 
   const connectionOpen = agent.connection === 'open'
-  const sessions = agent.sessions.slice(0, 5)
   const workspaceName =
     workspaces.find((workspace) => workspace.id === activeWorkspace)?.name || '默认工作空间'
   const workspacePath =
@@ -399,13 +409,33 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
         }
       })
       .catch((failure: unknown) => {
-        setWorkspaceError(failure instanceof Error ? failure.message : '读取空间失败')
+        setWorkspaceError(failure instanceof Error ? failure.message : '读取工作区失败')
       })
   }, [activeWorkspace])
 
   useEffect(() => {
     setWorkspaceSessions((current) => ({ ...current, [activeWorkspace]: agent.sessions }))
   }, [agent.sessions, activeWorkspace])
+
+  useEffect(() => {
+    let alive = true
+    const load = () => {
+      api
+        .get<{ runs: ScheduleRunRow[] }>('/api/schedules/runs?limit=100')
+        .then((payload) => {
+          if (alive) setScheduleRuns(payload.runs)
+        })
+        .catch(() => {
+          if (alive) setScheduleRuns([])
+        })
+    }
+    load()
+    const timer = window.setInterval(load, 30_000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [])
 
   const loadWorkspaceSessions = async (workspace: string) => {
     if (workspaceSessions[workspace]) return
@@ -510,7 +540,7 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   }
 
   const createWorkspace = async () => {
-    const name = window.prompt('新空间名称')?.trim()
+    const name = window.prompt('新工作区名称')?.trim()
     if (!name) return
     try {
       const created = await api.post<WorkspaceRow>('/api/workspaces', { name })
@@ -518,7 +548,7 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
       setWorkspaceError(null)
       switchWorkspace(created.id)
     } catch (failure) {
-      setWorkspaceError(failure instanceof Error ? failure.message : '创建空间失败')
+      setWorkspaceError(failure instanceof Error ? failure.message : '创建工作区失败')
     }
   }
 
@@ -568,6 +598,12 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
     agent.sendPrompt(text)
     setChatDraft('')
   }
+
+  const scheduledSessionFiles = new Set(
+    (scheduleRuns ?? []).map((run) => run.sessionFile).filter((path): path is string => Boolean(path)),
+  )
+  const visibleSessions = (rows: WorkspaceSession[] | undefined) =>
+    rows?.filter((session) => !scheduledSessionFiles.has(session.path))
 
   return (
     <>
@@ -655,29 +691,34 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
                 onClick={() => setTasksOpen((value) => !value)}
                 aria-expanded={tasksOpen}
               >
-                <span>任务</span>
-                <b>({agent.sessions.length})</b>
-                <Icon name="chevronDown" size={12} />
+                <span>定时任务</span>
+                <b>({scheduleRuns?.length ?? 0})</b>
               </button>
             </div>
             {tasksOpen ? (
               <div className="wb-session-list">
-                {sessions.length === 0 ? <p className="wb-side-empty">还没有任务</p> : null}
-                {sessions.map((session) => {
-                  const active = Boolean(agent.state?.sessionFile && session.path === agent.state.sessionFile)
-                  return (
-                    <button
-                      key={session.path || session.id}
-                      type="button"
-                      className={`wb-session${active ? ' is-active' : ''}`}
-                      title={sessionTitle(session)}
-                      onClick={() => openSession(session.path)}
-                    >
-                      <span>{sessionTitle(session)}</span>
-                      <time>{formatWhen(session.modified)}</time>
-                    </button>
-                  )
-                })}
+                {scheduleRuns === null ? <p className="wb-side-empty">读取中…</p> : scheduleRuns.length === 0 ? (
+                  <p className="wb-side-empty">还没有定时任务运行</p>
+                ) : (
+                  scheduleRuns.map((run) => {
+                    const active = Boolean(run.sessionFile && agent.state?.sessionFile === run.sessionFile)
+                    return (
+                      <button
+                        key={run.id}
+                        type="button"
+                        className={`wb-session${active ? ' is-active' : ''}`}
+                        title={`${run.scheduleName}${run.error ? ` · ${run.error}` : ''}`}
+                        onClick={() => {
+                          if (run.sessionFile) openSession(run.sessionFile)
+                          else go('/workbench/scheduled')
+                        }}
+                      >
+                        <span>{run.scheduleName} · {run.status === 'success' ? '完成' : run.status === 'failed' ? '失败' : '运行中'}</span>
+                        <time>{formatWhen(run.startedAt)}</time>
+                      </button>
+                    )
+                  })
+                )}
               </div>
             ) : null}
 
@@ -688,9 +729,8 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
                 onClick={() => setSpacesOpen((value) => !value)}
                 aria-expanded={spacesOpen}
               >
-                <span>空间</span>
+                <span>工作区</span>
                 <b>({workspaces.length})</b>
-                <Icon name="chevronDown" size={12} />
               </button>
               {canCreateWorkspace ? (
                 <button
@@ -700,7 +740,7 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
                     event.stopPropagation()
                     void createWorkspace()
                   }}
-                  aria-label="新建空间"
+                  aria-label="新建工作区"
                 >
                   <Icon name="plus" size={13} />
                 </button>
@@ -711,32 +751,31 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
                 {workspaceError ? <p className="wb-side-empty">{workspaceError}</p> : null}
                 {workspaces.map((workspace) => {
                   const expanded = Boolean(expandedSpaces[workspace.id])
-                  const listed = workspaceSessions[workspace.id]
-                  const count = workspace.id === activeWorkspace ? agent.sessions.length : listed?.length
+                  const listed = visibleSessions(workspaceSessions[workspace.id])
+                  const count = workspace.id === activeWorkspace
+                    ? visibleSessions(agent.sessions)?.length
+                    : listed?.length
                   return (
                     <div className="wb-space-block" key={workspace.id}>
                       <div className={`wb-space-row${workspace.id === activeWorkspace ? ' is-active' : ''}`}>
                         <button
                           type="button"
                           className="wb-space"
+                          aria-expanded={expanded}
                           onClick={() => {
-                            switchWorkspace(workspace.id)
-                            if (!expanded) void loadWorkspaceSessions(workspace.id)
+                            if (workspace.id !== activeWorkspace) {
+                              switchWorkspace(workspace.id)
+                              setExpandedSpaces((current) => ({ ...current, [workspace.id]: true }))
+                              void loadWorkspaceSessions(workspace.id)
+                              return
+                            }
+                            toggleWorkspace(workspace.id)
                           }}
                           title={workspace.path || workspace.name}
                         >
-                          <Icon name="house" size={17} />
+                          <Icon name="folder" size={17} />
                           <span>{workspace.name}</span>
                           {typeof count === 'number' ? <i>{count}</i> : null}
-                        </button>
-                        <button
-                          type="button"
-                          className="wb-space-toggle"
-                          aria-label={expanded ? '收起对话' : '展开对话'}
-                          aria-expanded={expanded}
-                          onClick={() => toggleWorkspace(workspace.id)}
-                        >
-                          <Icon name="chevronDown" size={12} />
                         </button>
                       </div>
                       {expanded ? (
@@ -1563,7 +1602,7 @@ function ArtifactPane({
         {items === null ? (
           <p className="wb-muted">正在读取…</p>
         ) : items.length === 0 ? (
-          <p className="wb-muted">这个空间还没有可预览的产物。生成文件后会自动出现在这里。</p>
+          <p className="wb-muted">这个工作区还没有可预览的产物。生成文件后会自动出现在这里。</p>
         ) : (
           items.map((item) => (
             <button
@@ -3066,7 +3105,7 @@ function LibraryView({ workspace }: { workspace: string }) {
         <header className="wb-page-head wb-lib-head">
           <div>
             <h2>资料库</h2>
-            <p>当前空间的文件与产物；上传、预览和目录都在这里。</p>
+            <p>当前工作区的文件与产物；上传、预览和目录都在这里。</p>
           </div>
           <div className="wb-lib-actions">
             <button type="button" className="wb-button" onClick={createFolder}>
@@ -3754,17 +3793,18 @@ function HelpView({ authMode }: { authMode: string }) {
           <section>
             <h3>开始使用</h3>
             <p>在首页输入任务，选择工作模式或场景胶囊；发送后会创建一条会话。</p>
-            <p>左侧「任务」列出当前空间的会话，「空间」可以切换或展开查看每个空间的对话。</p>
+            <p>普通对话在「工作区」下面，点击工作区即可展开或收起该工作区的会话。</p>
           </section>
           <section>
             <h3>产物与在线编辑</h3>
             <p>模型生成的文件通过 <code>present</code> 声明为交付文件，显示在回答最后。</p>
-            <p>点击「在线编辑」会在右侧打开编辑器；「产物」按钮可以浏览当前空间的全部文件。</p>
+            <p>点击「在线编辑」会在右侧打开编辑器；「产物」按钮可以浏览当前工作区的全部文件。</p>
             <p>DOCX/XLSX/PPTX 支持在线编辑，PDF 和图片支持右侧预览。</p>
           </section>
           <section>
             <h3>定时任务</h3>
-            <p>「定时任务」按一次性、间隔、每天或每周运行 prompt，结果显示在「运行历史」和通知中心。</p>
+            <p>「定时任务」按一次性、间隔、每天或每周运行 prompt；每次运行都会新建一个会话，把任务交给 AI 执行。</p>
+            <p>运行产生的会话和执行记录在「定时任务」里，普通对话在下面「工作区」里。</p>
             <p>单机模式下任务同样保存在本地，不需要登录。</p>
           </section>
           <section>
@@ -4163,7 +4203,7 @@ function ScheduledView({
         <header className="wb-page-head">
           <div>
             <h2>定时任务</h2>
-            <p>按计划自动运行 prompt；可以指定空间、应用和模式，结果会记录在运行历史里。</p>
+            <p>每个任务按计划新建一个会话，把 prompt 交给 AI 执行；运行产生的会话和历史都记录在这里。</p>
           </div>
           <button type="button" className="wb-button" onClick={() => setShowForm((value) => !value)}>
             {showForm ? '收起' : '新建定时任务'}
@@ -4184,7 +4224,7 @@ function ScheduledView({
                 />
               </label>
               <label className="wb-field">
-                <span>空间</span>
+                <span>工作区</span>
                 <select
                   value={form.workspace}
                   onChange={(event) => setForm({ ...form, workspace: event.target.value })}
