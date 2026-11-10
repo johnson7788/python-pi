@@ -108,8 +108,12 @@ class NullUIContext(UIContext):
 class ExtensionAPI:
     """Registration surface handed to one extension's ``setup(pi)`` factory."""
 
-    def __init__(self, path: str = "<inline>") -> None:
+    def __init__(self, path: str = "<inline>", cwd: str | None = None) -> None:
         self.path = path
+        #: The workspace this plugin was loaded for.  Plugins run in the server
+        #: process, so ``os.getcwd()`` is shared by every worker; file-based tools
+        #: must resolve paths against this instead (see ``plugins.workspace_path``).
+        self.cwd = cwd or ""
         self.handlers: dict[str, list[ExtensionHandler]] = {}
         self.tools: dict[str, AgentTool] = {}
         self.commands: dict[str, RegisteredCommand] = {}

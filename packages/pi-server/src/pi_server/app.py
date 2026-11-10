@@ -2219,7 +2219,11 @@ def create_app(
         target = os.path.join(server_config.plugin_root, item.id)
         if os.path.exists(target):
             raise HTTPException(status_code=409, detail={"error": "plugin is already installed"})
-        shutil.copytree(item.package, target)
+        shutil.copytree(
+            item.package,
+            target,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+        )
         return {**market_catalog.item_json(item), "installed": True, "enabled": False}
 
     @app.get("/api/apps")

@@ -1,0 +1,24 @@
+{
+  "id": "web-fetch",
+  "name": "网页抓取",
+  "version": "1.0.0",
+  "apiVersion": "2",
+  "entry": "main.py",
+  "description": "抓取公开网页并转成可读文本（或格式化 JSON）。内置 SSRF 防护、大小与超时上限、HTML 去噪。",
+  "capabilities": ["tools"],
+  "permissions": {
+    "tools": [],
+    "filesystem": "none",
+    "network": true,
+    "process": false,
+    "secrets": []
+  },
+  "limits": {
+    "timeoutSeconds": 30,
+    "maxResultChars": 20000
+  },
+  "requires": {
+    "pi": ">=0.1.0",
+    "python": ">=3.10"
+  }
+}

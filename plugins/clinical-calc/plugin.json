@@ -1,0 +1,24 @@
+{
+  "id": "clinical-calc",
+  "name": "临床计算器",
+  "version": "1.0.0",
+  "apiVersion": "2",
+  "entry": "main.py",
+  "description": "BMI/BSA、eGFR(CKD-EPI 2021)/Cockcroft-Gault、CHA2DS2-VASc/HAS-BLED、Child-Pugh/MELD-Na。确定性计算，附公式与出处。",
+  "capabilities": ["tools"],
+  "permissions": {
+    "tools": [],
+    "filesystem": "none",
+    "network": false,
+    "process": false,
+    "secrets": []
+  },
+  "limits": {
+    "timeoutSeconds": 10,
+    "maxResultChars": 20000
+  },
+  "requires": {
+    "pi": ">=0.1.0",
+    "python": ">=3.10"
+  }
+}

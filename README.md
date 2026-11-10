@@ -58,6 +58,103 @@ def guard(event, ctx):
 
 完整设计、事件表与合并语义见 [`docs/EXTENSIONS.md`](docs/EXTENSIONS.md)。
 
+## 插件（Plugins）
+
+插件是可安装、可按应用启停的可执行扩展：一个目录（`plugin.json` + `setup(api)`），可以注册
+模型工具、斜杠命令或事件处理器。它和上面的扩展共用同一套注册面，区别在**治理**：有 manifest、
+有安装/卸载、按用户+应用启用、卸载会驱逐已加载它的 worker。
+
+```python
+# <data_root>/plugins/hello-pi/main.py
+from pi_coding_agent.plugins import PluginAPI
+
+def setup(api: PluginAPI) -> None:
+    @api.register_tool(
+        name="hello_plugin",
+        description="Return a greeting.",
+        parameters={"type": "object", "properties": {}},
+    )
+    async def hello_plugin(tool_call_id, args, signal, on_update):
+        return "hello"          # 直接返回字符串即可
+```
+
+本地四步（不用起服务）：`new` → `check` → `dev` → `pack`，见
+[`plugin-kit/`](plugin-kit/README.md)。安装走插件页上传 zip，或从市场装；启用后下一条消息生效。
+
+官方起点包：[`plugins/`](plugins/README.md)——临床计算器、PubMed 检索、网页抓取、CSV 工具，
+四个可直接装的插件，也是四种典型写法的样板。
+
+- 完整契约：[`docs/PLUGINS.md`](docs/PLUGINS.md)
+- 与 DSH 的差距、取舍和「用户自服务」路线：[`docs/PLUGIN-PLATFORM-GAP.md`](docs/PLUGIN-PLATFORM-GAP.md)
+- 让 agent 帮你写：[`template/skills/plugin-creator`](template/skills/plugin-creator/SKILL.md)
+
+## 技能（Skills）
+
+一个技能是「一个目录 + `SKILL.md`」（YAML frontmatter + Markdown 正文），可以带 `scripts/`、
+`references/`、`assets/`。系统提示词只注入 name / description / location，正文由模型按需
+`read`——渐进披露，不是把全文塞进上下文。
+
+发现位置（低优先级在前）：
+
+| 位置 | 用途 |
+|---|---|
+| `~/.agents/skills/` | 与本机其他 agent 工具共享 |
+| `~/.pi/agent/skills/` | 用户级，跟着你走 |
+| `.agents/skills/`（cwd 及祖先目录） | 跨工具的项目级 |
+| `.pi/skills/`（需项目受信任） | pi 自己的项目级 |
+| `<agent_dir>/skills/` | 部署配置目录；团队模式从模板播种 |
+
+校验是**失败即跳过**（上游 pi 只警告）：`name` 必须匹配 `^[a-z0-9-]+$` 且 ≤64 字符；
+`description` 必须是 YAML **字符串**、1–1024 字符。写成 `description: [TODO: ...]` 会被 YAML
+解析成数组，整个技能不出现在提示词里，也没有明显报错。
+
+两种调用方式：模型按 description 自行加载；或用户显式 `/skill:<name> args`。
+`disable-model-invocation: true` 的技能只保留后者。
+
+### 默认技能
+
+[`template/skills/`](template/skills) 是随仓库分发的默认技能：`start.sh` 启动时把它链进模板
+agent 目录，团队模式下新用户从模板播种时共享同一份（软链而非拷贝，改一处所有人都生效）。
+当前包含 `skill-creator`（怎么写技能）、`plugin-creator`（让 agent 按访谈生成可安装的插件）
+与 `documents`（DOCX 读写、修订、渲染核对）。
+
+```bash
+# 新建一个默认技能（不带 --path 时建在 ~/.pi/agent/skills/）
+.venv/bin/python template/skills/skill-creator/scripts/init_skill.py my-skill --path template/skills
+.venv/bin/python template/skills/skill-creator/scripts/quick_validate.py template/skills/my-skill
+```
+
+`quick_validate.py` 与加载器同口径（含 frontmatter 类型检查），别用宽松的其他校验器。
+接线方式与注意事项见 [`template/README.md`](template/README.md)。
+
+### 市场
+
+浏览器 UI 的「市场」页由一份策划目录驱动，条目写在
+[`packages/pi-server/src/pi_server/market.py`](packages/pi-server/src/pi_server/market.py) 的
+`ITEMS` 里（`kind` 为 `skill` 或 `plugin`）。`name` / `description` / `source` / `tags` /
+`version` 直接决定卡片、来源标签、筛选与搜索。装技能 = 往 `<agent_dir>/skills/<id>/SKILL.md`
+写一个文件；装插件 = 把 `package` 目录拷进 `<data_root>/plugins/`。
+
+```python
+MarketItem(
+    kind="skill", id="my-skill",                 # id 即安装目录名，须与 skill 的 name 一致
+    name="…", description="…", version="1.0.0",
+    author="平台团队", source="团队", tags=("办公",),
+    content=_skill("my-skill", "…", """## 何时使用\n…"""),
+)
+```
+
+改完要**重启服务**（模块在启动时 import）。`curl '/api/market?kind=skill'` 或
+`uv run pytest tests/test_market.py` 可验证；市场只在团队模式可用（single 模式返回 503）。
+
+两个已知限制：
+
+- **市场只分发单文件技能**：`install_market_skill()` 只写 `SKILL.md`，`scripts/` 与
+  `references/` 不会跟着走。带脚本的技能走上面「默认技能」那条路。
+- **安装会写穿软链**：团队模式下 `<agent_dir>/skills` 指向模板，所以点「安装」等于改共享模板
+  （默认配置里就是改仓库工作区），且所有用户同时显示「已安装」。要让安装只影响个人，需要把
+  模板技能拷贝进各用户目录、断开这条链。
+
 ## 运行模式
 
 CLI 有三种模式，都通过 `pi-py` 调用：
@@ -241,7 +338,7 @@ PI_API_KEY=sk-xxx .venv/bin/python -m pi_server.cli \
 | 账号 | 无 | 有；管理员建号、可禁用、可重置密码 |
 | 会话 | 全进程一个 | 每个用户一个，互不可见 |
 | 工作目录 | `--cwd` 指定的目录 | `<data-root>/workspaces/<uid>/` |
-| 配置目录 | `--agent-dir` | `<data-root>/agents/<uid>/`，从 `<data-root>/template` 播种 |
+| 配置目录 | `--agent-dir` | `<data-root>/agents/<uid>/`，从 `<data-root>/template` 播种（其中 `skills/` 是共享的默认技能，见上文「技能（Skills）」） |
 | 凭据 | 命令行/环境 | 一把共用 key，按人记账并可设月度上限 |
 | 工具调用 | 不干预 | 白名单 + 危险命令闸门 + 审计日志 |
 | 页面 | 会话 | 会话 / 文件 / 用量 / 管理（成员、全局用量、审计） |
@@ -403,6 +500,8 @@ packages/pi-coding-agent/src/pi_coding_agent/
     system_prompt.py / skills.py / resource_loader.py / settings.py
     agent_session.py                      编排层
     modes/                                print / json 模式
+packages/pi-server/src/pi_server/         浏览器 UI 服务端；市场目录在 market.py
+template/skills/                          默认技能，启动时软链进每个租户的 agent 目录
 tests/                                    按模块划分的测试
 docs/research/                            上游逐层调研笔记
 ```

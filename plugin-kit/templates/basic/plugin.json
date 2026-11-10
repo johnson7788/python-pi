@@ -1,0 +1,33 @@
+{
+  "id": "__PLUGIN_ID__",
+  "name": "__PLUGIN_NAME__",
+  "version": "0.1.0",
+  "apiVersion": "2",
+  "entry": "main.py",
+  "description": "__PLUGIN_DESC__",
+  "capabilities": ["tools"],
+  "permissions": {
+    "tools": [],
+    "filesystem": "none",
+    "network": false,
+    "process": false,
+    "secrets": []
+  },
+  "config": {
+    "type": "object",
+    "properties": {
+      "greeting": {
+        "type": "string",
+        "default": "你好",
+        "description": "问候语前缀"
+      }
+    }
+  },
+  "limits": {
+    "timeoutSeconds": 30,
+    "maxResultChars": 20000
+  },
+  "requires": {
+    "pi": ">=0.1.0"
+  }
+}

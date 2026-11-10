@@ -1,0 +1,24 @@
+{
+  "id": "csv-tools",
+  "name": "CSV 表格工具",
+  "version": "1.0.0",
+  "apiVersion": "2",
+  "entry": "main.py",
+  "description": "探查工作区里的 CSV：行列数、类型、空值、Top 值、样例，以及简单的条件查询（= != > >= < <= contains）。",
+  "capabilities": ["tools"],
+  "permissions": {
+    "tools": [],
+    "filesystem": "read",
+    "network": false,
+    "process": false,
+    "secrets": []
+  },
+  "limits": {
+    "timeoutSeconds": 30,
+    "maxResultChars": 20000
+  },
+  "requires": {
+    "pi": ">=0.1.0",
+    "python": ">=3.10"
+  }
+}

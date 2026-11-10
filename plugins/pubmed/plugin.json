@@ -1,0 +1,46 @@
+{
+  "id": "pubmed",
+  "name": "PubMed 检索",
+  "version": "1.0.0",
+  "apiVersion": "2",
+  "entry": "main.py",
+  "description": "检索 PubMed 并读取摘要（NCBI E-utilities）。返回 PMID、期刊、年份、作者与 DOI，摘要按小节输出。",
+  "capabilities": ["tools"],
+  "permissions": {
+    "tools": [],
+    "filesystem": "none",
+    "network": ["eutils.ncbi.nlm.nih.gov"],
+    "process": false,
+    "secrets": ["NCBI_API_KEY", "NCBI_EMAIL"]
+  },
+  "config": {
+    "type": "object",
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "default": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
+        "description": "E-utilities 根地址（测试时可指向本地 mock）"
+      },
+      "email": {
+        "type": "string",
+        "env": "NCBI_EMAIL",
+        "description": "联系邮箱；NCBI 要求带上，便于限流时联系"
+      },
+      "apiKey": {
+        "type": "string",
+        "secret": true,
+        "env": "NCBI_API_KEY",
+        "description": "可选的 NCBI API key，把限流从 3 次/秒提高到 10 次/秒"
+      }
+    },
+    "required": ["baseUrl"]
+  },
+  "limits": {
+    "timeoutSeconds": 30,
+    "maxResultChars": 20000
+  },
+  "requires": {
+    "pi": ">=0.1.0",
+    "python": ">=3.10"
+  }
+}

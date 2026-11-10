@@ -1,0 +1,40 @@
+{
+  "id": "__PLUGIN_ID__",
+  "name": "__PLUGIN_NAME__",
+  "version": "0.1.0",
+  "apiVersion": "2",
+  "entry": "main.py",
+  "description": "__PLUGIN_DESC__",
+  "capabilities": ["tools"],
+  "permissions": {
+    "tools": [],
+    "filesystem": "none",
+    "network": true,
+    "process": false,
+    "secrets": ["__PLUGIN_ENV__"]
+  },
+  "config": {
+    "type": "object",
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "default": "https://api.example.com",
+        "description": "接口根地址，不要带结尾斜杠"
+      },
+      "apiKey": {
+        "type": "string",
+        "secret": true,
+        "env": "__PLUGIN_ENV__",
+        "description": "访问令牌，从环境变量读取，不要写进仓库"
+      }
+    },
+    "required": ["baseUrl"]
+  },
+  "limits": {
+    "timeoutSeconds": 30,
+    "maxResultChars": 20000
+  },
+  "requires": {
+    "pi": ">=0.1.0"
+  }
+}

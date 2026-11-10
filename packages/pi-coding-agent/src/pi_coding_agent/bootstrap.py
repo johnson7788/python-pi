@@ -277,7 +277,7 @@ def load_extension_runner(
             if path not in paths:
                 paths.append(path)
 
-    result = load_extensions(paths, flag_values=extension_flag_values(unknown_flags))
+    result = load_extensions(paths, flag_values=extension_flag_values(unknown_flags), cwd=cwd)
     for diagnostic in result.diagnostics:
         message = f"extension {diagnostic.severity}: {diagnostic.path}: {diagnostic.message}"
         if on_diagnostic is not None:

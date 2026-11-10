@@ -230,6 +230,7 @@ def load_extensions(
     *,
     flag_values: Mapping[str, bool | str | None] | None = None,
     discover_entry_points: bool = True,
+    cwd: str | None = None,
 ) -> ExtensionLoadResult:
     """Import ``paths``, run each extension factory, and collect diagnostics.
 
@@ -262,12 +263,12 @@ def load_extensions(
             continue
         seen.add(canonical)
         result.paths.append(resolved)
-        api = _load_path(resolved, result.diagnostics, values)
+        api = _load_path(resolved, result.diagnostics, values, cwd)
         if api is not None:
             result.apis.append(api)
 
     if discover_entry_points:
-        _load_installed_entry_points(result, values)
+        _load_installed_entry_points(result, values, cwd)
 
     return result
 
@@ -276,6 +277,7 @@ def _load_path(
     path: str,
     diagnostics: list[ExtensionDiagnostic],
     flag_values: Mapping[str, bool | str | None] | None,
+    cwd: str | None = None,
 ) -> ExtensionAPI | None:
     """Import and initialise one extension file; ``None`` on any failure."""
     if os.path.isdir(path):
@@ -313,7 +315,7 @@ def _load_path(
         )
         return None
 
-    return _call_factory(factory, path, diagnostics, flag_values)
+    return _call_factory(factory, path, diagnostics, flag_values, cwd)
 
 
 def _find_factory(module: Any) -> Any:
@@ -330,9 +332,10 @@ def _call_factory(
     path: str,
     diagnostics: list[ExtensionDiagnostic],
     flag_values: Mapping[str, bool | str | None] | None,
+    cwd: str | None = None,
 ) -> ExtensionAPI | None:
     """Run one factory against a fresh API; ``None`` if it raised."""
-    api = ExtensionAPI(path=path)
+    api = ExtensionAPI(path=path, cwd=cwd)
     try:
         returned = factory(api)
         if inspect.isawaitable(returned):
@@ -419,6 +422,7 @@ def _has_running_loop() -> bool:
 def _load_installed_entry_points(
     result: ExtensionLoadResult,
     flag_values: Mapping[str, bool | str | None] | None,
+    cwd: str | None = None,
 ) -> None:
     """Load ``module:attr`` factories declared by installed distributions."""
     group = ENTRY_POINT_GROUP
@@ -449,7 +453,7 @@ def _load_installed_entry_points(
 
     for entry_point in ordered:
         try:
-            _load_entry_point(entry_point, result, flag_values)
+            _load_entry_point(entry_point, result, flag_values, cwd)
         except Exception as error:  # noqa: BLE001 - metadata objects are third-party code
             # Entry-point objects come from installed distributions, so even
             # reading their attributes can raise; keep the no-exception promise.
@@ -466,6 +470,7 @@ def _load_entry_point(
     entry_point: Any,
     result: ExtensionLoadResult,
     flag_values: Mapping[str, bool | str | None] | None,
+    cwd: str | None = None,
 ) -> None:
     name = str(getattr(entry_point, "name", "<unnamed>"))
     value = str(getattr(entry_point, "value", ""))
@@ -522,7 +527,7 @@ def _load_entry_point(
             )
             return
 
-    api = _call_factory(factory, descriptor, result.diagnostics, flag_values)
+    api = _call_factory(factory, descriptor, result.diagnostics, flag_values, cwd)
     if api is not None:
         result.apis.append(api)
 
