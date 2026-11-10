@@ -759,7 +759,32 @@ class SessionRegistry:
                 raise BootstrapError(str(error)) from error
             raise
         worker.touch()
+        await self._recycle_idle_siblings(uid, workspace, key)
         return worker
+
+    async def _recycle_idle_siblings(
+        self, uid: str, workspace: str, keep: tuple[str, str, str, str]
+    ) -> None:
+        """Drop this user's other compositions in the same workspace.
+
+        Each (app, mode) has its own worker, so switching apps would otherwise pin one
+        worker per composition until the 30-minute idle sweep.  A worker is only
+        recycled when it is idle *and* has no connected tab: a second browser tab on
+        another app keeps its own worker.
+        """
+        stale: list[SessionWorker] = []
+        async with self._lock:
+            for key, worker in list(self._workers.items()):
+                if key == keep or key[0] != uid or key[1] != workspace:
+                    continue
+                if worker.busy or worker.hub.client_count > 0:
+                    continue
+                stale.append(self._workers.pop(key))
+        for worker in stale:
+            try:
+                await worker.shutdown("another composition became active")
+            except Exception:  # noqa: BLE001
+                pass
 
     async def acquire_scheduled(
         self,

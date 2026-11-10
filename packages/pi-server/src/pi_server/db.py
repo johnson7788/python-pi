@@ -775,12 +775,16 @@ class Database:
     # -- apps (team-wide) --------------------------------------------------------------
 
     def seed_team_apps(self, apps: list[dict[str, Any]]) -> None:
-        """Install the built-in catalog once; later edits are never overwritten."""
-        row = self._one("SELECT COUNT(*) AS count FROM team_apps")
-        if row is not None and int(row["count"]) > 0:
-            return
+        """Install built-ins that are missing; never overwrite an existing row.
+
+        Running this on every catalog read is intentional: an upgrade that adds a new
+        built-in app should reach existing deployments without a migration, while an
+        administrator's edits to an existing app stay untouched.
+        """
+        existing = {str(row["id"]) for row in self._query("SELECT id FROM team_apps")}
         for app in apps:
-            self.replace_team_app(app, builtin=True)
+            if str(app.get("id")) not in existing:
+                self.replace_team_app(app, builtin=True)
 
     def list_team_apps(self) -> list[dict[str, Any]]:
         app_rows = self._query("SELECT * FROM team_apps ORDER BY sort ASC, created_at ASC")

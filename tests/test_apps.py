@@ -82,7 +82,7 @@ def test_app_crud_over_http(tmp_path):
         client.post("/api/auth/login", json={"username": "admin", "password": "pw123456"})
         listed = client.get("/api/apps").json()
         assert listed["canManage"] is True
-        assert len(listed["apps"]) == 3
+        assert len(listed["apps"]) >= 8
 
         created = client.post(
             "/api/apps",
