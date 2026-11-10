@@ -33,6 +33,12 @@ class Mode:
     #: ``None`` means every discovered skill; a tuple binds the mode to a subset.
     skills: tuple[str, ...] | None = None
     capsules: tuple[Capsule, ...] = field(default_factory=tuple)
+    #: Example prompts shown on the home screen; empty means "no examples".
+    examples: tuple[str, ...] = ()
+    #: Composer placeholder for this mode.
+    placeholder: str = ""
+    #: Icon name from the web icon set (``spark``/``code``/``palette``/...).
+    icon: str = ""
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,14 @@ GENERAL = App(
                 Capsule("plan", "策划方案", "帮我策划一个可执行的方案，包含目标、步骤、风险和验收标准。"),
                 Capsule("schedule", "定时任务", "帮我设计一个可以定时执行的自动化任务。"),
             ),
+            examples=(
+                "这个周末，附近有什么值得去",
+                "最近 7 天，短视频都在流行什么",
+                "每月定投 1000 元，5 年后能有多少钱",
+                "最近 AI 行业变了什么，给我一份变更日志",
+            ),
+            placeholder="/调用技能与指令",
+            icon="spark",
         ),
         Mode(
             id="dev",
@@ -79,6 +93,14 @@ GENERAL = App(
                 Capsule("tests", "补测试", "找出这块逻辑的边界条件并补上测试。"),
                 Capsule("release", "准备发布", "检查发布前需要确认的配置、迁移和回滚步骤。"),
             ),
+            examples=(
+                "把服务端的排队消息改成持久化",
+                "这个 traceback 是什么原因，帮我修掉",
+                "给会话模块补 5 个边界测试",
+                "看看这个仓库最该先补的 3 个能力",
+            ),
+            placeholder="描述要改的功能，或贴一段报错",
+            icon="code",
         ),
         Mode(
             id="design",
@@ -94,6 +116,14 @@ GENERAL = App(
                 Capsule("competitor", "竞品分析", "拆解三个同类产品的首屏和关键流程差异。"),
                 Capsule("icon", "图标", "为这个功能设计一个简洁的图标方向。"),
             ),
+            examples=(
+                "把首页做成新版那样，先出 HTML",
+                "给这个产品定一套克制的浅色配色",
+                "拆解 3 个同类产品的首屏差异",
+                "这套界面还缺什么状态，列给我",
+            ),
+            placeholder="描述你想做的界面或视觉方向",
+            icon="palette",
         ),
     ),
 )
@@ -118,6 +148,14 @@ RESEARCH = App(
                 Capsule("evidence", "提取证据表", "把纳入研究整理成可追溯的证据表。"),
                 Capsule("outline", "综述提纲", "基于现有证据给出综述提纲和每节要点。"),
             ),
+            examples=(
+                "帮我评估这个临床问题值不值得做系统评价",
+                "把这三篇 RCT 整理成证据表",
+                "为这个 PICO 写中英文检索式",
+                "这份综述初稿的逻辑缺什么",
+            ),
+            placeholder="输入研究问题、PICO 或文献片段",
+            icon="book",
         ),
     ),
 )
@@ -141,6 +179,14 @@ SLIDES = App(
                 Capsule("story", "故事线", "把这份材料改造成有起承转合的汇报故事线。"),
                 Capsule("notes", "讲稿", "为这套幻灯片写逐页讲稿，控制在 15 分钟。"),
             ),
+            examples=(
+                "给季度复盘做一份 10 页汇报",
+                "把这份文档改成 15 分钟的汇报故事线",
+                "这套幻灯片每页只留一个观点，帮我改",
+                "给这页配一段讲稿",
+            ),
+            placeholder="输入主题、受众和时长",
+            icon="slides",
         ),
     ),
 )
@@ -188,6 +234,9 @@ def app_json(app: App) -> dict[str, Any]:
                 "description": mode.description,
                 "skillBinding": "all" if mode.skills is None else list(mode.skills),
                 "prompt": mode.prompt,
+                "examples": list(mode.examples),
+                "placeholder": mode.placeholder,
+                "icon": mode.icon,
                 "capsules": [
                     {"id": capsule.id, "name": capsule.name, "prompt": capsule.prompt}
                     for capsule in mode.capsules
@@ -200,7 +249,7 @@ def app_json(app: App) -> dict[str, Any]:
 
 def catalog_json() -> dict[str, Any]:
     return {
-        "apps": [app_json(app) for app in APPS],
+        "apps": [{**app_json(app), "builtin": True} for app in APPS],
         "defaultApp": DEFAULT_APP_ID,
         "defaultMode": DEFAULT_MODE_ID,
     }

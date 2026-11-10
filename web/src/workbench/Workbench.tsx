@@ -52,6 +52,9 @@ interface AppModeRow {
   description: string
   skillBinding: 'all' | string[]
   prompt?: string
+  examples?: string[]
+  placeholder?: string
+  icon?: string
   capsules: AppCapsule[]
 }
 
@@ -69,6 +72,13 @@ interface AppAuditRow {
   action: string
   actor: string
   createdAt: string
+  changes?: string[]
+}
+
+interface SkillOption {
+  name: string
+  description: string
+  enabled: boolean
 }
 
 const APP_ACTION_LABEL: Record<string, string> = {
@@ -76,6 +86,8 @@ const APP_ACTION_LABEL: Record<string, string> = {
   update: '修改',
   delete: '删除',
   restore: '恢复默认',
+  duplicate: '复制',
+  import: '导入',
 }
 
 interface NotificationRow {
@@ -135,6 +147,24 @@ const MODES = {
   },
 }
 type Mode = keyof typeof MODES
+
+const APP_ICON_NAMES = [
+  'spark',
+  'book',
+  'code',
+  'palette',
+  'search',
+  'slides',
+  'sheet',
+  'file',
+  'folder',
+  'image',
+  'clock',
+  'apps',
+  'plugin',
+  'skill',
+  'house',
+] as const
 
 const FALLBACK_APP: AppRow = {
   id: 'general',
@@ -341,6 +371,8 @@ interface WorkspaceSession {
   id: string
   name?: string | null
   firstMessage?: string | null
+  app?: string | null
+  mode?: string | null
   modified?: number | string
 }
 interface ScheduleRunRow {
@@ -363,8 +395,12 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const [apps, setApps] = useState<AppRow[]>([])
   const [canManageApps, setCanManageApps] = useState(false)
-  const [activeAppId, setActiveAppId] = useState('general')
-  const [activeModeId, setActiveModeId] = useState('office')
+  const [activeAppId, setActiveAppId] = useState(
+    () => (typeof window === 'undefined' ? '' : window.localStorage.getItem('pi.activeApp')) || 'general',
+  )
+  const [activeModeId, setActiveModeId] = useState(
+    () => (typeof window === 'undefined' ? '' : window.localStorage.getItem('pi.activeMode')) || 'office',
+  )
   const agent = useAgent({
     enabled: true,
     workspace: activeWorkspace,
@@ -396,6 +432,18 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const activeApp = availableApps.find((app) => app.id === activeAppId) || availableApps[0]
   const activeMode = activeApp.modes.find((item) => item.id === activeModeId) || activeApp.modes[0]
   const userName = auth.user?.displayName || auth.user?.username || '本地用户'
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('pi.activeApp', activeAppId)
+      window.localStorage.setItem('pi.activeMode', activeModeId)
+    } catch {
+      // Private mode / quota: remembering the app is a convenience, not a requirement.
+    }
+  }, [activeAppId, activeModeId])
+
+  const appName = (appId?: string | null) =>
+    apps.find((app) => app.id === appId)?.name || (appId === 'general' ? '通用工作台' : appId || '')
 
   useEffect(() => {
     api
@@ -793,7 +841,12 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
                                 title={sessionTitle(session)}
                                 onClick={() => openSession(session.path)}
                               >
-                                <span>{sessionTitle(session)}</span>
+                                <span>
+                                  {sessionTitle(session)}
+                                  {session.app && session.app !== activeAppId ? (
+                                    <i className="wb-session-app">{appName(session.app)}</i>
+                                  ) : null}
+                                </span>
                                 <time>{formatWhen(session.modified)}</time>
                               </button>
                             ))
@@ -958,10 +1011,12 @@ function HomeView({
   workspaceName: string
 }) {
   const mode = app.modes.find((item) => item.id === modeId) || app.modes[0]
-  const fallback = MODES[(mode.id as Mode)] || MODES.office
+  const fallback = MODES[mode.id as Mode]
   const quick = mode.capsules.length
     ? mode.capsules
-    : fallback.quick.map((label) => ({ id: label, name: label, prompt: label }))
+    : (fallback?.quick ?? []).map((label) => ({ id: label, name: label, prompt: label }))
+  const examples = mode.examples?.length ? mode.examples : fallback?.examples ?? []
+  const placeholder = mode.placeholder || fallback?.placeholder || '输入消息，或 / 调用技能'
 
   return (
     <div className="wb-home">
@@ -984,7 +1039,7 @@ function HomeView({
               onClick={() => onChangeMode(item.id)}
               title={item.description}
             >
-              <Icon name={MODES[(item.id as Mode)]?.icon || 'spark'} size={15} />
+              <Icon name={((item.icon || MODES[item.id as Mode]?.icon || 'spark') as IconName)} size={15} />
               {item.name}
             </button>
           ))}
@@ -1005,12 +1060,12 @@ function HomeView({
           onAbort={onAbort}
           streaming={streaming}
           disabled={disabled}
-          placeholder={fallback.placeholder}
+          placeholder={placeholder}
           workspaceName={workspaceName}
         />
 
         <div className="wb-examples">
-          {fallback.examples.map((example) => (
+          {examples.map((example) => (
             <button key={example} type="button" onClick={() => onDraft(example)}>
               <span>{example}</span>
               <Icon name="arrowUp" size={14} />
@@ -3245,8 +3300,18 @@ function AppsView({
 }) {
   const [draft, setDraft] = useState<AppRow | null>(null)
   const [auditFor, setAuditFor] = useState<{ app: AppRow; items: AppAuditRow[] } | null>(null)
+  const [skills, setSkills] = useState<SkillOption[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const exportRef = useRef<HTMLAnchorElement>(null)
+  const importRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    api
+      .get<{ skills: SkillOption[] }>('/api/skills')
+      .then((payload) => setSkills(payload.skills))
+      .catch(() => setSkills([]))
+  }, [])
 
   const showAudit = async (app: AppRow) => {
     setError(null)
@@ -3274,6 +3339,71 @@ function AppsView({
     }
   }
 
+  const duplicate = async (app: AppRow) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.post(`/api/apps/${encodeURIComponent(app.id)}/duplicate`, {})
+      onSaved()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '复制应用失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const move = async (index: number, delta: number) => {
+    const target = index + delta
+    if (target < 0 || target >= apps.length) return
+    const ordered = [...apps]
+    const [moved] = ordered.splice(index, 1)
+    ordered.splice(target, 0, moved)
+    setBusy(true)
+    setError(null)
+    try {
+      await api.post('/api/apps/order', { ids: ordered.map((item) => item.id) })
+      onSaved()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '调整顺序失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const exportApps = async () => {
+    setError(null)
+    try {
+      const payload = await api.get<{ apps: AppRow[]; exportedAt: string }>('/api/apps/export')
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const anchor = exportRef.current
+      if (anchor) {
+        anchor.href = url
+        anchor.download = `pi-apps-${payload.exportedAt.slice(0, 10)}.json`
+        anchor.click()
+      }
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '导出失败')
+    }
+  }
+
+  const importApps = async (file: File) => {
+    setBusy(true)
+    setError(null)
+    try {
+      const text = await file.text()
+      const payload = JSON.parse(text) as { apps?: AppRow[] }
+      if (!Array.isArray(payload.apps)) throw new Error('文件里没有 apps 数组')
+      await api.post('/api/apps/import', { apps: payload.apps })
+      onSaved()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '导入失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const openNew = () => {
     const modeId = `mode-${Math.random().toString(36).slice(2, 7)}`
     setDraft({
@@ -3289,6 +3419,9 @@ function AppsView({
           description: '',
           prompt: '',
           skillBinding: 'all',
+          examples: [],
+          placeholder: '',
+          icon: 'spark',
           capsules: [],
         },
       ],
@@ -3341,17 +3474,40 @@ function AppsView({
         <header className="wb-page-head">
           <div>
             <h2>应用</h2>
-            <p>应用把工作模式和场景胶囊组合起来；选中后，首页与下一条消息都会使用它的提示词与技能绑定。</p>
+            <p>
+              应用把工作模式和场景胶囊组合起来；全团队共用同一套配置，只有管理员可以修改。
+              选中后，首页与下一条消息都会使用它的提示词与技能绑定。
+            </p>
           </div>
           {canManage ? (
-            <button type="button" className="wb-button" onClick={openNew}>新建应用</button>
+            <>
+              <button type="button" className="wb-button" onClick={openNew}>新建应用</button>
+              <button type="button" className="wb-button" onClick={() => void exportApps()}>导出</button>
+              <button type="button" className="wb-button" onClick={() => importRef.current?.click()} disabled={busy}>
+                导入
+              </button>
+              <input
+                ref={importRef}
+                type="file"
+                accept="application/json,.json"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (file) void importApps(file)
+                }}
+              />
+              <a ref={exportRef} hidden aria-hidden="true" />
+            </>
           ) : (
             <span className="wb-chip">{apps.length} 个应用</span>
           )}
         </header>
 
+        {error ? <div className="wb-alert">{error}</div> : null}
+
         <div className="wb-apps-grid">
-          {apps.map((app) => {
+          {apps.map((app, index) => {
             const active = app.id === activeAppId
             return (
               <article key={app.id} className={`wb-app-card${active ? ' is-active' : ''}`}>
@@ -3381,9 +3537,16 @@ function AppsView({
                     {app.modes.reduce((total, mode) => total + mode.capsules.length, 0)} 个场景胶囊
                   </span>
                   {canManage ? (
-                    <button type="button" className="wb-button" onClick={() => openEdit(app)}>
-                      编辑
-                    </button>
+                    <>
+                      <button type="button" className="wb-button" onClick={() => void move(index, -1)} disabled={busy || index === 0} aria-label="上移">
+                        ↑
+                      </button>
+                      <button type="button" className="wb-button" onClick={() => void move(index, 1)} disabled={busy || index === apps.length - 1} aria-label="下移">
+                        ↓
+                      </button>
+                      <button type="button" className="wb-button" onClick={() => openEdit(app)}>编辑</button>
+                      <button type="button" className="wb-button" onClick={() => void duplicate(app)} disabled={busy}>复制</button>
+                    </>
                   ) : null}
                   <button type="button" className="wb-button" onClick={() => onSelect(app)}>
                     {active ? '进入工作台' : '使用'}
@@ -3405,7 +3568,8 @@ function AppsView({
         </div>
 
         <div className="wb-footnote">
-          应用配置保存在当前租户；修改后会重启该应用的 worker，下一条消息使用新提示词。
+          应用配置保存在部署级，所有成员看到的是同一套；管理员修改后会重启相关 worker，
+          下一条消息使用新提示词。
         </div>
 
         {auditFor ? (
@@ -3425,6 +3589,13 @@ function AppsView({
                         <span className={`wb-audit-action is-${item.action}`}>{APP_ACTION_LABEL[item.action] || item.action}</span>
                         <b>{item.actor || '未知'}</b>
                         <time>{formatDateTime(item.createdAt)}</time>
+                        {item.changes?.length ? (
+                          <ul className="wb-audit-changes">
+                            {item.changes.map((change) => (
+                              <li key={change}>{change}</li>
+                            ))}
+                          </ul>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -3437,6 +3608,7 @@ function AppsView({
         {draft ? (
           <AppEditor
             draft={draft}
+            skills={skills}
             error={error}
             busy={busy}
             onChange={setDraft}
@@ -3456,6 +3628,7 @@ function nextId(prefix: string): string {
 
 function AppEditor({
   draft,
+  skills,
   error,
   busy,
   onChange,
@@ -3464,6 +3637,7 @@ function AppEditor({
   onDelete,
 }: {
   draft: AppRow
+  skills: SkillOption[]
   error: string | null
   busy: boolean
   onChange: (app: AppRow) => void
@@ -3471,6 +3645,9 @@ function AppEditor({
   onSave: () => void
   onDelete?: () => void
 }) {
+  const [preview, setPreview] = useState<Array<{ id: string; name: string; prompt: string; chars: number }> | null>(null)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+
   const updateMode = (index: number, patch: Partial<AppModeRow>) => {
     onChange({
       ...draft,
@@ -3487,6 +3664,26 @@ function AppEditor({
     })
   }
 
+  const toggleSkill = (modeIndex: number, name: string, checked: boolean) => {
+    const mode = draft.modes[modeIndex]
+    const current = mode.skillBinding === 'all' ? [] : [...mode.skillBinding]
+    const next = checked ? [...current, name] : current.filter((item) => item !== name)
+    updateMode(modeIndex, { skillBinding: Array.from(new Set(next)) })
+  }
+
+  const runPreview = async () => {
+    setPreviewError(null)
+    try {
+      const payload = await api.post<{ modes: Array<{ id: string; name: string; prompt: string; chars: number }> }>(
+        '/api/apps/preview',
+        draft,
+      )
+      setPreview(payload.modes)
+    } catch (failure) {
+      setPreviewError(failure instanceof Error ? failure.message : '预览失败')
+    }
+  }
+
   return (
     <div className="wb-modal-scrim" onClick={onCancel}>
       <div className="wb-modal" onClick={(event) => event.stopPropagation()}>
@@ -3497,6 +3694,7 @@ function AppEditor({
 
         <div className="wb-modal-body">
           {error ? <div className="wb-alert">{error}</div> : null}
+          {previewError ? <div className="wb-alert">{previewError}</div> : null}
           <div className="wb-form-grid">
             <label className="wb-field">
               <span>名称</span>
@@ -3522,6 +3720,8 @@ function AppEditor({
           <div className="wb-modes-editor">
             {draft.modes.map((mode, modeIndex) => {
               const customBinding = mode.skillBinding !== 'all'
+              const bound = customBinding ? (mode.skillBinding as string[]) : []
+              const unknown = bound.filter((name) => !skills.some((skill) => skill.name === name))
               return (
                 <section key={mode.id} className="wb-mode-editor">
                   <header>
@@ -3552,9 +3752,32 @@ function AppEditor({
                       onChange={(event) => updateMode(modeIndex, { prompt: event.target.value })}
                       placeholder="这个模式如何工作、输出要求、边界"
                     />
+                    <small className={(mode.prompt || '').length > 4000 ? 'wb-field-error' : undefined}>
+                      {(mode.prompt || '').length} / 4000
+                    </small>
                   </label>
 
                   <div className="wb-form-grid">
+                    <label className="wb-field">
+                      <span>图标</span>
+                      <select
+                        value={mode.icon || 'spark'}
+                        onChange={(event) => updateMode(modeIndex, { icon: event.target.value })}
+                      >
+                        {APP_ICON_NAMES.map((name) => (
+                          <option key={name} value={name}>{name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="wb-field">
+                      <span>输入框占位符</span>
+                      <input
+                        value={mode.placeholder || ''}
+                        maxLength={80}
+                        onChange={(event) => updateMode(modeIndex, { placeholder: event.target.value })}
+                        placeholder="例如：输入研究问题、PICO 或文献片段"
+                      />
+                    </label>
                     <label className="wb-field">
                       <span>技能绑定</span>
                       <select
@@ -3569,20 +3792,53 @@ function AppEditor({
                         <option value="custom">只绑定指定技能</option>
                       </select>
                     </label>
-                    {customBinding ? (
-                      <label className="wb-field">
-                        <span>技能名称（逗号分隔）</span>
-                        <input
-                          value={(mode.skillBinding as string[]).join(', ')}
-                          onChange={(event) =>
-                            updateMode(modeIndex, {
-                              skillBinding: event.target.value.split(',').map((item) => item.trim()).filter(Boolean),
-                            })
-                          }
-                        />
-                      </label>
-                    ) : null}
                   </div>
+
+                  {customBinding ? (
+                    <div className="wb-field">
+                      <span>绑定技能（{bound.length} 个{bound.length === 0 ? '，本模式不加载技能' : ''}）</span>
+                      {skills.length === 0 ? (
+                        <p className="wb-muted">没有读取到技能目录，可先保存，稍后在技能页确认。</p>
+                      ) : (
+                        <div className="wb-skill-picker">
+                          {skills.map((skill) => (
+                            <label key={skill.name} className={skill.enabled ? '' : 'is-disabled'}>
+                              <input
+                                type="checkbox"
+                                checked={bound.includes(skill.name)}
+                                onChange={(event) => toggleSkill(modeIndex, skill.name, event.target.checked)}
+                              />
+                              <span>{skill.name}</span>
+                              {skill.enabled ? null : <i>已停用</i>}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                      {unknown.length > 0 ? (
+                        <p className="wb-field-error">
+                          这些技能已不存在：{unknown.join('、')}（保存后会被忽略）
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  <label className="wb-field">
+                    <span>示例问题（每行一条，最多 6 条）</span>
+                    <textarea
+                      rows={3}
+                      value={(mode.examples || []).join('\n')}
+                      onChange={(event) =>
+                        updateMode(modeIndex, {
+                          examples: event.target.value
+                            .split('\n')
+                            .map((item) => item.trim())
+                            .filter(Boolean)
+                            .slice(0, 6),
+                        })
+                      }
+                      placeholder="首页推荐给用户的示例问题"
+                    />
+                  </label>
 
                   <div className="wb-capsules-editor">
                     <div className="wb-capsules-head">
@@ -3649,6 +3905,9 @@ function AppEditor({
                     description: '',
                     prompt: '',
                     skillBinding: 'all',
+                    examples: [],
+                    placeholder: '',
+                    icon: 'spark',
                     capsules: [],
                   },
                 ],
@@ -3657,6 +3916,21 @@ function AppEditor({
           >
             + 添加模式
           </button>
+
+          {preview ? (
+            <div className="wb-preview">
+              <b>组合预览</b>
+              <p className="wb-muted">提示词会追加在系统提示词之后，不替换它。</p>
+              {preview.map((mode) => (
+                <details key={mode.id}>
+                  <summary>
+                    {mode.name} · {mode.chars} 字符
+                  </summary>
+                  <pre>{mode.prompt || '(空)'}</pre>
+                </details>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <footer className="wb-modal-foot">
@@ -3666,6 +3940,7 @@ function AppEditor({
             </button>
           ) : null}
           <span className="wb-spacer" />
+          <button type="button" className="wb-button" onClick={() => void runPreview()}>预览</button>
           <button type="button" className="wb-button" onClick={onCancel}>取消</button>
           <button type="button" className="wb-button" onClick={onSave} disabled={busy}>
             {busy ? '保存中…' : '保存'}

@@ -561,6 +561,9 @@ export interface SessionInfo {
   id: string
   cwd?: string
   name?: string | null
+  /** App/mode the conversation was created under (absent on legacy sessions). */
+  app?: string | null
+  mode?: string | null
   /**
    * Epoch millis in pi's session listing, but the Python server serialises an
    * ISO-8601 string, so both are accepted.

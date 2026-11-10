@@ -51,6 +51,10 @@ class BootstrapOptions:
     include_home_skills: bool = True
     #: App/mode composition: appended to the built prompt, never replacing it.
     app_prompt: str = ""
+    #: Which app/mode this worker was built for; written into new session headers
+    #: so a conversation keeps its origin when resumed under another app.
+    app_id: str = "general"
+    mode_id: str = "office"
     #: App/mode skill binding; ``None`` means every discovered skill.
     app_skills: Sequence[str] | None = None
     #: Entry paths of installed plugins enabled for this tenant/app.  They load through
@@ -367,9 +371,19 @@ async def bootstrap(
     elif options.resume:
         session_manager = SessionManager.open(options.resume, cwd=cwd)
     elif options.session_dir:
-        session_manager = SessionManager.create(cwd, session_dir=options.session_dir)
+        session_manager = SessionManager.create(
+            cwd,
+            session_dir=options.session_dir,
+            app=options.app_id,
+            mode=options.mode_id,
+        )
     else:
-        session_manager = SessionManager.create(cwd, effective_agent_dir)
+        session_manager = SessionManager.create(
+            cwd,
+            effective_agent_dir,
+            app=options.app_id,
+            mode=options.mode_id,
+        )
 
     # One subagent manager per bootstrapped tree: it owns the delegation tools,
     # capacity and depth limits, and the background drain hook that keeps one-shot

@@ -285,6 +285,56 @@ CREATE TABLE market_ratings (
 );
 """
 
+_SCHEMA_V14 = """
+CREATE TABLE team_apps (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  accent      TEXT NOT NULL DEFAULT '#3b5fba',
+  builtin     INTEGER NOT NULL DEFAULT 0,
+  sort        INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE team_app_modes (
+  app_id       TEXT NOT NULL REFERENCES team_apps(id) ON DELETE CASCADE,
+  id           TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  description  TEXT NOT NULL DEFAULT '',
+  prompt       TEXT NOT NULL DEFAULT '',
+  skills_json  TEXT,
+  examples_json TEXT,
+  placeholder  TEXT NOT NULL DEFAULT '',
+  icon         TEXT NOT NULL DEFAULT '',
+  sort         INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (app_id, id)
+);
+
+CREATE TABLE team_app_capsules (
+  app_id  TEXT NOT NULL,
+  mode_id TEXT NOT NULL,
+  id      TEXT NOT NULL,
+  name    TEXT NOT NULL,
+  prompt  TEXT NOT NULL DEFAULT '',
+  sort    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (app_id, mode_id, id)
+);
+
+CREATE TABLE team_app_audit (
+  id          TEXT PRIMARY KEY,
+  app_id      TEXT NOT NULL,
+  action      TEXT NOT NULL,
+  actor       TEXT NOT NULL DEFAULT '',
+  actor_uid   TEXT NOT NULL DEFAULT '',
+  before_json TEXT,
+  after_json  TEXT,
+  created_at  TEXT NOT NULL
+);
+
+CREATE INDEX team_app_audit_app ON team_app_audit(app_id, created_at DESC);
+"""
+
 _SCHEMA_V13 = """
 CREATE TABLE office_locks (
   doc_id     TEXT PRIMARY KEY,
@@ -324,6 +374,7 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (11, _SCHEMA_V11),
     (12, _SCHEMA_V12),
     (13, _SCHEMA_V13),
+    (14, _SCHEMA_V14),
 )
 
 
@@ -721,26 +772,21 @@ class Database:
         )
         return str(row["session_file"]) if row else None
 
-    # -- apps -------------------------------------------------------------------------
+    # -- apps (team-wide) --------------------------------------------------------------
 
-    def seed_apps(self, uid: str, apps: list[dict[str, Any]]) -> None:
-        """Install the built-in catalog for a tenant exactly once."""
-        row = self._one("SELECT COUNT(*) AS count FROM apps WHERE uid = ?", (uid,))
+    def seed_team_apps(self, apps: list[dict[str, Any]]) -> None:
+        """Install the built-in catalog once; later edits are never overwritten."""
+        row = self._one("SELECT COUNT(*) AS count FROM team_apps")
         if row is not None and int(row["count"]) > 0:
             return
         for app in apps:
-            self.replace_app(uid, app, builtin=True)
+            self.replace_team_app(app, builtin=True)
 
-    def list_apps(self, uid: str) -> list[dict[str, Any]]:
-        app_rows = self._query(
-            "SELECT * FROM apps WHERE uid = ? ORDER BY sort ASC, created_at ASC", (uid,)
-        )
-        mode_rows = self._query(
-            "SELECT * FROM app_modes WHERE uid = ? ORDER BY sort ASC", (uid,)
-        )
-        capsule_rows = self._query(
-            "SELECT * FROM app_capsules WHERE uid = ? ORDER BY sort ASC", (uid,)
-        )
+    def list_team_apps(self) -> list[dict[str, Any]]:
+        app_rows = self._query("SELECT * FROM team_apps ORDER BY sort ASC, created_at ASC")
+        mode_rows = self._query("SELECT * FROM team_app_modes ORDER BY sort ASC")
+        capsule_rows = self._query("SELECT * FROM team_app_capsules ORDER BY sort ASC")
+
         modes_by_app: dict[str, list[dict[str, Any]]] = {}
         mode_index: dict[tuple[str, str], dict[str, Any]] = {}
         for row in mode_rows:
@@ -749,12 +795,20 @@ class Database:
                 skills = json.loads(skills_raw) if skills_raw else None
             except (TypeError, json.JSONDecodeError):
                 skills = None
+            examples_raw = row["examples_json"]
+            try:
+                examples = json.loads(examples_raw) if examples_raw else []
+            except (TypeError, json.JSONDecodeError):
+                examples = []
             mode = {
                 "id": row["id"],
                 "name": row["name"],
                 "description": row["description"],
                 "prompt": row["prompt"],
                 "skillBinding": "all" if skills is None else skills,
+                "examples": [str(item) for item in examples] if isinstance(examples, list) else [],
+                "placeholder": row["placeholder"] or "",
+                "icon": row["icon"] or "",
                 "capsules": [],
             }
             modes_by_app.setdefault(str(row["app_id"]), []).append(mode)
@@ -777,74 +831,87 @@ class Database:
             for row in app_rows
         ]
 
-    def replace_app(self, uid: str, app: dict[str, Any], *, builtin: bool = False) -> None:
+    def replace_team_app(self, app: dict[str, Any], *, builtin: bool = False) -> None:
         now = utcnow()
         app_id = str(app["id"])
         with self.atomic() as conn:
             existing = conn.execute(
-                "SELECT builtin FROM apps WHERE uid = ? AND id = ?", (uid, app_id)
+                "SELECT builtin FROM team_apps WHERE id = ?", (app_id,)
             ).fetchone()
             is_builtin = 1 if builtin or (existing is not None and existing["builtin"]) else 0
             if existing is None:
+                next_row = conn.execute(
+                    "SELECT COALESCE(MAX(sort), -1) + 1 AS next FROM team_apps"
+                ).fetchone()
+                sort = int(next_row["next"]) if next_row is not None else 0
                 conn.execute(
-                    "INSERT INTO apps (uid, id, name, description, accent, builtin, sort, created_at, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                    "INSERT INTO team_apps"
+                    " (id, name, description, accent, builtin, sort, created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        uid,
                         app_id,
                         str(app.get("name") or app_id),
                         str(app.get("description") or ""),
                         str(app.get("accent") or "#3b5fba"),
                         is_builtin,
+                        sort,
                         now,
                         now,
                     ),
                 )
             else:
                 conn.execute(
-                    "UPDATE apps SET name = ?, description = ?, accent = ?, updated_at = ?"
-                    " WHERE uid = ? AND id = ?",
+                    "UPDATE team_apps SET name = ?, description = ?, accent = ?, updated_at = ?"
+                    " WHERE id = ?",
                     (
                         str(app.get("name") or app_id),
                         str(app.get("description") or ""),
                         str(app.get("accent") or "#3b5fba"),
                         now,
-                        uid,
                         app_id,
                     ),
                 )
-            conn.execute("DELETE FROM app_modes WHERE uid = ? AND app_id = ?", (uid, app_id))
-            conn.execute("DELETE FROM app_capsules WHERE uid = ? AND app_id = ?", (uid, app_id))
+            conn.execute("DELETE FROM team_app_modes WHERE app_id = ?", (app_id,))
+            conn.execute("DELETE FROM team_app_capsules WHERE app_id = ?", (app_id,))
             for mode_index, mode in enumerate(app.get("modes") or []):
                 mode_id = str(mode.get("id") or f"mode-{mode_index + 1}")
                 binding = mode.get("skillBinding", "all")
-                if binding == "all" or not isinstance(binding, list):
-                    skills_json = None
-                else:
-                    skills_json = json.dumps([str(item) for item in binding], ensure_ascii=False)
+                skills_json = (
+                    None
+                    if binding == "all" or not isinstance(binding, list)
+                    else json.dumps([str(item) for item in binding], ensure_ascii=False)
+                )
+                examples = mode.get("examples")
+                examples_json = (
+                    json.dumps([str(item) for item in examples], ensure_ascii=False)
+                    if isinstance(examples, list)
+                    else None
+                )
                 conn.execute(
-                    "INSERT INTO app_modes"
-                    " (uid, app_id, id, name, description, prompt, skills_json, sort)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO team_app_modes"
+                    " (app_id, id, name, description, prompt, skills_json, examples_json,"
+                    "  placeholder, icon, sort)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        uid,
                         app_id,
                         mode_id,
                         str(mode.get("name") or mode_id),
                         str(mode.get("description") or ""),
                         str(mode.get("prompt") or ""),
                         skills_json,
+                        examples_json,
+                        str(mode.get("placeholder") or ""),
+                        str(mode.get("icon") or ""),
                         mode_index,
                     ),
                 )
                 for capsule_index, capsule in enumerate(mode.get("capsules") or []):
                     capsule_id = str(capsule.get("id") or f"capsule-{capsule_index + 1}")
                     conn.execute(
-                        "INSERT INTO app_capsules"
-                        " (uid, app_id, mode_id, id, name, prompt, sort)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO team_app_capsules"
+                        " (app_id, mode_id, id, name, prompt, sort)"
+                        " VALUES (?, ?, ?, ?, ?, ?)",
                         (
-                            uid,
                             app_id,
                             mode_id,
                             capsule_id,
@@ -854,17 +921,22 @@ class Database:
                         ),
                     )
 
-    def delete_app(self, uid: str, app_id: str) -> None:
+    def delete_team_app(self, app_id: str) -> None:
         with self.atomic() as conn:
-            conn.execute("DELETE FROM app_capsules WHERE uid = ? AND app_id = ?", (uid, app_id))
-            conn.execute("DELETE FROM app_modes WHERE uid = ? AND app_id = ?", (uid, app_id))
-            conn.execute("DELETE FROM apps WHERE uid = ? AND id = ?", (uid, app_id))
+            conn.execute("DELETE FROM team_app_capsules WHERE app_id = ?", (app_id,))
+            conn.execute("DELETE FROM team_app_modes WHERE app_id = ?", (app_id,))
+            conn.execute("DELETE FROM team_apps WHERE id = ?", (app_id,))
 
-    def app_composition(self, uid: str, app_id: str, mode_id: str) -> tuple[str, tuple[str, ...] | None] | None:
+    def reorder_team_apps(self, ids: list[str]) -> None:
+        with self.atomic() as conn:
+            for sort, app_id in enumerate(ids):
+                conn.execute("UPDATE team_apps SET sort = ?, updated_at = ? WHERE id = ?",
+                             (sort, utcnow(), app_id))
+
+    def team_app_composition(self, app_id: str, mode_id: str) -> tuple[str, tuple[str, ...] | None] | None:
         row = self._one(
-            "SELECT prompt, skills_json FROM app_modes"
-            " WHERE uid = ? AND app_id = ? AND id = ?",
-            (uid, app_id, mode_id),
+            "SELECT prompt, skills_json FROM team_app_modes WHERE app_id = ? AND id = ?",
+            (app_id, mode_id),
         )
         if row is None:
             return None
@@ -874,7 +946,56 @@ class Database:
             skills = None
         return str(row["prompt"]), None if skills is None else tuple(str(item) for item in skills)
 
-    # -- office editor locks ----------------------------------------------------------
+    def app_references(self, app_id: str) -> dict[str, Any]:
+        """What still points at this app; deleting it blindly would orphan these."""
+        schedules = self._query(
+            "SELECT name FROM schedules WHERE app_id = ? ORDER BY created_at DESC", (app_id,)
+        )
+        plugins = self._one(
+            "SELECT COUNT(DISTINCT plugin_id) AS count FROM plugin_enable WHERE app_id = ?",
+            (app_id,),
+        )
+        return {
+            "schedules": [str(row["name"]) for row in schedules],
+            "plugins": int(plugins["count"]) if plugins is not None else 0,
+        }
+
+    def delete_app_references(self, app_id: str) -> None:
+        with self.atomic() as conn:
+            conn.execute("DELETE FROM plugin_enable WHERE app_id = ?", (app_id,))
+            conn.execute("DELETE FROM composition_session_pointers WHERE app_id = ?", (app_id,))
+
+    def record_team_app_audit(
+        self,
+        actor_uid: str,
+        actor: str,
+        app_id: str,
+        action: str,
+        before: dict[str, Any] | None,
+        after: dict[str, Any] | None,
+    ) -> None:
+        self._write(
+            "INSERT INTO team_app_audit"
+            " (id, app_id, action, actor, actor_uid, before_json, after_json, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                uuid.uuid4().hex[:12],
+                app_id,
+                action,
+                actor,
+                actor_uid,
+                None if before is None else json.dumps(before, ensure_ascii=False),
+                None if after is None else json.dumps(after, ensure_ascii=False),
+                utcnow(),
+            ),
+        )
+
+    def list_team_app_audit(self, app_id: str, limit: int = 30) -> list[sqlite3.Row]:
+        return self._query(
+            "SELECT * FROM team_app_audit WHERE app_id = ?"
+            " ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (app_id, limit),
+        )
 
     def office_lock(self, doc_id: str) -> sqlite3.Row | None:
         return self._one("SELECT * FROM office_locks WHERE doc_id = ?", (doc_id,))
@@ -901,8 +1022,6 @@ class Database:
                 "DELETE FROM office_locks WHERE doc_id = ? AND token = ?", (doc_id, token)
             )
             return cursor.rowcount > 0
-
-    # -- message feedback -------------------------------------------------------------
 
     def set_feedback(
         self,
@@ -933,8 +1052,6 @@ class Database:
             (uid, session_file),
         )
 
-    # -- market ratings ---------------------------------------------------------------
-
     def set_market_rating(self, uid: str, kind: str, item_id: str, score: int) -> None:
         self._write(
             "INSERT INTO market_ratings (uid, kind, item_id, score, updated_at)"
@@ -960,39 +1077,6 @@ class Database:
             (uid, kind, item_id),
         )
         return int(row["score"]) if row else None
-
-    # -- app audit --------------------------------------------------------------------
-
-    def record_app_audit(
-        self,
-        uid: str,
-        app_id: str,
-        action: str,
-        actor: str,
-        before: dict[str, Any] | None,
-        after: dict[str, Any] | None,
-    ) -> None:
-        self._write(
-            "INSERT INTO app_audit (id, uid, app_id, action, actor, before_json, after_json, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                uuid.uuid4().hex[:12],
-                uid,
-                app_id,
-                action,
-                actor,
-                None if before is None else json.dumps(before, ensure_ascii=False),
-                None if after is None else json.dumps(after, ensure_ascii=False),
-                utcnow(),
-            ),
-        )
-
-    def list_app_audit(self, uid: str, app_id: str, limit: int = 30) -> list[sqlite3.Row]:
-        return self._query(
-            "SELECT * FROM app_audit WHERE uid = ? AND app_id = ?"
-            " ORDER BY created_at DESC, rowid DESC LIMIT ?",
-            (uid, app_id, limit),
-        )
 
     # -- notifications ----------------------------------------------------------------
 

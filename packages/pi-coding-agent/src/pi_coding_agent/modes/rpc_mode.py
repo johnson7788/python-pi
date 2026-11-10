@@ -215,6 +215,8 @@ class RpcMode:
         output: TextIO | None = None,
         emit: Any = None,
         host_mode: str = "rpc",
+        app_id: str | None = None,
+        mode_id: str | None = None,
     ) -> None:
         if session is None and runtime is None:
             raise ValueError("RpcMode needs either a session or an AgentSessionRuntime")
@@ -228,6 +230,10 @@ class RpcMode:
         #: When supplied, outbound records go here instead of stdout.  This is what
         #: lets a WebSocket server reuse this whole command surface.
         self._emit_override = emit
+        #: Composition this worker serves; a session created under another app is
+        #: refused on switch so history never runs under a foreign system prompt.
+        self._app_id = app_id
+        self._mode_id = mode_id
         self._prompt_task: asyncio.Task | None = None
         self._unsubscribe: Any = None
         self._unsubscribe_errors: Any = None
@@ -467,6 +473,18 @@ class RpcMode:
         path = command.get("sessionPath")
         if not isinstance(path, str) or not path:
             return failure(request_id, "switch_session", "switch_session requires 'sessionPath'")
+        try:
+            from ..session_manager import read_session_header
+
+            header = read_session_header(path)
+        except Exception:  # noqa: BLE001 - unreadable files fail inside switch_session
+            header = None
+        if header is not None and header.app and self._app_id and header.app != self._app_id:
+            return failure(
+                request_id,
+                "switch_session",
+                f"this conversation belongs to app {header.app!r}; switch to that app before opening it",
+            )
         runtime = self._require_runtime()
         result = await runtime.switch_session(path)
         return success(request_id, "switch_session", {"cancelled": bool(result.get("cancelled"))})

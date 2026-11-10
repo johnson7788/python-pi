@@ -120,6 +120,9 @@ class ServerConfig:
     allow_user_extensions: bool = False
     #: Caps that bound the blast radius of a single process holding every session.
     max_active_users: int = 20
+    #: Workers one user may hold at once.  Each (workspace, app, mode) gets its own
+    #: worker, so this bounds how many compositions a single account can pin.
+    max_workers_per_user: int = 6
     session_idle_minutes: int = 30
     #: Which execution backend the sessions should use.  ``local`` runs in this process;
     #: ``provisioner`` runs each command in a container (see ``PI_SANDBOX_*`` below).
@@ -288,6 +291,9 @@ class ServerConfig:
         cap = os.environ.get("PI_MAX_ACTIVE_USERS")
         if cap:
             values["max_active_users"] = int(cap)
+        per_user = os.environ.get("PI_MAX_WORKERS_PER_USER")
+        if per_user:
+            values["max_workers_per_user"] = int(per_user)
         idle = os.environ.get("PI_SESSION_IDLE_MINUTES")
         if idle:
             values["session_idle_minutes"] = int(idle)

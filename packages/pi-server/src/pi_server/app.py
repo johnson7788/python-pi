@@ -278,6 +278,8 @@ class SessionWorker:
                 extension_runner=state.extension_runner,
                 emit=self._emit,
                 host_mode="web",
+                app_id=self.app_id,
+                mode_id=self.mode_id,
             )
             # The policy goes in after ``RpcMode`` has bound the host, because binding is
             # what supplies the UI context a confirmation dialog needs.
@@ -509,7 +511,7 @@ class SessionRegistry:
         resume_lookup: Callable[[str, str, str, str], str | None] | None = None,
         disabled_skills_lookup: Callable[[str, str], Sequence[str]] | None = None,
         plugin_paths_lookup: Callable[[str, str], Sequence[str]] | None = None,
-        composition_lookup: Callable[[str, str, str], tuple[str, tuple[str, ...] | None]] | None = None,
+        composition_lookup: Callable[[str, str], tuple[str, tuple[str, ...] | None]] | None = None,
         workspace_path_lookup: Callable[[str, str], str | None] | None = None,
         policy_factory: Callable[[SessionWorker], Any] | None = None,
         on_audit: Callable[[dict[str, Any]], int | None] | None = None,
@@ -604,7 +606,7 @@ class SessionRegistry:
             if workspace_id != "default":
                 raise ValueError("workspaces require team mode")
             if self._composition_lookup is not None:
-                app_prompt, app_skills = self._composition_lookup(LOCAL_UID, app_id, mode_id)
+                app_prompt, app_skills = self._composition_lookup(app_id, mode_id)
             else:
                 app_prompt, app_skills = app_catalog.composition_for(app_id, mode_id)
             # Sandboxing is orthogonal to tenancy: a single-user install may still want its
@@ -614,12 +616,16 @@ class SessionRegistry:
                     self.base_options,
                     app_prompt=app_prompt,
                     app_skills=app_skills,
+                    app_id=app_id,
+                    mode_id=mode_id,
                 )
             return dataclasses.replace(
                 self.base_options,
                 sandbox_backend=self.backend_for(LOCAL_UID, self.base_options.cwd),
                 app_prompt=app_prompt,
                 app_skills=app_skills,
+                app_id=app_id,
+                mode_id=mode_id,
             )
         workspace, agent = self.config.ensure_user_layout(uid)
         if self._workspace_path_lookup is not None:
@@ -662,12 +668,14 @@ class SessionRegistry:
             # dir), never the server operator's personal ~/.agents/skills.
             include_home_skills=False,
             app_prompt=(
-                self._composition_lookup(uid, app_id, mode_id)[0]
+                self._composition_lookup(app_id, mode_id)[0]
                 if self._composition_lookup is not None
                 else app_catalog.composition_for(app_id, mode_id)[0]
             ),
+            app_id=app_id,
+            mode_id=mode_id,
             app_skills=(
-                self._composition_lookup(uid, app_id, mode_id)[1]
+                self._composition_lookup(app_id, mode_id)[1]
                 if self._composition_lookup is not None
                 else app_catalog.composition_for(app_id, mode_id)[1]
             ),
@@ -694,10 +702,30 @@ class SessionRegistry:
                 return existing
 
             await self._evict_idle_locked()
-            if len(self._workers) >= self.config.max_active_users:
+            users = {key[0] for key in self._workers}
+            if uid not in users and len(users) >= self.config.max_active_users:
                 raise CapacityError(
-                    f"the server is already running {len(self._workers)} sessions; try again shortly"
+                    f"the server is already serving {len(users)} users; try again shortly"
                 )
+            # A user pins one worker per composition; bound that separately from the
+            # deployment-wide user cap, and recycle their least recently used idle one.
+            evicted: list[SessionWorker] = []
+            mine = [key for key in self._workers if key[0] == uid]
+            if len(mine) >= self.config.max_workers_per_user:
+                idle = sorted(
+                    (
+                        (self._workers[key].last_active, key)
+                        for key in mine
+                        if not self._workers[key].busy
+                    ),
+                    key=lambda item: item[0],
+                )
+                if not idle:
+                    raise CapacityError(
+                        "this account already has the maximum number of active sessions; "
+                        "finish one before opening another"
+                    )
+                evicted.append(self._workers.pop(idle[0][1]))
 
             worker = SessionWorker(
                 uid,
@@ -713,6 +741,12 @@ class SessionRegistry:
                 on_usage=self._on_usage,
             )
             self._workers[key] = worker
+
+        for stale in evicted:
+            try:
+                await stale.shutdown("worker limit")
+            except Exception:  # noqa: BLE001
+                pass
 
         # Started outside the registry lock: a bootstrap can take seconds, and holding the
         # lock would stall every other user for its duration.
@@ -797,6 +831,17 @@ class SessionRegistry:
         for worker in workers:
             try:
                 await worker.shutdown("plugin removed")
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def evict_app(self, app_id: str) -> None:
+        """Apps are team-wide: drop every user's worker for this app."""
+        async with self._lock:
+            keys = [key for key in self._workers if key[2] == app_id]
+            workers = [self._workers.pop(key) for key in keys]
+        for worker in workers:
+            try:
+                await worker.shutdown("app changed")
             except Exception:  # noqa: BLE001
                 pass
 
@@ -1171,7 +1216,7 @@ def create_app(
             if database is not None
             else None
         ),
-        composition_lookup=(lambda uid, app_id, mode_id: app_composition(uid, app_id, mode_id)),
+        composition_lookup=(lambda app_id, mode_id: app_composition(app_id, mode_id)),
         policy_factory=_policy_for if database is not None else None,
         on_audit=_audit_sink if database is not None else None,
         on_audit_finish=_audit_finish if database is not None else None,
@@ -1280,27 +1325,27 @@ def create_app(
             raise HTTPException(status_code=404, detail={"error": f"unknown workspace: {workspace}"})
         return workspace
 
-    def ensure_apps(uid: str) -> None:
-        """Seed the built-in catalog into a tenant's editable rows on first use."""
+    def ensure_apps() -> None:
+        """Install the built-in catalog once; apps are shared by the whole deployment."""
         if database is None:
             return
-        database.seed_apps(uid, app_catalog.catalog_json()["apps"])
+        database.seed_team_apps(app_catalog.catalog_json()["apps"])
 
-    def apps_for(uid: str) -> list[dict[str, Any]]:
-        ensure_apps(uid)
+    def all_apps() -> list[dict[str, Any]]:
         if database is None:
             return app_catalog.catalog_json()["apps"]
-        return database.list_apps(uid)
+        ensure_apps()
+        return database.list_team_apps()
 
-    def app_composition(uid: str, app_id: str, mode_id: str) -> tuple[str, tuple[str, ...] | None]:
+    def app_composition(app_id: str, mode_id: str) -> tuple[str, tuple[str, ...] | None]:
         if database is not None:
-            composition = database.app_composition(uid, app_id, mode_id)
+            composition = database.team_app_composition(app_id, mode_id)
             if composition is not None:
                 return composition
         return app_catalog.composition_for(app_id, mode_id)
 
-    def resolve_app_mode(uid: str, app_id: str | None, mode_id: str | None) -> tuple[str, str]:
-        apps = apps_for(uid)
+    def resolve_app_mode(app_id: str | None, mode_id: str | None) -> tuple[str, str]:
+        apps = all_apps()
         wanted_app = app_id or app_catalog.DEFAULT_APP_ID
         app = next((item for item in apps if item["id"] == wanted_app), None)
         if app is None:
@@ -1332,7 +1377,7 @@ def create_app(
         if database is None:
             resolve_workspace(LOCAL_UID, requested)
             app_id, mode_id = resolve_app_mode(
-                LOCAL_UID, request.query_params.get("app"), request.query_params.get("mode")
+                request.query_params.get("app"), request.query_params.get("mode")
             )
             return await registry.acquire(LOCAL_UID, "default", app_id, mode_id)
         user = auth.current_user(request)
@@ -1340,7 +1385,7 @@ def create_app(
             raise auth.reject_unauthenticated()
         workspace = resolve_workspace(user.uid, requested)
         app_id, mode_id = resolve_app_mode(
-            user.uid, request.query_params.get("app"), request.query_params.get("mode")
+            request.query_params.get("app"), request.query_params.get("mode")
         )
         return await registry.acquire(user.uid, workspace, app_id, mode_id)
 
@@ -1778,7 +1823,7 @@ def create_app(
         ):
             raise HTTPException(status_code=422, detail={"error": "intervalMinutes must be 1-10080"})
         workspace = resolve_workspace(uid, payload.workspace)
-        app_id, mode_id = resolve_app_mode(uid, payload.appId, payload.modeId)
+        app_id, mode_id = resolve_app_mode(payload.appId, payload.modeId)
         if kind == "once" and schedule_catalog.parse_iso(payload.runAt) is None:
             raise HTTPException(status_code=422, detail={"error": "runAt must be ISO-8601"})
         next_at = schedule_catalog.next_run_at(
@@ -2047,7 +2092,7 @@ def create_app(
             user = auth.current_user(request)
             if user is None:
                 raise auth.reject_unauthenticated()
-            app_id, _mode_id = resolve_app_mode(user.uid, app, None)
+            app_id, _mode_id = resolve_app_mode(app, None)
             states = database.plugin_states(user.uid, app_id)
             can_manage = True
             can_install = bool(user.is_admin)
@@ -2075,7 +2120,7 @@ def create_app(
         user = auth.current_user(request)
         if user is None:
             raise auth.reject_unauthenticated()
-        app_id, _mode_id = resolve_app_mode(user.uid, body.appId or app, None)
+        app_id, _mode_id = resolve_app_mode(body.appId or app, None)
         if all(info.id != plugin_id for info in plugin_catalog.scan(server_config.plugin_root)):
             raise HTTPException(status_code=404, detail={"error": f"unknown plugin: {plugin_id}"})
         db.set_plugin_enabled(user.uid, app_id, plugin_id, body.enabled)
@@ -2096,7 +2141,7 @@ def create_app(
         user = auth.current_user(request)
         if user is None:
             raise auth.reject_unauthenticated()
-        app_id, _mode_id = resolve_app_mode(user.uid, app, None)
+        app_id, _mode_id = resolve_app_mode(app, None)
 
         workers = [
             worker
@@ -2140,10 +2185,37 @@ def create_app(
             return value
         return fallback
 
+    _APP_ICONS = frozenset(
+        {
+            "apps",
+            "book",
+            "clock",
+            "code",
+            "file",
+            "folder",
+            "house",
+            "image",
+            "palette",
+            "plugin",
+            "search",
+            "sheet",
+            "skill",
+            "slides",
+            "spark",
+        }
+    )
+    _ACCENT = re.compile(r"^#[0-9a-fA-F]{6}$")
+
     def normalize_app(payload: AppUpsertRequest, app_id: str) -> dict[str, Any]:
         name = payload.name.strip()
         if not 1 <= len(name) <= 40:
             raise HTTPException(status_code=422, detail={"error": "app name must be 1-40 characters"})
+        accent = str(payload.accent or "").strip()
+        if not _ACCENT.match(accent):
+            raise HTTPException(status_code=422, detail={"error": "accent must look like #3b5fba"})
+        if len(payload.modes) > 10:
+            raise HTTPException(status_code=422, detail={"error": "an app can have at most 10 modes"})
+
         modes: list[dict[str, Any]] = []
         seen_modes: set[str] = set()
         for mode_index, raw_mode in enumerate(payload.modes):
@@ -2153,17 +2225,39 @@ def create_app(
             seen_modes.add(mode_id)
             mode_name = str(raw_mode.get("name") or mode_id).strip()[:40]
             prompt = str(raw_mode.get("prompt") or "")
+            if len(prompt) > 4000:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": f"mode {mode_name!r} prompt is over 4000 characters"},
+                )
             binding = raw_mode.get("skillBinding", "all")
             if binding != "all":
                 if not isinstance(binding, list):
                     raise HTTPException(status_code=422, detail={"error": "skillBinding must be 'all' or a list"})
-                binding = [str(item) for item in binding if str(item).strip()]
+                binding = list(dict.fromkeys(str(item).strip() for item in binding if str(item).strip()))
+
+            examples_raw = raw_mode.get("examples") or []
+            if not isinstance(examples_raw, list) or not all(isinstance(item, str) for item in examples_raw):
+                raise HTTPException(status_code=422, detail={"error": "examples must be a list of strings"})
+            if len(examples_raw) > 6:
+                raise HTTPException(status_code=422, detail={"error": "at most 6 examples per mode"})
+            examples = [item.strip()[:120] for item in examples_raw if item.strip()]
+
+            placeholder = str(raw_mode.get("placeholder") or "")[:80]
+            icon = str(raw_mode.get("icon") or "").strip()
+            if icon and icon not in _APP_ICONS:
+                icon = ""
+
             capsules: list[dict[str, Any]] = []
             seen_capsules: set[str] = set()
             raw_capsules = raw_mode.get("capsules") or []
             if not isinstance(raw_capsules, list):
                 raise HTTPException(status_code=422, detail={"error": "capsules must be a list"})
+            if len(raw_capsules) > 12:
+                raise HTTPException(status_code=422, detail={"error": "at most 12 capsules per mode"})
             for capsule_index, raw_capsule in enumerate(raw_capsules):
+                if not isinstance(raw_capsule, dict):
+                    raise HTTPException(status_code=422, detail={"error": "each capsule must be an object"})
                 capsule_id = _safe_id(raw_capsule.get("id"), f"capsule-{capsule_index + 1}")
                 if capsule_id in seen_capsules:
                     raise HTTPException(status_code=422, detail={"error": f"duplicate capsule id: {capsule_id}"})
@@ -2175,7 +2269,7 @@ def create_app(
                     {
                         "id": capsule_id,
                         "name": capsule_name,
-                        "prompt": str(raw_capsule.get("prompt") or capsule_name),
+                        "prompt": str(raw_capsule.get("prompt") or capsule_name)[:500],
                     }
                 )
             modes.append(
@@ -2185,6 +2279,9 @@ def create_app(
                     "description": str(raw_mode.get("description") or "")[:200],
                     "prompt": prompt,
                     "skillBinding": binding,
+                    "examples": examples,
+                    "placeholder": placeholder,
+                    "icon": icon,
                     "capsules": capsules,
                 }
             )
@@ -2194,7 +2291,7 @@ def create_app(
             "id": app_id,
             "name": name,
             "description": payload.description.strip()[:200],
-            "accent": payload.accent if payload.accent.startswith("#") else "#3b5fba",
+            "accent": accent,
             "modes": modes,
         }
 
@@ -2367,6 +2464,59 @@ def create_app(
         )
         return {**market_catalog.item_json(item), "installed": True, "enabled": False}
 
+    # -- apps (team-wide; only administrators may change them) -------------------------
+
+    def _loads_or_none(raw: Any) -> Any:
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return None
+
+    def app_by_id(app_id: str) -> dict[str, Any] | None:
+        return next((item for item in all_apps() if item["id"] == app_id), None)
+
+    def require_app_admin(request: Request) -> Any:
+        require_team_mode()
+        user = auth.current_user(request)
+        if user is None:
+            raise auth.reject_unauthenticated()
+        if not user.is_admin:
+            raise HTTPException(status_code=403, detail={"error": "only administrators can manage apps"})
+        return user
+
+    def app_name_taken(name: str, *, exclude: str | None = None) -> bool:
+        needle = name.strip().lower()
+        return any(
+            item["id"] != exclude and str(item["name"]).strip().lower() == needle
+            for item in all_apps()
+        )
+
+    def app_diff(before: dict[str, Any] | None, after: dict[str, Any] | None) -> list[str]:
+        """Human-readable change list; the audit table stores whole snapshots."""
+        if not before or not after:
+            return []
+        changes: list[str] = []
+        for field, label in (("name", "名称"), ("description", "描述"), ("accent", "标识色")):
+            if str(before.get(field) or "") != str(after.get(field) or ""):
+                changes.append(
+                    f"{label}：{before.get(field) or '(空)'} → {after.get(field) or '(空)'}"
+                )
+        old_modes = {str(m.get("id")): m for m in before.get("modes") or []}
+        new_modes = {str(m.get("id")): m for m in after.get("modes") or []}
+        added = [str(m.get("name") or m.get("id")) for mid, m in new_modes.items() if mid not in old_modes]
+        removed = [str(m.get("name") or m.get("id")) for mid, m in old_modes.items() if mid not in new_modes]
+        if added:
+            changes.append("新增模式：" + "、".join(added))
+        if removed:
+            changes.append("删除模式：" + "、".join(removed))
+        for mid, mode in new_modes.items():
+            old = old_modes.get(mid)
+            if old and str(old.get("prompt") or "") != str(mode.get("prompt") or ""):
+                changes.append(f"模式「{mode.get('name') or mid}」的提示词已修改")
+        return changes or ["没有字段变化"]
+
     @app.get("/api/apps")
     async def list_apps(request: Request) -> dict[str, Any]:
         if database is None:
@@ -2375,9 +2525,13 @@ def create_app(
         user = auth.current_user(request)
         if user is None:
             raise auth.reject_unauthenticated()
-        apps = apps_for(user.uid)
+        apps = all_apps()
         first = apps[0] if apps else None
-        default_app = app_catalog.DEFAULT_APP_ID if any(app["id"] == app_catalog.DEFAULT_APP_ID for app in apps) else (first["id"] if first else "")
+        default_app = (
+            app_catalog.DEFAULT_APP_ID
+            if any(app["id"] == app_catalog.DEFAULT_APP_ID for app in apps)
+            else (first["id"] if first else "")
+        )
         default_mode = ""
         if first is not None:
             chosen = next((app for app in apps if app["id"] == default_app), first)
@@ -2386,63 +2540,77 @@ def create_app(
             "apps": apps,
             "defaultApp": default_app,
             "defaultMode": default_mode,
-            "canManage": True,
+            "canManage": bool(user.is_admin),
         }
 
     @app.post("/api/apps", status_code=201)
     async def create_app_endpoint(payload: AppUpsertRequest, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
+        user = require_app_admin(request)
         app_id = f"app-{uuid.uuid4().hex[:8]}"
-        if any(app["id"] == app_id for app in apps_for(user.uid)):
-            raise HTTPException(status_code=409, detail={"error": "app id collision, retry"})
         app = normalize_app(payload, app_id)
-        db.replace_app(user.uid, app)
-        created = next(item for item in apps_for(user.uid) if item["id"] == app_id)
-        db.record_app_audit(user.uid, app_id, "create", user.display_name or user.username, None, created)
+        if app_name_taken(app["name"]):
+            raise HTTPException(status_code=409, detail={"error": f"an app named {app['name']!r} already exists"})
+        db = require_team_mode()
+        db.replace_team_app(app)
+        created = app_by_id(app_id) or app
+        db.record_team_app_audit(
+            user.uid, user.display_name or user.username, app_id, "create", None, created
+        )
         return created
 
     @app.put("/api/apps/{app_id}")
     async def update_app(app_id: str, payload: AppUpsertRequest, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        existing = next((item for item in apps_for(user.uid) if item["id"] == app_id), None)
+        user = require_app_admin(request)
+        existing = app_by_id(app_id)
         if existing is None:
             raise HTTPException(status_code=404, detail={"error": f"unknown app: {app_id}"})
         app = normalize_app(payload, app_id)
-        db.replace_app(user.uid, app, builtin=bool(existing.get("builtin")))
-        updated = next(item for item in apps_for(user.uid) if item["id"] == app_id)
-        db.record_app_audit(user.uid, app_id, "update", user.display_name or user.username, existing, updated)
-        await registry.evict(user.uid, app_id)
+        if app_name_taken(app["name"], exclude=app_id):
+            raise HTTPException(status_code=409, detail={"error": f"an app named {app['name']!r} already exists"})
+        db = require_team_mode()
+        db.replace_team_app(app, builtin=bool(existing.get("builtin")))
+        updated = app_by_id(app_id) or app
+        db.record_team_app_audit(
+            user.uid,
+            user.display_name or user.username,
+            app_id,
+            "update",
+            existing,
+            updated,
+        )
+        await registry.evict_app(app_id)
         return updated
 
     @app.delete("/api/apps/{app_id}")
     async def delete_app(app_id: str, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        existing = next((item for item in apps_for(user.uid) if item["id"] == app_id), None)
+        user = require_app_admin(request)
+        existing = app_by_id(app_id)
         if existing is None:
             raise HTTPException(status_code=404, detail={"error": f"unknown app: {app_id}"})
         if existing.get("builtin"):
             raise HTTPException(status_code=400, detail={"error": "built-in apps cannot be deleted"})
-        db.delete_app(user.uid, app_id)
-        db.record_app_audit(user.uid, app_id, "delete", user.display_name or user.username, existing, None)
-        await registry.evict(user.uid, app_id)
-        return {"deleted": app_id}
+        db = require_team_mode()
+        references = db.app_references(app_id)
+        if references["schedules"]:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "this app is still used by scheduled tasks; move or delete them first",
+                    "schedules": references["schedules"],
+                },
+            )
+        db.delete_team_app(app_id)
+        db.delete_app_references(app_id)
+        db.record_team_app_audit(
+            user.uid, user.display_name or user.username, app_id, "delete", existing, None
+        )
+        await registry.evict_app(app_id)
+        return {"deleted": app_id, "cleaned": references}
 
     @app.post("/api/apps/{app_id}/restore")
     async def restore_app(app_id: str, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        existing = next((item for item in apps_for(user.uid) if item["id"] == app_id), None)
+        user = require_app_admin(request)
+        existing = app_by_id(app_id)
         if existing is None:
             raise HTTPException(status_code=404, detail={"error": f"unknown app: {app_id}"})
         if not existing.get("builtin"):
@@ -2452,32 +2620,143 @@ def create_app(
         )
         if default is None:
             raise HTTPException(status_code=404, detail={"error": f"no built-in default: {app_id}"})
-        db.replace_app(user.uid, default, builtin=True)
-        restored = next(item for item in apps_for(user.uid) if item["id"] == app_id)
-        db.record_app_audit(user.uid, app_id, "restore", user.display_name or user.username, existing, restored)
-        await registry.evict(user.uid, app_id)
+        db = require_team_mode()
+        db.replace_team_app(default, builtin=True)
+        restored = app_by_id(app_id) or default
+        db.record_team_app_audit(
+            user.uid,
+            user.display_name or user.username,
+            app_id,
+            "restore",
+            existing,
+            restored,
+        )
+        await registry.evict_app(app_id)
         return restored
+
+    @app.post("/api/apps/{app_id}/duplicate", status_code=201)
+    async def duplicate_app(app_id: str, request: Request) -> dict[str, Any]:
+        user = require_app_admin(request)
+        existing = app_by_id(app_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail={"error": f"unknown app: {app_id}"})
+        base_name = f"{existing['name']} 副本"[:40]
+        name = base_name
+        suffix = 2
+        while app_name_taken(name):
+            name = f"{base_name[:36]} {suffix}"
+            suffix += 1
+        copy = json.loads(json.dumps(existing))
+        new_id = f"app-{uuid.uuid4().hex[:8]}"
+        copy.update({"id": new_id, "name": name, "builtin": False})
+        db = require_team_mode()
+        db.replace_team_app(copy)
+        created = app_by_id(new_id) or copy
+        db.record_team_app_audit(
+            user.uid, user.display_name or user.username, new_id, "duplicate", existing, created
+        )
+        return created
+
+    @app.post("/api/apps/order")
+    async def reorder_apps(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+        require_app_admin(request)
+        ids = payload.get("ids")
+        if not isinstance(ids, list) or not all(isinstance(item, str) for item in ids):
+            raise HTTPException(status_code=422, detail={"error": "ids must be a list of app ids"})
+        known = [item["id"] for item in all_apps()]
+        if set(ids) - set(known):
+            raise HTTPException(status_code=422, detail={"error": "ids contains an unknown app"})
+        ordered = list(dict.fromkeys(ids)) + [item for item in known if item not in ids]
+        require_team_mode().reorder_team_apps(ordered)
+        return {"ids": ordered}
+
+    @app.get("/api/apps/export")
+    async def export_apps(request: Request) -> dict[str, Any]:
+        user = require_app_admin(request)
+        del user
+        apps = []
+        for item in all_apps():
+            copy = json.loads(json.dumps(item))
+            copy.pop("builtin", None)
+            apps.append(copy)
+        return {
+            "format": 1,
+            "exportedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "apps": apps,
+        }
+
+    @app.post("/api/apps/import", status_code=201)
+    async def import_apps(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+        user = require_app_admin(request)
+        raw_apps = payload.get("apps")
+        if not isinstance(raw_apps, list) or not raw_apps:
+            raise HTTPException(status_code=422, detail={"error": "apps must be a non-empty list"})
+        db = require_team_mode()
+        created: list[dict[str, Any]] = []
+        for raw in raw_apps[:20]:
+            if not isinstance(raw, dict):
+                continue
+            new_id = f"app-{uuid.uuid4().hex[:8]}"
+            try:
+                app = normalize_app(AppUpsertRequest(**raw), new_id)
+            except (HTTPException, TypeError, ValueError):
+                continue
+            name = app["name"]
+            suffix = 2
+            while app_name_taken(name):
+                name = f"{app['name'][:36]} {suffix}"
+                suffix += 1
+            app["name"] = name
+            db.replace_team_app(app)
+            created.append(app_by_id(new_id) or app)
+            db.record_team_app_audit(
+                user.uid, user.display_name or user.username, new_id, "import", None, app
+            )
+        if not created:
+            raise HTTPException(status_code=422, detail={"error": "no valid apps in this file"})
+        return {"imported": created}
+
+    @app.post("/api/apps/preview")
+    async def preview_app(payload: AppUpsertRequest, request: Request) -> dict[str, Any]:
+        require_app_admin(request)
+        app = normalize_app(payload, "preview")
+        modes = [
+            {
+                "id": mode["id"],
+                "name": mode["name"],
+                "prompt": mode["prompt"],
+                "chars": len(mode["prompt"]),
+                "skills": "all" if mode["skillBinding"] == "all" else mode["skillBinding"],
+            }
+            for mode in app["modes"]
+        ]
+        return {"app": app, "modes": modes}
 
     @app.get("/api/apps/{app_id}/audit")
     async def app_audit(app_id: str, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
+        require_team_mode()
         user = auth.current_user(request)
         if user is None:
             raise auth.reject_unauthenticated()
-        rows = db.list_app_audit(user.uid, app_id)
-        if not rows and all(item["id"] != app_id for item in apps_for(user.uid)):
+        rows = require_team_mode().list_team_app_audit(app_id)
+        if not rows and app_by_id(app_id) is None:
             raise HTTPException(status_code=404, detail={"error": f"unknown app: {app_id}"})
-        return {
-            "audit": [
+        audit = []
+        for row in rows:
+            before = _loads_or_none(row["before_json"])
+            after = _loads_or_none(row["after_json"])
+            audit.append(
                 {
                     "id": row["id"],
                     "action": row["action"],
                     "actor": row["actor"],
                     "createdAt": row["created_at"],
+                    "changes": app_diff(before, after),
+                    "before": before,
+                    "after": after,
                 }
-                for row in rows
-            ]
-        }
+            )
+        return {"audit": audit}
 
     # -- office editor ----------------------------------------------------------------
 
@@ -2877,6 +3156,14 @@ def create_app(
             agent_dir=worker.options.agent_dir,
             session_dir=worker.options.session_dir,
         )
+        # Sessions written before apps existed have no app; keep them visible everywhere
+        # instead of hiding half of someone's history.
+        wanted_app = request.query_params.get("app") or ""
+        wanted_mode = request.query_params.get("mode") or ""
+        if wanted_app:
+            listed = [info for info in listed if info.app in (None, wanted_app)]
+        if wanted_mode:
+            listed = [info for info in listed if info.mode in (None, wanted_mode)]
         return {
             "sessions": [
                 {
@@ -2884,6 +3171,8 @@ def create_app(
                     "id": info.id,
                     "cwd": info.cwd,
                     "name": info.name,
+                    "app": info.app,
+                    "mode": info.mode,
                     "modified": info.modified.isoformat(),
                     "messageCount": info.message_count,
                     "firstMessage": info.first_message,
@@ -3166,7 +3455,7 @@ def create_app(
         try:
             workspace = resolve_workspace(uid, requested)
             app_id, mode_id = resolve_app_mode(
-                uid, websocket.query_params.get("app"), websocket.query_params.get("mode")
+                websocket.query_params.get("app"), websocket.query_params.get("mode")
             )
         except HTTPException:
             await websocket.close(code=4404, reason="unknown workspace or app")

@@ -239,6 +239,10 @@ class SessionHeader:
     timestamp: str
     cwd: str | None = None
     parent_session: str | None = None
+    #: The app/mode this conversation was started under.  Optional: files written
+    #: before apps existed simply do not have it.
+    app: str | None = None
+    mode: str | None = None
     #: Absent in v1 files; always written as ``CURRENT_SESSION_VERSION``.
     version: int | None = CURRENT_SESSION_VERSION
     type: ClassVar[str] = "session"
@@ -393,6 +397,10 @@ def header_to_json(header: SessionHeader) -> dict[str, Any]:
         result["cwd"] = header.cwd
     if header.parent_session is not None:
         result["parentSession"] = header.parent_session
+    if header.app is not None:
+        result["app"] = header.app
+    if header.mode is not None:
+        result["mode"] = header.mode
     return result
 
 
@@ -506,6 +514,8 @@ def _parse_header(data: dict[str, Any]) -> SessionHeader:
         timestamp=data.get("timestamp", ""),
         cwd=data.get("cwd"),
         parent_session=data.get("parentSession"),
+        app=data.get("app") if isinstance(data.get("app"), str) else None,
+        mode=data.get("mode") if isinstance(data.get("mode"), str) else None,
         version=version if isinstance(version, int) else None,
     )
 
@@ -976,6 +986,8 @@ class SessionInfo:
     all_messages_text: str
     name: str | None = None
     parent_session_path: str | None = None
+    app: str | None = None
+    mode: str | None = None
 
 
 @dataclass
@@ -1070,6 +1082,8 @@ def _build_session_info(file_path: str) -> SessionInfo | None:
         cwd=cwd,
         name=name,
         parent_session_path=header.get("parentSession"),
+        app=header.get("app") if isinstance(header.get("app"), str) else None,
+        mode=header.get("mode") if isinstance(header.get("mode"), str) else None,
         created=created,
         modified=modified,
         message_count=message_count,
@@ -1123,6 +1137,8 @@ class SessionManager:
         preloaded_raw: list[dict[str, Any]] | None = None,
         session_id: str | None = None,
         parent_session: str | None = None,
+        app: str | None = None,
+        mode: str | None = None,
     ) -> None:
         self._cwd = resolve_path(cwd)
         self._session_dir = os.path.abspath(session_dir) if session_dir else ""
@@ -1134,6 +1150,8 @@ class SessionManager:
         self._label_timestamps_by_id: dict[str, str] = {}
         self._leaf_id: str | None = None
         self._session_id = session_id or ""
+        self._app = app
+        self._mode = mode
         self._session_file: str | None = None
         #: In-process write serialisation.  Upstream uses ``proper-lockfile`` for
         #: cross-process safety; that is deliberately out of scope here.
@@ -1160,6 +1178,8 @@ class SessionManager:
         session_dir: str | None = None,
         session_id: str | None = None,
         parent_session: str | None = None,
+        app: str | None = None,
+        mode: str | None = None,
     ) -> SessionManager:
         directory = (
             resolve_path(session_dir) if session_dir is not None else get_default_session_dir(cwd, agent_dir)
@@ -1171,6 +1191,8 @@ class SessionManager:
             True,
             session_id=session_id,
             parent_session=parent_session,
+            app=app,
+            mode=mode,
         )
 
     @classmethod
@@ -1224,11 +1246,16 @@ class SessionManager:
             f"{session_file_timestamp(timestamp)}_{new_session_id}{SESSION_FILE_SUFFIX}",
         )
 
+        source_header = next(
+            (entry for entry in source_entries if entry.get("type") == "session"), {}
+        )
         header = SessionHeader(
             id=new_session_id,
             timestamp=timestamp,
             cwd=resolved_target,
             parent_session=resolved_source,
+            app=source_header.get("app") if isinstance(source_header.get("app"), str) else None,
+            mode=source_header.get("mode") if isinstance(source_header.get("mode"), str) else None,
             version=CURRENT_SESSION_VERSION,
         )
         lines = [json_dumps(header_to_json(header))]
@@ -1303,6 +1330,8 @@ class SessionManager:
                 timestamp=timestamp,
                 cwd=self._cwd,
                 parent_session=parent_session,
+                app=self._app,
+                mode=self._mode,
                 version=CURRENT_SESSION_VERSION,
             )
         ]
@@ -1353,6 +1382,8 @@ class SessionManager:
         if header is not None:
             self._file_entries = entries
             self._session_id = header.id
+            self._app = header.app
+            self._mode = header.mode
             if migrated:
                 # Upstream rewrites immediately after a migration so the file on
                 # disk is always at the current version.
@@ -1749,6 +1780,8 @@ class SessionManager:
             cwd=self._cwd,
             # An unpersisted manager has no file to point at, so the key is omitted.
             parent_session=previous_session_file if self._persist_enabled else None,
+            app=self._app,
+            mode=self._mode,
             version=CURRENT_SESSION_VERSION,
         )
 
