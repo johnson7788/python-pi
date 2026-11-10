@@ -1,4 +1,4 @@
-# python-pi
+# pi-agent
 
 [`pi`](https://pi.dev/docs/latest) 是一个极简终端 coding agent harness（TypeScript，11 包，约 18 万行）。
 本仓库是它的 **Python 移植版**，目标是提供一个可嵌入的 Python agent 框架，并且**与 pi 的会话文件互通**。
