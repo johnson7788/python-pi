@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { prettyJson } from '../lib/markdown'
+import { isImageBlock } from '../lib/protocol'
 import type { ToolExecution } from '../lib/useAgent'
 import { toolResultText } from '../lib/useAgent'
 
@@ -54,6 +55,10 @@ export function ToolCard({
 
   const resultText =
     toolResultText(execution?.result) || toolResultText(execution?.partialResult) || fallbackText || ''
+  const resultContent = execution?.result?.content ?? execution?.partialResult?.content
+  const resultImages = Array.isArray(resultContent)
+    ? resultContent.filter(isImageBlock).filter((block) => Boolean(block.data))
+    : []
 
   const effectiveStatus = isError ? 'error' : status
 
@@ -78,6 +83,18 @@ export function ToolCard({
             {argsOpen ? '▾' : '▸'} 参数
           </button>
           {argsOpen ? <pre className="tool-card__pre">{argsText}</pre> : null}
+        </div>
+      ) : null}
+
+      {resultImages.length > 0 ? (
+        <div className="tool-card__images">
+          {resultImages.map((image, index) => (
+            <img
+              key={index}
+              src={`data:${image.mimeType || 'image/png'};base64,${image.data ?? ''}`}
+              alt={`工具输出图片 ${index + 1}`}
+            />
+          ))}
         </div>
       ) : null}
 

@@ -9,6 +9,7 @@ contract are proven end to end).
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import os
@@ -22,6 +23,7 @@ from pi_ai import (
     AbortController,
     AssistantMessage,
     Cost,
+    ImageContent,
     Model,
     ModelCost,
     TextContent,
@@ -231,6 +233,84 @@ async def test_prompt_without_message_fails(tmp_path):
         assert response["success"] is False
         assert "message" in response["error"]
         assert response["id"] == "bad"
+    finally:
+        session.dispose()
+
+
+async def test_prompt_carries_inline_images_to_the_session(tmp_path):
+    session = _session(tmp_path, [FauxTurn(text="ok")])
+    encoded = base64.b64encode(b"fake-png-bytes").decode("ascii")
+    try:
+        records = await _serve(
+            session,
+            [
+                {
+                    "id": "img",
+                    "type": "prompt",
+                    "message": "描述这张图片",
+                    "images": [
+                        {"type": "image", "mimeType": "image/png", "data": encoded}
+                    ],
+                }
+            ],
+        )
+        response = _responses(records, "prompt")[0]
+        assert response["success"] is True
+
+        user = session.messages[0]
+        assert isinstance(user, UserMessage)
+        assert isinstance(user.content, list)
+        images = [block for block in user.content if isinstance(block, ImageContent)]
+        assert images == [ImageContent(data=encoded, mime_type="image/png")]
+    finally:
+        session.dispose()
+
+
+async def test_prompt_rejects_a_malformed_image_before_accepting(tmp_path):
+    session = _session(tmp_path, [FauxTurn(text="ok")])
+    try:
+        records = await _serve(
+            session,
+            [
+                {
+                    "id": "bad-image",
+                    "type": "prompt",
+                    "message": "描述这张图片",
+                    "images": [{"type": "image", "mimeType": "image/png", "data": "@@@"}],
+                }
+            ],
+        )
+        response = _responses(records, "prompt")[0]
+        assert response["success"] is False
+        assert response["id"] == "bad-image"
+        assert "base64" in response["error"]
+        # Nothing was queued or stored.
+        assert session.messages == []
+    finally:
+        session.dispose()
+
+
+async def test_prompt_accepts_images_without_message_text(tmp_path):
+    session = _session(tmp_path, [FauxTurn(text="ok")])
+    encoded = base64.b64encode(b"fake-png-bytes").decode("ascii")
+    try:
+        records = await _serve(
+            session,
+            [
+                {
+                    "id": "only-image",
+                    "type": "prompt",
+                    "message": "",
+                    "images": [{"mimeType": "image/png", "data": encoded}],
+                }
+            ],
+        )
+        assert _responses(records, "prompt")[0]["success"] is True
+        user = session.messages[0]
+        assert isinstance(user, UserMessage)
+        assert isinstance(user.content, list)
+        # No empty text block is injected alongside the image.
+        assert [block.type for block in user.content] == ["image"]
     finally:
         session.dispose()
 

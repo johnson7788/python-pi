@@ -17,11 +17,15 @@ import { api } from '../lib/api'
 import { toolResultText } from '../lib/useAgent'
 import { resolveApiBase } from '../lib/endpoints'
 import { renderMarkdown } from '../lib/markdown'
-import { asRecord, isTextBlock, isThinkingBlock, isToolCallBlock } from '../lib/protocol'
+import { asRecord, isImageBlock, isTextBlock, isThinkingBlock, isToolCallBlock } from '../lib/protocol'
+import { MAX_ATTACHMENTS, prepareImageFile } from '../lib/images'
+import type { DraftImage } from '../lib/images'
 import type {
   AssistantMessage,
   ContentBlock,
   CustomMessage,
+  ImageAttachment,
+  ImageBlock,
   Message,
   Usage,
 } from '../lib/protocol'
@@ -357,6 +361,16 @@ function userText(message: Message): string {
   return content.filter(isTextBlock).map((block) => block.text).join('\n')
 }
 
+function userImages(message: Message): ImageBlock[] {
+  const content = (message as { content?: string | ContentBlock[] }).content
+  if (!Array.isArray(content)) return []
+  return content.filter(isImageBlock).filter((block) => Boolean(block.data))
+}
+
+function imageSource(block: ImageBlock): string {
+  return `data:${block.mimeType || 'image/png'};base64,${block.data ?? ''}`
+}
+
 function usageLine(usage: Usage | undefined): string {
   if (!usage) return ''
   const tokens = usage.totalTokens ?? (usage.input ?? 0) + (usage.output ?? 0)
@@ -422,6 +436,8 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const [scheduleRuns, setScheduleRuns] = useState<ScheduleRunRow[] | null>(null)
   const [draft, setDraft] = useState('')
   const [chatDraft, setChatDraft] = useState('')
+  const [draftImages, setDraftImages] = useState<DraftImage[]>([])
+  const [chatImages, setChatImages] = useState<DraftImage[]>([])
 
   const connectionOpen = agent.connection === 'open'
   const workspaceName =
@@ -582,6 +598,8 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
     if (workspace === activeWorkspace) return
     setDraft('')
     setChatDraft('')
+    setDraftImages([])
+    setChatImages([])
     setActiveWorkspace(workspace)
     setNavOpen(false)
     goView('home')
@@ -606,11 +624,40 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
     go('/workbench/chat')
   }
 
+  // Images are downscaled in the browser and travel to the server as inline
+  // base64 (the protocol cannot carry files).  A failure on one file must not
+  // discard the rest of the selection, so each is prepared independently.
+  const addImages = async (target: 'home' | 'chat', files: File[]) => {
+    const prepared: DraftImage[] = []
+    for (const file of files) {
+      try {
+        const image = await prepareImageFile(file)
+        if (image) prepared.push(image)
+      } catch {
+        // Ignore an unreadable image; the others in the same selection still go.
+      }
+    }
+    if (prepared.length === 0) return
+    const append = (current: DraftImage[]) => [...current, ...prepared].slice(0, MAX_ATTACHMENTS)
+    if (target === 'home') setDraftImages(append)
+    else setChatImages(append)
+  }
+
+  const removeImage = (target: 'home' | 'chat', id: string) => {
+    const drop = (current: DraftImage[]) => current.filter((image) => image.id !== id)
+    if (target === 'home') setDraftImages(drop)
+    else setChatImages(drop)
+  }
+
+  const attachmentsOf = (images: DraftImage[]): ImageAttachment[] =>
+    images.map((image) => ({ type: 'image', mimeType: image.mimeType, data: image.data }))
+
   const sendHome = () => {
     const text = draft.trim()
-    if (!text || !connectionOpen) return
-    agent.sendPrompt(text)
+    if ((!text && draftImages.length === 0) || !connectionOpen) return
+    agent.sendPrompt(text, undefined, draftImages.length ? attachmentsOf(draftImages) : undefined)
     setDraft('')
+    setDraftImages([])
     go('/workbench/chat')
   }
 
@@ -642,9 +689,10 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
 
   const sendChat = () => {
     const text = chatDraft.trim()
-    if (!text || !connectionOpen) return
-    agent.sendPrompt(text)
+    if ((!text && chatImages.length === 0) || !connectionOpen) return
+    agent.sendPrompt(text, undefined, chatImages.length ? attachmentsOf(chatImages) : undefined)
     setChatDraft('')
+    setChatImages([])
   }
 
   const scheduledSessionFiles = new Set(
@@ -930,6 +978,9 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
               streaming={agent.isStreaming}
               onAbort={agent.abort}
               workspaceName={workspaceName}
+              images={draftImages}
+              onAddImages={(files) => void addImages('home', files)}
+              onRemoveImage={(id) => removeImage('home', id)}
             />
           ) : null}
 
@@ -946,6 +997,9 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
               workspaceName={workspaceName}
               appName={activeApp.name}
               modeName={activeMode.name}
+              images={chatImages}
+              onAddImages={(files) => void addImages('chat', files)}
+              onRemoveImage={(id) => removeImage('chat', id)}
             />
           ) : null}
 
@@ -998,6 +1052,9 @@ function HomeView({
   streaming,
   onAbort,
   workspaceName,
+  images,
+  onAddImages,
+  onRemoveImage,
 }: {
   app: AppRow
   modeId: string
@@ -1009,6 +1066,9 @@ function HomeView({
   streaming: boolean
   onAbort: () => void
   workspaceName: string
+  images: DraftImage[]
+  onAddImages: (files: File[]) => void
+  onRemoveImage: (id: string) => void
 }) {
   const mode = app.modes.find((item) => item.id === modeId) || app.modes[0]
   const fallback = MODES[mode.id as Mode]
@@ -1062,6 +1122,9 @@ function HomeView({
           disabled={disabled}
           placeholder={placeholder}
           workspaceName={workspaceName}
+          images={images}
+          onAddImages={onAddImages}
+          onRemoveImage={onRemoveImage}
         />
 
         <div className="wb-examples">
@@ -1091,6 +1154,9 @@ function ChatView({
   workspaceName,
   appName,
   modeName,
+  images,
+  onAddImages,
+  onRemoveImage,
 }: {
   agent: AgentApi
   draft: string
@@ -1103,6 +1169,9 @@ function ChatView({
   workspaceName: string
   appName: string
   modeName: string
+  images: DraftImage[]
+  onAddImages: (files: File[]) => void
+  onRemoveImage: (id: string) => void
 }) {
   const title = agent.state?.sessionName?.trim() || '新任务'
   const [artifactsOpen, setArtifactsOpen] = useState(false)
@@ -1187,8 +1256,11 @@ function ChatView({
               onAbort={agent.abort}
               streaming={agent.isStreaming}
               disabled={disabled}
-              placeholder="今天帮你做些什么？@ 添加上下文，/调用技能与指令"
+              placeholder="今天帮你做些什么？可以粘贴或拖入图片"
               workspaceName={workspaceName}
+              images={images}
+              onAddImages={onAddImages}
+              onRemoveImage={onRemoveImage}
               chat
             />
           </div>
@@ -2231,6 +2303,10 @@ function ProcessToolRow({
   const args = toolArgs(block)
   const argsText = Object.keys(args).length > 0 ? JSON.stringify(args, null, 2) : ''
   const resultText = toolResultText(execution?.result) || toolResultText(execution?.partialResult) || ''
+  const resultContent = execution?.result?.content ?? execution?.partialResult?.content
+  const resultImages = Array.isArray(resultContent)
+    ? resultContent.filter(isImageBlock).filter((item) => Boolean(item.data))
+    : []
   const [now, setNow] = useState(Date.now())
   const running = execution?.status === 'running'
   useEffect(() => {
@@ -2252,6 +2328,13 @@ function ProcessToolRow({
       </summary>
       {argsText ? <pre className="wb-process-pre">{argsText}</pre> : null}
       {resultText ? <pre className="wb-process-pre">{resultText}</pre> : null}
+      {resultImages.length > 0 ? (
+        <div className="wb-process-images">
+          {resultImages.map((image, index) => (
+            <img key={index} src={imageSource(image)} alt={`工具输出图片 ${index + 1}`} />
+          ))}
+        </div>
+      ) : null}
     </details>
   )
 }
@@ -2265,6 +2348,9 @@ function ProcessToolResult({
   const text = message.role === 'toolResult'
     ? message.content.filter(isTextBlock).map((block) => block.text).join('\n')
     : ''
+  const images = message.role === 'toolResult'
+    ? message.content.filter(isImageBlock).filter((block) => Boolean(block.data))
+    : []
   const name = message.role === 'toolResult' ? message.toolName || '工具' : '工具'
   if (!text.trim()) return null
   return (
@@ -2276,6 +2362,13 @@ function ProcessToolResult({
         <em>{message.role === 'toolResult' && message.isError ? '失败' : '完成'}</em>
       </summary>
       <pre className="wb-process-pre">{text}</pre>
+      {images.length > 0 ? (
+        <div className="wb-process-images">
+          {images.map((image, index) => (
+            <img key={index} src={imageSource(image)} alt={`工具输出图片 ${index + 1}`} />
+          ))}
+        </div>
+      ) : null}
     </details>
   )
 }
@@ -2523,7 +2616,20 @@ function WbMessage({
 }) {
   const message = entry.message
   if (message.role === 'user') {
-    return <div className="wb-msg-user">{userText(message)}</div>
+    const images = userImages(message)
+    const text = userText(message)
+    return (
+      <div className="wb-msg-user">
+        {images.length > 0 ? (
+          <div className="wb-msg-user-images">
+            {images.map((image, index) => (
+              <img key={index} src={imageSource(image)} alt={`图片 ${index + 1}`} />
+            ))}
+          </div>
+        ) : null}
+        {text ? <div className="wb-msg-user-text">{text}</div> : null}
+      </div>
+    )
   }
   if (message.role === 'assistant') {
     const assistant = message as AssistantMessage
@@ -2574,6 +2680,7 @@ function WbMessage({
     )
   }
   if (message.role === 'toolResult') {
+    const images = message.content.filter(isImageBlock).filter((block) => Boolean(block.data))
     return (
       <div className="wb-msg-tool">
         <ToolCard
@@ -2583,6 +2690,13 @@ function WbMessage({
           fallbackText={message.content.filter(isTextBlock).map((part) => part.text).join('\n')}
           fallbackIsError={message.isError}
         />
+        {images.length > 0 ? (
+          <div className="wb-msg-tool-images">
+            {images.map((image, index) => (
+              <img key={index} src={imageSource(image)} alt={`工具输出图片 ${index + 1}`} />
+            ))}
+          </div>
+        ) : null}
       </div>
     )
   }
@@ -2633,6 +2747,10 @@ function WbBlock({
       />
     )
   }
+  if (isImageBlock(block)) {
+    if (!block.data) return null
+    return <img className="wb-msg-inline-image" src={imageSource(block)} alt="图片" />
+  }
   return <pre className="wb-block-unknown">{JSON.stringify(asRecord(block), null, 2)}</pre>
 }
 
@@ -2645,6 +2763,9 @@ function WbComposer({
   disabled,
   placeholder,
   workspaceName,
+  images,
+  onAddImages,
+  onRemoveImage,
   chat = false,
 }: {
   value: string
@@ -2655,9 +2776,13 @@ function WbComposer({
   disabled: boolean
   placeholder: string
   workspaceName: string
+  images: DraftImage[]
+  onAddImages: (files: File[]) => void
+  onRemoveImage: (id: string) => void
   chat?: boolean
 }) {
   const ref = useRef<HTMLTextAreaElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     const node = ref.current
     if (!node) return
@@ -2673,10 +2798,57 @@ function WbComposer({
     }
   }
 
-  const ready = value.trim().length > 0
+  const acceptFiles = (files: FileList | File[] | null | undefined) => {
+    if (!files) return
+    const picked = Array.from(files).filter((file) => file.type.startsWith('image/'))
+    if (picked.length > 0) onAddImages(picked.slice(0, MAX_ATTACHMENTS))
+  }
+
+  const ready = value.trim().length > 0 || images.length > 0
 
   return (
-    <div className={`wb-composer${chat ? ' is-chat' : ''}`}>
+    <div
+      className={`wb-composer${chat ? ' is-chat' : ''}`}
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes('Files')) event.preventDefault()
+      }}
+      onDrop={(event) => {
+        const files = Array.from(event.dataTransfer.files)
+        if (files.some((file) => file.type.startsWith('image/'))) {
+          event.preventDefault()
+          acceptFiles(files)
+        }
+      }}
+    >
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
+        multiple
+        hidden
+        onChange={(event) => {
+          acceptFiles(event.target.files)
+          event.target.value = ''
+        }}
+      />
+      {images.length > 0 ? (
+        <div className="wb-attachments">
+          {images.map((image) => (
+            <div className="wb-attachment" key={image.id}>
+              <img src={image.dataUrl} alt={image.name} />
+              <button
+                type="button"
+                className="wb-attachment-remove"
+                onClick={() => onRemoveImage(image.id)}
+                aria-label={`移除 ${image.name}`}
+                title="移除图片"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <textarea
         ref={ref}
         value={value}
@@ -2684,10 +2856,25 @@ function WbComposer({
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={onKeyDown}
+        onPaste={(event) => {
+          const files = Array.from(event.clipboardData.files).filter((file) =>
+            file.type.startsWith('image/'),
+          )
+          if (files.length > 0) {
+            event.preventDefault()
+            onAddImages(files.slice(0, MAX_ATTACHMENTS))
+          }
+        }}
         disabled={disabled && !streaming}
       />
       <div className="wb-composer-bar">
-        <button type="button" className="wb-plus" title="添加附件（即将支持）">
+        <button
+          type="button"
+          className="wb-plus"
+          title="添加图片"
+          onClick={() => fileRef.current?.click()}
+          disabled={disabled}
+        >
           <Icon name="plus" size={15} />
         </button>
         <span className="wb-ws-hint">

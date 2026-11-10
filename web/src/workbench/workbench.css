@@ -895,3 +895,23 @@
   font-size: 12px;
   color: var(--wb-muted);
 }
+
+/* ── image attachments ── */
+.wb-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.wb-attachment { position: relative; width: 64px; height: 64px; border-radius: 8px; overflow: hidden; border: 1px solid var(--wb-line-2); background: var(--wb-surface); }
+.wb-attachment img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wb-attachment-remove { position: absolute; top: 3px; right: 3px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: rgba(18, 24, 38, 0.62); color: #fff; font-size: 13px; line-height: 1; }
+.wb-attachment-remove:hover { background: rgba(18, 24, 38, 0.85); }
+.wb-plus:disabled { opacity: 0.4; cursor: default; }
+
+.wb-msg-user-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.wb-msg-user-images:last-child { margin-bottom: 0; }
+.wb-msg-user-images img { max-width: 200px; max-height: 200px; border-radius: 6px; display: block; object-fit: cover; }
+.wb-msg-user-text { white-space: pre-wrap; }
+.wb-msg-tool-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.wb-msg-tool-images img { max-width: 220px; max-height: 220px; border-radius: 8px; display: block; border: 1px solid var(--wb-line); }
+.wb-msg-inline-image { max-width: 100%; border-radius: 8px; display: block; margin: 4px 0 10px; }
+.wb .tool-card__images { padding: 8px 10px; gap: 6px; }
+.wb .tool-card__images img { max-width: 180px; max-height: 180px; border-color: var(--wb-line); }
+.wb-process-images { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px 12px; }
+.wb-process-images img { max-width: 200px; max-height: 200px; border-radius: 8px; display: block; border: 1px solid var(--wb-line); }

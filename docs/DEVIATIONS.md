@@ -93,7 +93,6 @@
 
 - 终端 TUI（`pi-tui`，18k 行差分渲染器）、themes、keybindings —— 见下方"浏览器 UI"一节
 - 会话 HTML 导出
-- 图片处理（缩放、非视觉模型降级提示）
 
 ### 浏览器 UI（上游没有）
 
@@ -103,6 +102,9 @@
 - 服务端 `packages/pi-server`：把同一套 RPC 命令协议架在 WebSocket 上（`/api/ws`），
   另加少量只读 REST（`/api/health`、`/api/models`、`/api/sessions`、`/api/state`），并托管 React SPA。
 - 前端 `web/`：Vite + React 18 + TypeScript，依赖只有 `react`、`react-dom`、`marked`、`dompurify`。
+- 图片：输入框支持选图 / 粘贴 / 拖入，浏览器先缩到长边 1568 并转 JPEG，再以 inline base64
+  经 `prompt.images` 发送。服务端只接受 inline base64（不接受 path / URL），单张 ≤10 MiB、
+  一次 ≤8 张；非视觉模型会在 provider 请求前把图片降级为占位文本。`read` 读到的图片不缩放。
 - **协议没有分叉**：浏览器说的就是 `--mode rpc` 那套命令与事件，只是换了传输层。
 - 协议上有三处**新增**（不在 pi 的 RPC 协议里）：连接建立时服务端主动推送
   `{"type":"ready",version,cwd,warnings}` 与一个不带 `id` 的 `get_state` 响应（便于首屏立即渲染）；

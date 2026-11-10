@@ -9,6 +9,7 @@ import type {
   ExtensionUiRequest,
   ExtensionUiResponse,
   ForkMessageInfo,
+  ImageAttachment,
   Message,
   ModelInfo,
   ServerEvent,
@@ -138,7 +139,7 @@ type Action =
   | { type: 'server_event'; event: ServerEvent }
   | { type: 'sessions'; sessions: SessionInfo[] }
   | { type: 'sessions_error'; error: string }
-  | { type: 'optimistic_user'; key: string; text: string }
+  | { type: 'optimistic_user'; key: string; text: string; images?: ImageAttachment[] }
   | { type: 'clear_editor_text' }
   | { type: 'dismiss_toast'; id: string }
   | { type: 'dismiss_error'; id: string }
@@ -755,9 +756,21 @@ function reducer(state: AgentStore, action: Action): AgentStore {
       return { ...state, sessionsError: action.error }
     case 'optimistic_user': {
       const seq = state.seq + 1
+      const images = action.images ?? []
+      const content: string | ContentBlock[] =
+        images.length > 0
+          ? [
+              { type: 'text', text: action.text },
+              ...images.map((image) => ({
+                type: 'image' as const,
+                data: image.data,
+                mimeType: image.mimeType,
+              })),
+            ]
+          : action.text
       const entry: TranscriptEntry = {
         key: action.key,
-        message: { role: 'user', content: action.text, timestamp: Date.now() },
+        message: { role: 'user', content, timestamp: Date.now() },
         streaming: false,
       }
       return {
@@ -847,7 +860,7 @@ export interface AgentApi {
   widgets: Record<string, string[]>
   editorText: string | null
   send: (command: ClientCommandInput) => void
-  sendPrompt: (text: string, behavior?: StreamingBehavior) => void
+  sendPrompt: (text: string, behavior?: StreamingBehavior, images?: ImageAttachment[]) => void
   steer: (text: string) => void
   followUp: (text: string) => void
   abort: () => void
@@ -1052,12 +1065,18 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
   const consumeEditorText = useCallback(() => dispatch({ type: 'clear_editor_text' }), [])
 
   const sendPrompt = useCallback(
-    (text: string, behavior?: StreamingBehavior) => {
+    (text: string, behavior?: StreamingBehavior, images?: ImageAttachment[]) => {
       const trimmed = text.trim()
-      if (!trimmed) return
+      const attachments = images?.length ? images : undefined
+      if (!trimmed && !attachments) return
       const key = `local-${(optimisticSeq += 1)}`
-      dispatchRef.current({ type: 'optimistic_user', key, text: trimmed })
-      send(behavior ? { type: 'prompt', message: trimmed, streamingBehavior: behavior } : { type: 'prompt', message: trimmed })
+      dispatchRef.current({ type: 'optimistic_user', key, text: trimmed, images: attachments })
+      send({
+        type: 'prompt',
+        message: trimmed,
+        ...(attachments ? { images: attachments } : {}),
+        ...(behavior ? { streamingBehavior: behavior } : {}),
+      })
     },
     [send],
   )

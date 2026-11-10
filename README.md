@@ -3,184 +3,33 @@
 [`pi`](https://pi.dev/docs/latest) 是一个极简终端 coding agent harness（TypeScript，11 包，约 18 万行）。
 本仓库是它的 **Python 移植版**，目标是提供一个可嵌入的 Python agent 框架，并且**与 pi 的会话文件互通**。
 
-- 调研结论与架构设计：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- 逐层深度调研笔记：[`docs/research/`](docs/research/)（pi-ai / pi-agent / coding-agent core / modes & extensions / surrounding packages）
-- **第一次接触这个项目先看**：[`docs/TECH-SHARE.md`](docs/TECH-SHARE.md)（30 分钟技术分享：分层架构、一次请求的链路、四个关键决策）
+文档导航：
 
-## 当前状态
-
-已实现并可测试（`packages/` 下三个包，对应上游的 npm 包边界）：
-
-| 包 | 对应上游 | 内容 |
-|---|---|---|
-| `pi-ai` | `@earendil-works/pi-ai` | 消息/内容块/Usage/Model 类型与 JSON 互转、12 种流式事件的 `EventStream`、provider 注册表、Anthropic 与 OpenAI 兼容适配器、faux 测试 provider、工具参数校验、凭据存储、模型目录、成本计算 |
-| `pi-agent-core` | `@earendil-works/pi-agent-core` | agent 循环（含 steering / follow-up / 工具批 / 中止语义）、`Agent` 类（状态归约、队列、生命周期） |
-| `pi-coding-agent` | `@earendil-works/pi-coding-agent` | JSONL v3 会话树、内置工具（read/write/edit/bash/grep/find/ls）、系统提示词组装、skills、资源发现、settings、`AgentSession` 编排、print/json/rpc 三种模式、扩展协议、会话替换、**后台 subagent（spawn/fork）** |
-| `pi-server` | *（无对应上游包）* | 浏览器 UI 的服务端：把同一套命令协议架在 WebSocket 上，并托管 React 单页应用 |
-
-**明确不在 v0.1**：终端 TUI、跨语言（TypeScript）扩展兼容、CBOR 协议栈、SQLite 会话后端、telemetry、evals。
-理由见架构文档第 3 节。
-
-## 后台 subagent
-
-模型可以把任务委派给后台子 agent，自己继续干活；子 agent 完成后结果以一条通知回到父对话。
-两个后端：`spawn`（子 agent 从空对话开始）与 `fork`（子 agent 继承父对话**已完成**的轮次，
-不含正在进行的一轮）。
-
-```bash
-# 模型自己决定何时调用 subagent / subagent_fork；这里只是普通的一次对话
-pi-py "把这三份资料的调研拆给子 agent 并行做，最后汇总"
-```
-
-每个子 agent 是一个真正的 Session：独立的 JSONL 文件、header 里记录 `parentSession`、在 Web
-会话列表里可见。委派工具**立即返回**，不阻塞父；上限（默认深度 1、并发 8）是快速失败而不是
-排队。完整语义、配置与已知限制见 [`docs/SUBAGENTS.md`](docs/SUBAGENTS.md)。
-
-## 扩展
-
-扩展是普通 Python 模块，暴露 `setup(pi)` 工厂，可以注册工具、命令，或拦截事件：
-
-```python
-# <project>/.pi/extensions/guard.py
-from pi_coding_agent.extensions import ToolCallEventResult
-
-def setup(pi):
-    pi.on("tool_call", guard)
-
-def guard(event, ctx):
-    if event.tool_name == "bash" and "rm -rf" in (event.input or {}).get("command", ""):
-        return ToolCallEventResult(block=True, reason="refusing to run rm -rf")
-```
-
-发现位置与 pi 一致（项目 `.pi/extensions/` → 全局 `<agent_dir>/extensions/`，也支持
-`-e/--extension` 与 pip entry point）。**项目本地扩展只在项目被信任后加载**——这是唯一的门控；
-和 pi 一样，**没有沙箱**，扩展以你的完整权限运行。
-
-完整设计、事件表与合并语义见 [`docs/EXTENSIONS.md`](docs/EXTENSIONS.md)。
-
-## 插件（Plugins）
-
-插件是可安装、可按应用启停的可执行扩展：一个目录（`plugin.json` + `setup(api)`），可以注册
-模型工具、斜杠命令或事件处理器。它和上面的扩展共用同一套注册面，区别在**治理**：有 manifest、
-有安装/卸载、按用户+应用启用、卸载会驱逐已加载它的 worker。
-
-```python
-# <data_root>/plugins/hello-pi/main.py
-from pi_coding_agent.plugins import PluginAPI
-
-def setup(api: PluginAPI) -> None:
-    @api.register_tool(
-        name="hello_plugin",
-        description="Return a greeting.",
-        parameters={"type": "object", "properties": {}},
-    )
-    async def hello_plugin(tool_call_id, args, signal, on_update):
-        return "hello"          # 直接返回字符串即可
-```
-
-本地四步（不用起服务）：`new` → `check` → `dev` → `pack`，见
-[`plugin-kit/`](plugin-kit/README.md)。安装走插件页上传 zip，或从市场装；启用后下一条消息生效。
-
-官方起点包：[`plugins/`](plugins/README.md)——临床计算器、PubMed 检索、网页抓取、CSV 工具，
-四个可直接装的插件，也是四种典型写法的样板。
-
-团队成员不装也能先提交：插件页「提交插件」进入待审队列，管理员在「待审」页安装或驳回。
-每个插件条目会显示实时加载状态（已加载哪些工具 / 失败原因），不用再翻服务端日志。
-
-- 完整契约：[`docs/PLUGINS.md`](docs/PLUGINS.md)
-- 与 DSH 的差距、取舍和「用户自服务」路线：[`docs/PLUGIN-PLATFORM-GAP.md`](docs/PLUGIN-PLATFORM-GAP.md)
-- 让 agent 帮你写：[`template/skills/plugin-creator`](template/skills/plugin-creator/SKILL.md)
-
-## 技能（Skills）
-
-一个技能是「一个目录 + `SKILL.md`」（YAML frontmatter + Markdown 正文），可以带 `scripts/`、
-`references/`、`assets/`。系统提示词只注入 name / description / location，正文由模型按需
-`read`——渐进披露，不是把全文塞进上下文。
-
-发现位置（低优先级在前）：
-
-| 位置 | 用途 |
+| 文档 | 内容 |
 |---|---|
-| `~/.agents/skills/` | 与本机其他 agent 工具共享 |
-| `~/.pi/agent/skills/` | 用户级，跟着你走 |
-| `.agents/skills/`（cwd 及祖先目录） | 跨工具的项目级 |
-| `.pi/skills/`（需项目受信任） | pi 自己的项目级 |
-| `<agent_dir>/skills/` | 部署配置目录；团队模式从模板播种 |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 架构设计与移植方案 |
+| [`docs/diagrams/`](docs/diagrams/) | 分层、请求链路、会话树、租户隔离四张架构图 |
+| [`docs/research/`](docs/research/) | 上游逐层调研笔记（pi-ai / pi-agent / coding-agent core / modes & extensions / surrounding packages） |
 
-校验是**失败即跳过**（上游 pi 只警告）：`name` 必须匹配 `^[a-z0-9-]+$` 且 ≤64 字符；
-`description` 必须是 YAML **字符串**、1–1024 字符。写成 `description: [TODO: ...]` 会被 YAML
-解析成数组，整个技能不出现在提示词里，也没有明显报错。
+## 目录
 
-两种调用方式：模型按 description 自行加载；或用户显式 `/skill:<name> args`。
-`disable-model-invocation: true` 的技能只保留后者。
+- [快速开始](#快速开始)
+- [功能](#功能)
+- [浏览器 UI](#浏览器-ui)
+- [团队部署](#团队部署)
+- [架构与实现](#架构与实现)
+- [已知取舍与限制](#已知取舍与限制)
+- [许可](#许可)
 
-### 默认技能
+## 快速开始
 
-[`template/skills/`](template/skills) 是随仓库分发的默认技能：`start.sh` 启动时把它链进模板
-agent 目录，团队模式下新用户从模板播种时共享同一份（软链而非拷贝，改一处所有人都生效）。
-当前包含 `skill-creator`（怎么写技能）、`plugin-creator`（让 agent 按访谈生成可安装的插件）
-与 `documents`（DOCX 读写、修订、渲染核对）。
+需要 Python 3.11+ 与 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-# 新建一个默认技能（不带 --path 时建在 ~/.pi/agent/skills/）
-.venv/bin/python template/skills/skill-creator/scripts/init_skill.py my-skill --path template/skills
-.venv/bin/python template/skills/skill-creator/scripts/quick_validate.py template/skills/my-skill
+uv sync
 ```
 
-`quick_validate.py` 与加载器同口径（含 frontmatter 类型检查），别用宽松的其他校验器。
-接线方式与注意事项见 [`template/README.md`](template/README.md)。
-
-### 市场
-
-浏览器 UI 的「市场」页由一份策划目录驱动，条目写在
-[`packages/pi-server/src/pi_server/market.py`](packages/pi-server/src/pi_server/market.py) 的
-`ITEMS` 里（`kind` 为 `skill` 或 `plugin`）。`name` / `description` / `source` / `tags` /
-`version` 直接决定卡片、来源标签、筛选与搜索。装技能 = 往 `<agent_dir>/skills/<id>/SKILL.md`
-写一个文件；装插件 = 把 `package` 目录拷进 `<data_root>/plugins/`。
-
-```python
-MarketItem(
-    kind="skill", id="my-skill",                 # id 即安装目录名，须与 skill 的 name 一致
-    name="…", description="…", version="1.0.0",
-    author="平台团队", source="团队", tags=("办公",),
-    content=_skill("my-skill", "…", """## 何时使用\n…"""),
-)
-```
-
-改完要**重启服务**（模块在启动时 import）。`curl '/api/market?kind=skill'` 或
-`uv run pytest tests/test_market.py` 可验证；市场只在团队模式可用（single 模式返回 503）。
-
-两个已知限制：
-
-- **市场只分发单文件技能**：`install_market_skill()` 只写 `SKILL.md`，`scripts/` 与
-  `references/` 不会跟着走。带脚本的技能走上面「默认技能」那条路。
-- **安装会写穿软链**：团队模式下 `<agent_dir>/skills` 指向模板，所以点「安装」等于改共享模板
-  （默认配置里就是改仓库工作区），且所有用户同时显示「已安装」。要让安装只影响个人，需要把
-  模板技能拷贝进各用户目录、断开这条链。
-
-## 运行模式
-
-CLI 有三种模式，都通过 `pi-py` 调用：
-
-```bash
-pi-py "解释一下这个仓库"                 # print：把助手文本流式打到 stdout
-pi-py --mode json "解释一下这个仓库"      # json：每行一个 JSON 事件
-pi-py --mode rpc                         # rpc：在 stdin/stdout 上服务 JSONL 命令协议
-```
-
-`--mode rpc` 与 pi 同构，可以被 IDE 或其他进程当作 pi 的替换件驱动：
-
-```bash
-echo '{"id":"1","type":"get_state"}' | pi-py --mode rpc
-echo '{"id":"2","type":"prompt","message":"列出当前目录"}' | pi-py --mode rpc
-```
-
-协议要点：严格 **LF** 分帧（不能按 Unicode 分隔符切分）、命令可带 `id` 且响应原样回带、
-`prompt` 在 **preflight** 就响应（语义是"已接受/已排队"）、`message_update` 只发增量但保留累计
-`usage`。30 个命令可用，其中包含会话替换的 `new_session` / `switch_session` / `fork` / `clone`
-（由 `AgentSessionRuntime` 提供）。完整的命令与限制清单见 [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md)。
-
-## 浏览器 UI
+### 启动浏览器 UI
 
 首次准备：把 API key 放进 `.env`（模板见 `.env.example`，该文件已被 gitignore）。
 
@@ -192,9 +41,9 @@ $EDITOR .env                     # 填 PI_API_KEY
 一键启动：
 
 ```bash
-./start.sh                      # agent 的工作目录 = 当前目录
-./start.sh ~/git/my-project     # 指定工作目录
-PORT=9000 ./start.sh            # 换端口
+./start.sh                       # agent 的工作目录 = 当前目录
+./start.sh ~/git/my-project      # 指定工作目录
+PORT=9000 ./start.sh             # 换端口
 ```
 
 然后打开 <http://127.0.0.1:8787>。
@@ -202,31 +51,20 @@ PORT=9000 ./start.sh            # 换端口
 `start.sh` 会：读 `.env` → 前端没构建过就构建一次 → 检查端口占用 → 启动服务。
 没有 key 时它会直接告诉你怎么办，而不是启动到一个必然失败的进程。
 
-### 模型配置
-
-**1) key 放 `.env`**
-
-```bash
-cp .env.example .env      # 然后填入 PI_API_KEY
-chmod 600 .env
-```
-
-`.env` 已在 `.gitignore` 里忽略，不会被提交（`.env.example` 是模板，会被提交）。
-`start.sh` 读取它的顺序是：
+配置读取顺序：
 
 ```
 命令行环境变量  >  .env  >  start.sh 里的默认值
 ```
 
-所以临时换一把 key 不用改文件：
+`.env` 里也可以覆盖 `MODEL` / `HOST` / `PORT` / `PI_AGENT_DIR`（默认值见 `.env.example`）。
+临时换一把 key 不用改文件：
 
 ```bash
-PI_API_KEY=sk-xxx ./start.sh      # 这一把覆盖 .env
+PI_API_KEY=sk-xxx ./start.sh     # 这一把覆盖 .env
 ```
 
-`.env` 里也可以覆盖 `MODEL` / `HOST` / `PORT` / `PI_AGENT_DIR`（默认值见 `.env.example`）。
-
-**2) 默认模型与端点**
+### 模型配置
 
 默认用**阿里云百炼（DashScope）** 的 `deepseek/deepseek-v4-flash`。百炼是 OpenAI 兼容端点，
 而 DeepSeek 官方域名不认百炼的 key（实测返回 401），所以地址在 `~/.pi/agent/models.json` 里覆盖：
@@ -261,7 +99,45 @@ PI_API_KEY=sk-xxx ./start.sh      # 这一把覆盖 .env
 内置目录里的其它 provider：`anthropic` / `openai` / `google` / `mistral` / `openrouter`。
 `pi-py --list-models` 会列出全部模型 id，已配好凭据的前面有 `*`。
 
-### 思考级别实测
+#### 多模态（图片）
+
+模型必须在自己或 provider 的 `models.json` 条目里声明 `"input": ["text", "image"]`，否则
+图片会在请求前被降级成一段占位文本（这是跨模型重放的安全默认，不是 bug）。
+
+DeepSeek 官方的 `deepseek-flash`（产品名 **V4.1 Flash**）支持图片，内置目录已收录。官方 API
+不接受 `deepseek-v4.1-flash` 这个写法；模型 id 就是 `deepseek-flash`。用官方 key 时单独加一个
+provider，避免和百炼的地址混用：
+
+```jsonc
+{
+  "providers": {
+    "deepseek-official": {
+      "name": "DeepSeek（官方，多模态）",
+      "api": "openai-completions",
+      "baseUrl": "https://api.deepseek.com",
+      "models": [{
+        "id": "deepseek-flash",
+        "name": "DeepSeek V4.1 Flash（多模态）",
+        "reasoning": true,
+        "input": ["text", "image"],
+        "contextWindow": 1048576,
+        "maxTokens": 393216,
+        // 官方 API 实测只接受 low / high / max 三档。
+        "thinkingLevelMap": { "minimal": null, "low": "low", "medium": null, "high": "high", "max": "max" },
+        "cost": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 }
+      }]
+    }
+  }
+}
+```
+
+然后：
+
+```bash
+MODEL=deepseek-official/deepseek-flash ./start.sh
+```
+
+#### 思考级别实测
 
 接线是通的——改级别会真的改变发往模型的 `reasoning_effort`（`off` 表示整个字段不发送）。
 但 `deepseek-v4-flash` 是**原生推理模型，任何档位都会输出思考**，而且百炼对各档位的响应差异
@@ -275,21 +151,252 @@ PI_API_KEY=sk-xxx ./start.sh      # 这一把覆盖 .env
 想要真正的"不思考"，得换模型（百炼上的 Qwen 系列用 `enable_thinking` 开关，本移植版还没实现
 这个兼容位）；想要真正可调的思考预算，得换 provider（如 Anthropic 的 thinking budget）。
 
-**3) 不用 `start.sh` 时**
-
-`start.sh` 是把 key 以 `--api-key` 传给进程的，所以 key 只在这一次运行里有效。
-如果你要直接跑 `pi-py`（或真实的 `pi`），把 key 导出到环境里即可：
+不用 `start.sh` 时，把 key 导出到环境里即可：
 
 ```bash
 set -a; source .env; set +a
 pi-py --model deepseek/deepseek-v4-flash "你好"
 ```
 
-### 界面
+### 命令行模式
+
+CLI 有三种模式，都通过 `pi-py` 调用：
+
+```bash
+pi-py "解释一下这个仓库"                 # print：把助手文本流式打到 stdout
+pi-py --mode json "解释一下这个仓库"      # json：每行一个 JSON 事件
+pi-py --mode rpc                         # rpc：在 stdin/stdout 上服务 JSONL 命令协议
+
+# 图片：--image 可重复，print / json 模式有效
+pi-py --model deepseek-official/deepseek-flash --image shot.png "这张图里是什么？"
+```
+
+`--mode rpc` 与 pi 同构，可以被 IDE 或其他进程当作 pi 的替换件驱动：
+
+```bash
+echo '{"id":"1","type":"get_state"}' | pi-py --mode rpc
+echo '{"id":"2","type":"prompt","message":"列出当前目录"}' | pi-py --mode rpc
+```
+
+协议要点：严格 **LF** 分帧（不能按 Unicode 分隔符切分）、命令可带 `id` 且响应原样回带、
+`prompt` 在 **preflight** 就响应（语义是"已接受/已排队"）、`message_update` 只发增量但保留累计
+`usage`。30 个命令可用，其中包含会话替换的 `new_session` / `switch_session` / `fork` / `clone`
+（由 `AgentSessionRuntime` 提供）。完整的命令与限制清单见 [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md)。
+
+### 作为库使用
+
+一个**完全离线、可直接运行**的完整示例（真实工具 + 真实会话落盘，但用确定性的 faux provider
+替代 LLM，因此不需要网络和 API key）：
+
+```bash
+uv run python examples/offline_agent.py
+```
+
+各层的最小用法：
+
+```python
+import asyncio
+from pi_ai import AuthStorage, Context, StreamOptions, UserMessage, get_model, stream_simple
+
+async def main() -> None:
+    model = get_model("anthropic", "claude-sonnet-4-5")
+    auth = AuthStorage()                      # 读取 ~/.pi/agent/auth.json 与环境变量
+    options = StreamOptions(api_key=auth.resolve_api_key(model.provider))
+    context = Context(
+        system_prompt="You are a helpful assistant.",
+        messages=[UserMessage(content="Say hi in five words.", timestamp=0)],
+    )
+
+    async for event in stream_simple(model, context, options):
+        if event.type == "text_delta":
+            print(event.delta, end="", flush=True)
+    print()
+
+asyncio.run(main())
+```
+
+直接驱动 agent 循环、注册自定义工具的完整写法见
+[`examples/offline_agent.py`](examples/offline_agent.py)。
+
+### 运行测试
+
+```bash
+uv run pytest -q
+```
+
+全部测试离线运行，不访问网络，不需要 API key —— provider 层用 `httpx.MockTransport` 喂入固定的
+SSE 字节，agent 循环用脚本化的 faux stream 驱动。
+
+## 功能
+
+### 图片（多模态）
+
+三个入口最终都变成同一种 `ImageContent` 块交给 provider：
+
+| 入口 | 用法 |
+|---|---|
+| 浏览器 | 点输入框左侧 **+** 选图，或直接粘贴 / 拖入图片；发送前在浏览器里缩到长边 1568 并转 JPEG |
+| `read` 工具 | 模型读取 `.png` / `.jpg` / `.gif` / `.webp` / `.bmp` 时，文件内容作为图片附件返回 |
+| CLI | `pi-py --image shot.png "…"`（可重复） |
+
+浏览器与其它 RPC 客户端走命令协议的 `images` 字段：
+
+```json
+{"type": "prompt", "message": "这张图里是什么？", "images": [
+  {"type": "image", "mimeType": "image/png", "data": "<base64>"}
+]}
+```
+
+只接受**内联 base64**（也接受 `data:` URL）——服务端不会按调用方给的路径读文件，也不会代
+调用方请求 URL。上限是单张 10 MiB、一次 8 张；`mimeType` 缺失时必须是 `data:image/...;base64,`
+形式。浏览器发送前会压缩，直接调协议时注意 WebSocket 单帧默认上限（uvicorn 16 MiB）。
+图片块会随会话落盘，重开会话后仍能看到。
+
+### 后台 subagent
+
+模型可以把任务委派给后台子 agent，自己继续干活；子 agent 完成后结果以一条通知回到父对话。
+两个后端：`spawn`（子 agent 从空对话开始）与 `fork`（子 agent 继承父对话**已完成**的轮次，
+不含正在进行的一轮）。
+
+```bash
+# 模型自己决定何时调用 subagent / subagent_fork；这里只是普通的一次对话
+pi-py "把这三份资料的调研拆给子 agent 并行做，最后汇总"
+```
+
+每个子 agent 是一个真正的 Session：独立的 JSONL 文件、header 里记录 `parentSession`、在 Web
+会话列表里可见。委派工具**立即返回**，不阻塞父；上限（默认深度 1、并发 8）是快速失败而不是
+排队。完整语义、配置与已知限制见 [`docs/SUBAGENTS.md`](docs/SUBAGENTS.md)。
+
+### 扩展（Extensions）
+
+扩展是普通 Python 模块，暴露 `setup(pi)` 工厂，可以注册工具、命令，或拦截事件：
+
+```python
+# <project>/.pi/extensions/guard.py
+from pi_coding_agent.extensions import ToolCallEventResult
+
+def setup(pi):
+    pi.on("tool_call", guard)
+
+def guard(event, ctx):
+    if event.tool_name == "bash" and "rm -rf" in (event.input or {}).get("command", ""):
+        return ToolCallEventResult(block=True, reason="refusing to run rm -rf")
+```
+
+发现位置与 pi 一致（项目 `.pi/extensions/` → 全局 `<agent_dir>/extensions/`，也支持
+`-e/--extension` 与 pip entry point）。**项目本地扩展只在项目被信任后加载**——这是唯一的门控；
+和 pi 一样，**没有沙箱**，扩展以你的完整权限运行。
+
+完整设计、事件表与合并语义见 [`docs/EXTENSIONS.md`](docs/EXTENSIONS.md)。
+
+### 插件（Plugins）
+
+插件是可安装、可按应用启停的可执行扩展：一个目录（`plugin.json` + `setup(api)`），可以注册
+模型工具、斜杠命令或事件处理器。它和上面的扩展共用同一套注册面，区别在**治理**：有 manifest、
+有安装/卸载、按用户+应用启用、卸载会驱逐已加载它的 worker。
+
+```python
+# <data_root>/plugins/hello-pi/main.py
+from pi_coding_agent.plugins import PluginAPI
+
+def setup(api: PluginAPI) -> None:
+    @api.register_tool(
+        name="hello_plugin",
+        description="Return a greeting.",
+        parameters={"type": "object", "properties": {}},
+    )
+    async def hello_plugin(tool_call_id, args, signal, on_update):
+        return "hello"          # 直接返回字符串即可
+```
+
+本地四步（不用起服务）：`new` → `check` → `dev` → `pack`，见
+[`plugin-kit/`](plugin-kit/README.md)。安装走插件页上传 zip，或从市场装；启用后下一条消息生效。
+
+官方起点包：[`plugins/`](plugins/README.md)——临床计算器、PubMed 检索、网页抓取、CSV 工具，
+四个可直接装的插件，也是四种典型写法的样板。
+
+团队成员不装也能先提交：插件页「提交插件」进入待审队列，管理员在「待审」页安装或驳回。
+每个插件条目会显示实时加载状态（已加载哪些工具 / 失败原因），不用再翻服务端日志。
+
+- 完整契约：[`docs/PLUGINS.md`](docs/PLUGINS.md)
+- 与 DSH 的差距、取舍和「用户自服务」路线：[`docs/PLUGIN-PLATFORM-GAP.md`](docs/PLUGIN-PLATFORM-GAP.md)
+- 让 agent 帮你写：[`template/skills/plugin-creator`](template/skills/plugin-creator/SKILL.md)
+
+### 技能（Skills）
+
+一个技能是「一个目录 + `SKILL.md`」（YAML frontmatter + Markdown 正文），可以带 `scripts/`、
+`references/`、`assets/`。系统提示词只注入 name / description / location，正文由模型按需
+`read`——渐进披露，不是把全文塞进上下文。
+
+发现位置（低优先级在前）：
+
+| 位置 | 用途 |
+|---|---|
+| `~/.agents/skills/` | 与本机其他 agent 工具共享 |
+| `~/.pi/agent/skills/` | 用户级，跟着你走 |
+| `.agents/skills/`（cwd 及祖先目录） | 跨工具的项目级 |
+| `.pi/skills/`（需项目受信任） | pi 自己的项目级 |
+| `<agent_dir>/skills/` | 部署配置目录；团队模式从模板播种 |
+
+校验是**失败即跳过**（上游 pi 只警告）：`name` 必须匹配 `^[a-z0-9-]+$` 且 ≤64 字符；
+`description` 必须是 YAML **字符串**、1–1024 字符。写成 `description: [TODO: ...]` 会被 YAML
+解析成数组，整个技能不出现在提示词里，也没有明显报错。
+
+两种调用方式：模型按 description 自行加载；或用户显式 `/skill:<name> args`。
+`disable-model-invocation: true` 的技能只保留后者。
+
+#### 默认技能
+
+[`template/skills/`](template/skills) 是随仓库分发的默认技能：`start.sh` 启动时把它链进模板
+agent 目录，团队模式下新用户从模板播种时共享同一份（软链而非拷贝，改一处所有人都生效）。
+当前包含 `skill-creator`（怎么写技能）、`plugin-creator`（让 agent 按访谈生成可安装的插件）
+与 `documents`（DOCX 读写、修订、渲染核对）。
+
+```bash
+# 新建一个默认技能（不带 --path 时建在 ~/.pi/agent/skills/）
+.venv/bin/python template/skills/skill-creator/scripts/init_skill.py my-skill --path template/skills
+.venv/bin/python template/skills/skill-creator/scripts/quick_validate.py template/skills/my-skill
+```
+
+`quick_validate.py` 与加载器同口径（含 frontmatter 类型检查），别用宽松的其他校验器。
+接线方式与注意事项见 [`template/README.md`](template/README.md)。
+
+#### 市场
+
+浏览器 UI 的「市场」页由一份策划目录驱动，条目写在
+[`packages/pi-server/src/pi_server/market.py`](packages/pi-server/src/pi_server/market.py) 的
+`ITEMS` 里（`kind` 为 `skill` 或 `plugin`）。`name` / `description` / `source` / `tags` /
+`version` 直接决定卡片、来源标签、筛选与搜索。装技能 = 往 `<agent_dir>/skills/<id>/SKILL.md`
+写一个文件；装插件 = 把 `package` 目录拷进 `<data_root>/plugins/`。
+
+```python
+MarketItem(
+    kind="skill", id="my-skill",                 # id 即安装目录名，须与 skill 的 name 一致
+    name="…", description="…", version="1.0.0",
+    author="平台团队", source="团队", tags=("办公",),
+    content=_skill("my-skill", "…", """## 何时使用\n…"""),
+)
+```
+
+改完要**重启服务**（模块在启动时 import）。`curl '/api/market?kind=skill'` 或
+`uv run pytest tests/test_market.py` 可验证；市场只在团队模式可用（single 模式返回 503）。
+
+两个已知限制：
+
+- **市场只分发单文件技能**：`install_market_skill()` 只写 `SKILL.md`，`scripts/` 与
+  `references/` 不会跟着走。带脚本的技能走上面「默认技能」那条路。
+- **安装会写穿软链**：团队模式下 `<agent_dir>/skills` 指向模板，所以点「安装」等于改共享模板
+  （默认配置里就是改仓库工作区），且所有用户同时显示「已安装」。要让安装只影响个人，需要把
+  模板技能拷贝进各用户目录、断开这条链。
+
+## 浏览器 UI
 
 Markdown 渲染的对话流、实时流式输出、工具调用卡片（含运行中转圈与错误态）、思考块折叠、
 斜杠命令自动补全、会话列表与切换/新建/克隆、模型与思考等级选择、扩展弹出的对话框
 （**可在流式输出过程中作答**）、断线自动重连。
+
+图片：输入框支持**选图 / 粘贴 / 拖入**，发送前显示缩略图；用户消息与工具（如 `read`）返回的
+图片都会在对话里渲染。多图单次发送、图片随会话持久化。
 
 ![会话界面：用户提问、工具调用卡片与 Markdown 回答](docs/screenshot-session.png)
 
@@ -326,7 +433,7 @@ uv run python examples/demo_model_server.py --port 8791
 配置方式见 `tests/conftest.py` 里的 `write_agent_config`。注意它只会回那两段固定内容，
 不要误以为模型坏了。
 
-## 团队部署（多租户）
+## 团队部署
 
 同一套服务端也支持公司内网多人共用，用 `--auth-mode team` 打开：
 
@@ -380,88 +487,24 @@ python deploy/loadtest.py --url http://127.0.0.1:8787 -u admin --password-stdin 
     --users 20 --turns 3 --create-users --verify-isolation
 ```
 
-`uv run pytest tests/test_multi_user.py` 覆盖同一批性质但离线、确定性：并发互不干扰、每人只见自己的工作区与会话、用量与审计按 uid 归属、满员时拒绝而非降级、一个人的配额用尽不影响他人。
+`uv run pytest tests/test_multi_user.py` 覆盖同一批性质但离线、确定性：并发互不干扰、每人只见自己
+的工作区与会话、用量与审计按 uid 归属、满员时拒绝而非降级、一个人的配额用尽不影响他人。
 
-## 快速开始
+## 架构与实现
 
-需要 Python 3.11+ 与 [uv](https://docs.astral.sh/uv/)。
+### 包与当前状态
 
-```bash
-uv sync
-```
+已实现并可测试（`packages/` 下四个包，对应上游的 npm 包边界）：
 
-### 作为库使用
+| 包 | 对应上游 | 内容 |
+|---|---|---|
+| `pi-ai` | `@earendil-works/pi-ai` | 消息/内容块/Usage/Model 类型与 JSON 互转、12 种流式事件的 `EventStream`、provider 注册表、Anthropic 与 OpenAI 兼容适配器、faux 测试 provider、工具参数校验、凭据存储、模型目录、成本计算 |
+| `pi-agent-core` | `@earendil-works/pi-agent-core` | agent 循环（含 steering / follow-up / 工具批 / 中止语义）、`Agent` 类（状态归约、队列、生命周期） |
+| `pi-coding-agent` | `@earendil-works/pi-coding-agent` | JSONL v3 会话树、内置工具（read/write/edit/bash/grep/find/ls）、系统提示词组装、skills、资源发现、settings、`AgentSession` 编排、print/json/rpc 三种模式、扩展协议、会话替换、**后台 subagent（spawn/fork）** |
+| `pi-server` | *（无对应上游包）* | 浏览器 UI 的服务端：把同一套命令协议架在 WebSocket 上，并托管 React 单页应用 |
 
-一个**完全离线、可直接运行**的完整示例（真实工具 + 真实会话落盘，但用确定性的 faux provider
-替代 LLM，因此不需要网络和 API key）：
-
-```bash
-uv run python examples/offline_agent.py
-```
-
-下面是各层的最小用法。
-
-```python
-import asyncio
-from pi_ai import AuthStorage, Context, StreamOptions, UserMessage, get_model, stream_simple
-
-async def main() -> None:
-    model = get_model("anthropic", "claude-sonnet-4-5")
-    auth = AuthStorage()                      # 读取 ~/.pi/agent/auth.json 与环境变量
-    options = StreamOptions(api_key=auth.resolve_api_key(model.provider))
-    context = Context(
-        system_prompt="You are a helpful assistant.",
-        messages=[UserMessage(content="Say hi in five words.", timestamp=0)],
-    )
-
-    async for event in stream_simple(model, context, options):
-        if event.type == "text_delta":
-            print(event.delta, end="", flush=True)
-    print()
-
-asyncio.run(main())
-```
-
-直接驱动 agent 循环（自带工具）：
-
-```python
-from pi_agent import Agent, AgentContext, AgentTool, AgentToolResult
-from pi_ai import TextContent
-
-async def echo(tool_call_id, params, signal, on_update) -> AgentToolResult:
-    return AgentToolResult(content=[TextContent(text=f"echoed: {params['value']}")])
-
-tool = AgentTool(
-    name="echo",
-    description="Echo a value",
-    parameters={"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]},
-    execute=echo,
-)
-```
-
-### 运行测试
-
-```bash
-uv run pytest -q
-```
-
-全部测试离线运行，不访问网络，不需要 API key —— provider 层用 `httpx.MockTransport` 喂入固定的 SSE 字节，
-agent 循环用脚本化的 faux stream 驱动。
-
-### 验证强度与限制
-
-本仓库的验证依赖三根支柱：
-
-1. **上游对齐**：从上游源码逐段移植并保留语义，关键行为（事件顺序、截断提示文本、成本公式、
-   会话文件形状）逐字对齐而不是"大致相同"。
-2. **黄金用例**：例如 agent 循环的 12 事件序列直接取自上游测试的断言；
-   会话存储有手工构造的 v3 JSONL 黄金文件，验证读取、上下文重建与再序列化。
-3. **真实线格式**：provider 适配器的请求体与 SSE 解析由 MockTransport 断言到字段级。
-
-**已知限制**：本仓库开发环境中没有任何 provider 的真实 API key，因此**没有对真实服务做过在线验证**。
-首次接入时请先用一个小 prompt 验证所选 provider 的适配器。
-
-## 设计要点
+**明确不在 v0.1**：终端 TUI、跨语言（TypeScript）扩展兼容、CBOR 协议栈、SQLite 会话后端、
+telemetry、evals。理由见架构文档第 3 节。
 
 ### 与 pi 互通
 
@@ -491,7 +534,7 @@ agent 循环用脚本化的 faux stream 驱动。
 `ignore`、`partial-json`、`chalk`、`proper-lockfile` 等在 Python 侧分别用内联实现、
 `difflib`、自写的 ignore 匹配、`json` 容错解析与标准库替代。
 
-## 目录结构
+### 目录结构
 
 ```
 packages/pi-ai/src/pi_ai/                 provider 抽象、消息类型、事件流、凭据、模型目录
@@ -509,7 +552,9 @@ tests/                                    按模块划分的测试
 docs/research/                            上游逐层调研笔记
 ```
 
-## 已知取舍
+## 已知取舍与限制
+
+### 工程取舍
 
 - `grep` / `find` 是纯 Python 实现（不依赖 `ripgrep` / `fd`），`.gitignore` 支持为简化版；
 - `edit` 不做上游的模糊匹配兜底之外的全部启发式；
@@ -517,12 +562,21 @@ docs/research/                            上游逐层调研笔记
 - 模型目录是可再生数据包 `pi_ai/data/models.json`，只收录了少量主流模型；
 - 不实现跨语言的 TS 扩展兼容（同进程的 renderer / `AbortSignal` / 参数原地修改语义无法跨边界存活）。
 
+### 验证强度
+
+本仓库的验证依赖三根支柱：
+
+1. **上游对齐**：从上游源码逐段移植并保留语义，关键行为（事件顺序、截断提示文本、成本公式、
+   会话文件形状）逐字对齐而不是"大致相同"。
+2. **黄金用例**：例如 agent 循环的 12 事件序列直接取自上游测试的断言；
+   会话存储有手工构造的 v3 JSONL 黄金文件，验证读取、上下文重建与再序列化。
+3. **真实线格式**：provider 适配器的请求体与 SSE 解析由 MockTransport 断言到字段级。
+
+### 已知限制
+
+本仓库开发环境中没有任何 provider 的真实 API key，因此**没有对真实服务做过在线验证**。
+首次接入时请先用一个小 prompt 验证所选 provider 的适配器。
+
 ## 许可
 
-上游 `pi` 为 MIT。本移植版沿用 MIT，见 [`LICENSE`](LICENSE)。
-
-## 联系
-
-有问题、想交流移植细节，或者只是想催一下进度，都欢迎加微信（扫码时注明来意）。
-
-<img src="docs/weichat.png" alt="微信二维码" width="240">
+本项目为公司内部使用。上游 `pi` 为 MIT，本移植版沿用 MIT，见 [`LICENSE`](LICENSE)。

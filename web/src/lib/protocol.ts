@@ -59,6 +59,9 @@ export interface ToolCallBlock {
 
 export interface ImageBlock {
   type: 'image'
+  /** base64 payload without a data: prefix, as the server serialises it. */
+  data?: string
+  mimeType?: string
   [key: string]: unknown
 }
 
@@ -87,6 +90,10 @@ export function isThinkingBlock(block: ContentBlock): block is ThinkingBlock {
 
 export function isToolCallBlock(block: ContentBlock): block is ToolCallBlock {
   return block.type === 'toolCall'
+}
+
+export function isImageBlock(block: ContentBlock): block is ImageBlock {
+  return block.type === 'image'
 }
 
 export interface Cost {
@@ -178,13 +185,10 @@ export type Message =
 export type StreamingBehavior = 'steer' | 'followUp'
 
 export interface ImageAttachment {
-  type?: string
-  mimeType?: string
-  /** base64 payload, path or url depending on how the server ingests images. */
-  data?: string
-  path?: string
-  url?: string
-  [key: string]: unknown
+  type: 'image'
+  mimeType: string
+  /** base64 payload without a data: prefix. */
+  data: string
 }
 
 /** Every command carries an `id` so the reply can be correlated. */

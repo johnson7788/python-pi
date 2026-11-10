@@ -22,6 +22,7 @@ from pi_ai import AuthenticationError, ModelRegistry
 
 from ._version import __version__
 from .bootstrap import BootstrapOptions, bootstrap, resolve_project_trust, select_model
+from .images import ImageInputError, image_from_file
 
 EXIT_OK = 0
 EXIT_AGENT_ERROR = 1
@@ -50,6 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", help="Model id, 'provider/id', or a glob such as 'anthropic/*'.")
     parser.add_argument("--thinking", help="Thinking level: off|minimal|low|medium|high|xhigh|max.")
     parser.add_argument("--api-key", help="Runtime API key for this process only (never persisted).")
+    parser.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Attach an image file to the prompt (repeatable; print and json modes).",
+    )
 
     parser.add_argument("--cwd", help="Working directory (defaults to the current directory).")
     parser.add_argument("--agent-dir", help="Global config directory (defaults to ~/.pi/agent).")
@@ -113,6 +121,16 @@ async def run(argv: Sequence[str] | None = None) -> int:
         print("pi-py: no prompt given (pass one as an argument or pipe it on stdin)", file=sys.stderr)
         return EXIT_USAGE
 
+    images = []
+    if args.mode != "rpc" and args.image:
+        try:
+            images = [
+                image_from_file(path, cwd=cwd, where=f"--image {path}") for path in args.image
+            ]
+        except ImageInputError as error:
+            print(f"pi-py: {error}", file=sys.stderr)
+            return EXIT_USAGE
+
     state = await bootstrap(
         BootstrapOptions(
             cwd=cwd,
@@ -146,8 +164,8 @@ async def run(argv: Sequence[str] | None = None) -> int:
                 extension_runner=state.extension_runner,
             )
         if args.mode == "json":
-            return await _lazy("run_json_mode")(state.session, prompt)
-        return await _lazy("run_print_mode")(state.session, prompt)
+            return await _lazy("run_json_mode")(state.session, prompt, images=images)
+        return await _lazy("run_print_mode")(state.session, prompt, images=images)
     finally:
         if state.extension_runner is not None:
             for record in state.extension_runner.errors:

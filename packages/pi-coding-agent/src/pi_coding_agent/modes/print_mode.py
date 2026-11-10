@@ -14,9 +14,9 @@ they arrive and then returns the same exit-code contract:
 from __future__ import annotations
 
 import sys
-from typing import Any, TextIO
+from typing import Any, Sequence, TextIO
 
-from pi_ai import TextContent
+from pi_ai import ImageContent, TextContent
 
 from ..agent_session import AgentSession
 
@@ -29,7 +29,11 @@ def _last_assistant_message(session: AgentSession) -> Any | None:
 
 
 async def run_print_mode(
-    session: AgentSession, prompt: str, *, output: TextIO | None = None
+    session: AgentSession,
+    prompt: str,
+    *,
+    images: Sequence[ImageContent] | None = None,
+    output: TextIO | None = None,
 ) -> int:
     """Send ``prompt`` and stream the assistant reply to ``output`` (stdout)."""
     stream: TextIO = output if output is not None else sys.stdout
@@ -53,7 +57,7 @@ async def run_print_mode(
 
     unsubscribe = session.subscribe(_on_event)
     try:
-        await session.prompt(prompt)
+        await session.prompt(prompt, images=images)
         await session.wait_for_idle()
         # A background subagent may still be running; wait for it (and for the
         # continuation its notice triggers) so one-shot mode does not exit early.

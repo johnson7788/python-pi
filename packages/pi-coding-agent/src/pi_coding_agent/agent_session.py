@@ -215,7 +215,9 @@ def _content_text(content: Any) -> str:
 
 
 def _user_message(text: str, images: Sequence[ImageContent] | None = None) -> UserMessage:
-    content: list[Any] = [TextContent(text=text)]
+    # An image-only prompt is legal over the protocol; an empty text block adds
+    # nothing and some providers reject content parts with no text.
+    content: list[Any] = [TextContent(text=text)] if text else []
     if images:
         content.extend(images)
     return UserMessage(content=content, timestamp=int(time.time() * 1000))

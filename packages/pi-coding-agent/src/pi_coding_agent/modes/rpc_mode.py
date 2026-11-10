@@ -30,6 +30,7 @@ from typing import Any, BinaryIO, TextIO
 from pi_ai import Model, get_supported_thinking_levels
 
 from ..agent_session import AgentSession
+from ..images import ImageInputError, normalize_images
 from ..resource_loader import ResourceLoader
 from ..session_manager import entry_to_json
 from .json_event import to_json_event
@@ -393,17 +394,25 @@ class RpcMode:
     # -- prompting ---------------------------------------------------------------------
 
     async def _cmd_prompt(self, command: dict[str, Any], request_id: str | None):
-        message = command.get("message")
-        if not isinstance(message, str) or not message:
-            return failure(request_id, "prompt", "prompt requires a non-empty string 'message'")
+        try:
+            images = normalize_images(command.get("images"))
+        except ImageInputError as error:
+            return failure(request_id, "prompt", str(error))
 
-        images = command.get("images")
+        message = command.get("message")
+        if not isinstance(message, str) or (not message and not images):
+            return failure(
+                request_id,
+                "prompt",
+                "prompt requires a non-empty string 'message' (or at least one image)",
+            )
+
         behavior = command.get("streamingBehavior")
         if behavior not in (None, "steer", "followUp"):
             return failure(request_id, "prompt", f"Invalid streamingBehavior: {behavior!r}")
 
         task = asyncio.ensure_future(
-            self.session.prompt(message, images=images, streaming_behavior=behavior)
+            self.session.prompt(message, images=images or None, streaming_behavior=behavior)
         )
         self._prompt_task = task
         task.add_done_callback(self._consume_prompt_result)
@@ -437,14 +446,22 @@ class RpcMode:
         message = command.get("message")
         if not isinstance(message, str) or not message:
             return failure(request_id, "steer", "steer requires a non-empty string 'message'")
-        await self.session.steer(message, command.get("images"))
+        try:
+            images = normalize_images(command.get("images"))
+        except ImageInputError as error:
+            return failure(request_id, "steer", str(error))
+        await self.session.steer(message, images or None)
         return success(request_id, "steer")
 
     async def _cmd_follow_up(self, command: dict[str, Any], request_id: str | None):
         message = command.get("message")
         if not isinstance(message, str) or not message:
             return failure(request_id, "follow_up", "follow_up requires a non-empty string 'message'")
-        await self.session.follow_up(message, command.get("images"))
+        try:
+            images = normalize_images(command.get("images"))
+        except ImageInputError as error:
+            return failure(request_id, "follow_up", str(error))
+        await self.session.follow_up(message, images or None)
         return success(request_id, "follow_up")
 
     async def _cmd_abort(self, command: dict[str, Any], request_id: str | None):

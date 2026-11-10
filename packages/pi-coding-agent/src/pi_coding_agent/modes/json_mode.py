@@ -21,7 +21,9 @@ because RPC mode emits exactly the same event shapes.
 from __future__ import annotations
 
 import sys
-from typing import Any, TextIO
+from typing import Any, Sequence, TextIO
+
+from pi_ai import ImageContent
 
 from ..agent_session import AgentSession
 from .json_event import to_json_event
@@ -35,7 +37,13 @@ def _last_assistant_message(session: AgentSession) -> Any | None:
     return None
 
 
-async def run_json_mode(session: AgentSession, prompt: str, *, output: TextIO | None = None) -> int:
+async def run_json_mode(
+    session: AgentSession,
+    prompt: str,
+    *,
+    images: Sequence[ImageContent] | None = None,
+    output: TextIO | None = None,
+) -> int:
     """Send ``prompt`` and emit the session header plus every agent event."""
     stream: TextIO = output if output is not None else sys.stdout
 
@@ -54,7 +62,7 @@ async def run_json_mode(session: AgentSession, prompt: str, *, output: TextIO | 
 
     unsubscribe = session.subscribe(_on_event)
     try:
-        await session.prompt(prompt)
+        await session.prompt(prompt, images=images)
         await session.wait_for_idle()
         # Keep the event stream open until background subagents settle.
         await session.wait_for_background_work()
