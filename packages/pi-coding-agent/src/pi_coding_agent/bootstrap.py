@@ -286,7 +286,7 @@ def load_extension_runner(
             print(f"pi-py: {message}", file=sys.stderr)
     if not result.apis:
         return None
-    return ExtensionRunner(result.apis)
+    return ExtensionRunner(result.apis, diagnostics=result.diagnostics)
 
 
 # --------------------------------------------------------------------------------------

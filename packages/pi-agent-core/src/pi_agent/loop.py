@@ -720,9 +720,22 @@ async def _execute_prepared_tool_call(
 
     try:
         assert prepared.tool.execute is not None, f"Tool {prepared.tool.name} has no execute function"
-        result = await prepared.tool.execute(
+        call = prepared.tool.execute(
             prepared.tool_call.id, prepared.args, signal, on_update
         )
+        timeout = getattr(prepared.tool, "timeout_seconds", None)
+        if timeout is not None and timeout > 0:
+            try:
+                result = await asyncio.wait_for(call, timeout=timeout)
+            except asyncio.TimeoutError:
+                # Cancelling the await is best effort: blocking work already handed to
+                # a thread keeps running until it returns.  Tools that spawn processes
+                # should also watch the abort signal.
+                raise TimeoutError(
+                    f"tool {prepared.tool.name} exceeded {timeout:g}s"
+                ) from None
+        else:
+            result = await call
         accepting[0] = False
         if update_tasks:
             await asyncio.gather(*update_tasks, return_exceptions=True)

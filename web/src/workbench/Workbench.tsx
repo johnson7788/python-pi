@@ -3685,6 +3685,24 @@ interface PluginRow {
   enabled: boolean
 }
 
+interface PluginStatusRow {
+  id: string
+  loaded: boolean
+  tools: string[]
+  errors: string[]
+  warnings: string[]
+}
+
+interface PendingPluginRow {
+  id: string
+  pluginId: string
+  name: string
+  version: string
+  description: string
+  submitter: string
+  createdAt: number
+}
+
 interface AdminUser {
   uid: string
   username: string
@@ -3833,14 +3851,100 @@ function HelpView({ authMode }: { authMode: string }) {
   )
 }
 
+function PendingPanel({ onChanged }: { onChanged: () => void }) {
+  const [items, setItems] = useState<PendingPluginRow[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+
+  const load = () => {
+    setItems(null)
+    setError(null)
+    api
+      .get<{ submissions: PendingPluginRow[] }>('/api/plugin-submissions')
+      .then((payload) => setItems(payload.submissions))
+      .catch((failure: unknown) => {
+        setItems([])
+        setError(failure instanceof Error ? failure.message : '读取待审插件失败')
+      })
+  }
+
+  useEffect(load, [])
+
+  const act = async (item: PendingPluginRow, action: 'approve' | 'reject') => {
+    setBusy(item.id)
+    setError(null)
+    try {
+      if (action === 'approve') {
+        await api.post(`/api/plugin-submissions/${encodeURIComponent(item.id)}/approve`, {})
+      } else {
+        await api.del(`/api/plugin-submissions/${encodeURIComponent(item.id)}`)
+      }
+      load()
+      onChanged()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '操作失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  if (items === null) {
+    return <div className="wb-empty"><b>正在读取待审插件…</b></div>
+  }
+  if (items.length === 0) {
+    return (
+      <div className="wb-empty">
+        <b>没有待审插件</b>
+        <p>作者在「已安装」页点「提交插件」上传 zip；审核通过后才会真正安装。</p>
+      </div>
+    )
+  }
+  return (
+    <div className="wb-plugin-list">
+      {error ? <div className="wb-alert">{error}</div> : null}
+      {items.map((item) => (
+        <article key={item.id} className="wb-plugin">
+          <span className="wb-plugin-icon"><Icon name="plugin" size={19} /></span>
+          <div className="wb-plugin-body">
+            <b>{item.name} <i>v{item.version}</i></b>
+            <p>{item.description || '没有描述'}</p>
+            <p className="wb-plugin-status">
+              提交人 {item.submitter || '未知'} · {new Date(item.createdAt * 1000).toLocaleString()}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="wb-link"
+            onClick={() => void act(item, 'approve')}
+            disabled={busy === item.id}
+          >
+            安装
+          </button>
+          <button
+            type="button"
+            className="wb-link wb-link--danger"
+            onClick={() => void act(item, 'reject')}
+            disabled={busy === item.id}
+          >
+            驳回
+          </button>
+        </article>
+      ))}
+    </div>
+  )
+}
+
 function PluginsView({ appId }: { appId: string }) {
   const [plugins, setPlugins] = useState<PluginRow[] | null>(null)
-  const [view, setView] = useState<'installed' | 'market'>('installed')
+  const [view, setView] = useState<'installed' | 'market' | 'pending'>('installed')
   const [canManage, setCanManage] = useState(false)
   const [canInstall, setCanInstall] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [status, setStatus] = useState<Record<string, PluginStatusRow>>({})
   const [busy, setBusy] = useState<string | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
+  const submitRef = useRef<HTMLInputElement>(null)
 
   const load = () => {
     setPlugins(null)
@@ -3858,6 +3962,15 @@ function PluginsView({ appId }: { appId: string }) {
         setPlugins([])
         setError(failure instanceof Error ? failure.message : '读取插件失败')
       })
+    // Status is best effort: a user with no live worker yet still sees the list.
+    api
+      .get<{ plugins: PluginStatusRow[] }>(`/api/plugins/status?app=${encodeURIComponent(appId)}`)
+      .then((payload) => {
+        const next: Record<string, PluginStatusRow> = {}
+        for (const item of payload.plugins) next[item.id] = item
+        setStatus(next)
+      })
+      .catch(() => setStatus({}))
   }
 
   useEffect(load, [appId])
@@ -3866,10 +3979,27 @@ function PluginsView({ appId }: { appId: string }) {
     setBusy('install')
     setError(null)
     try {
-      await api.upload('/api/plugins/install', await file.arrayBuffer())
+      await api.postRaw('/api/plugins/install', await file.arrayBuffer())
       load()
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '安装失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const submit = async (file: File) => {
+    setBusy('submit')
+    setError(null)
+    setNotice(null)
+    try {
+      const payload = await api.postRaw<{ pluginId: string; name: string }>(
+        '/api/plugin-submissions',
+        await file.arrayBuffer(),
+      )
+      setNotice(`已提交「${payload.name}」，等待管理员审核后即可安装。`)
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '提交失败')
     } finally {
       setBusy(null)
     }
@@ -3921,6 +4051,9 @@ function PluginsView({ appId }: { appId: string }) {
           <div className="wb-tabs">
             <button type="button" className={view === 'installed' ? 'is-active' : ''} onClick={() => setView('installed')}>已安装</button>
             <button type="button" className={view === 'market' ? 'is-active' : ''} onClick={() => setView('market')}>市场</button>
+            {canInstall ? (
+              <button type="button" className={view === 'pending' ? 'is-active' : ''} onClick={() => setView('pending')}>待审</button>
+            ) : null}
           </div>
           {view === 'installed' && canInstall ? (
             <>
@@ -3940,10 +4073,31 @@ function PluginsView({ appId }: { appId: string }) {
               />
             </>
           ) : null}
+          {view === 'installed' && canManage ? (
+            <>
+              <button type="button" className="wb-button" onClick={() => submitRef.current?.click()} disabled={busy === 'submit'}>
+                {busy === 'submit' ? '提交中…' : '提交插件'}
+              </button>
+              <input
+                ref={submitRef}
+                type="file"
+                accept=".zip,application/zip"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (file) void submit(file)
+                }}
+              />
+            </>
+          ) : null}
         </header>
 
+        {notice ? <div className="wb-alert">{notice}</div> : null}
         {view === 'market' ? (
           <MarketPanel kind="plugin" onInstalled={load} />
+        ) : view === 'pending' ? (
+          <PendingPanel onChanged={load} />
         ) : (
           <>
         {error ? <div className="wb-alert">{error}</div> : null}
@@ -3971,6 +4125,19 @@ function PluginsView({ appId }: { appId: string }) {
                 <div className="wb-plugin-body">
                   <b>{plugin.name} <i>v{plugin.version}</i></b>
                   <p>{plugin.description || '没有描述'}</p>
+                  {status[plugin.id] ? (
+                    <p className="wb-plugin-status">
+                      {status[plugin.id].errors.length > 0
+                        ? `加载失败：${status[plugin.id].errors[0]}`
+                        : status[plugin.id].loaded
+                          ? `已加载 ${status[plugin.id].tools.length} 个工具${
+                              status[plugin.id].tools.length
+                                ? `：${status[plugin.id].tools.join('、')}`
+                                : ''
+                            }`
+                          : '尚未加载（下一条消息生效）'}
+                    </p>
+                  ) : null}
                   <div className="wb-plugin-caps">
                     {plugin.capabilities.length === 0 ? <span>tools</span> : plugin.capabilities.map((cap) => <span key={cap}>{cap}</span>)}
                   </div>

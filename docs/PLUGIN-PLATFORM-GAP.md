@@ -183,7 +183,7 @@ def setup(api):
 
 **A**：`docs/user/develop/` 下有 basic（tool/config/publish）、framework（index/service/events）、practice（llm-adapter/dynamic-cordis）三组教程，仓库整体 2102 篇 `*.zh.md`；`--patch` 可以把本地 TS 文件直接挂进 Web profile 热调；`--dump-config` 看最终组合；tool catalog 由脚本从真实插件生成。
 
-**B**：`docs/PLUGINS.md`（已补到 110 行）+ `docs/EXTENSIONS.md`（140 行）+ 一个 20 行示例；没有脚手架、没有校验器、没有本地运行器、没有「我的插件加载了吗」的可见性。而且**这个唯一的示例曾经是坏的**（2026-11 已修）：
+**B（本次补齐前）**：只有 `docs/PLUGINS.md` + `docs/EXTENSIONS.md` + 一个 20 行示例；没有脚手架、没有校验器、没有本地运行器、没有「我的插件加载了吗」的可见性。现在前三个由 `plugin-kit/` 补上，最后一个是 `/api/plugins/status` + 插件页状态行。而**这个唯一的示例曾经是坏的**（2026-11 已修）：
 
 ```python
 # examples/plugins/hello-pi/main.py:24（修复前）
@@ -194,7 +194,8 @@ return ToolResult(text=f"Hello, {name}!")   # TypeError: unexpected keyword argu
 
 **一个 Python 开发者从零到「模型调用成功」现在要跨过**：manifest 字段与 entry 规则、`setup` 的三种别名、工具名全局唯一、装饰器的四种参数形态、worker 重启才生效、错误只在服务端 stderr。**预计 2–4 小时，失败率高**。
 
-**补法**：见 `plugin-kit/`（本次已交付 MVP）与 §4 的「AI 生产线」。
+**已经补的**：`plugin-kit/`（`new/check/dev/pack`）、`/api/plugins/status`、插件页状态行、`api.config`、
+per-tool 超时、投稿箱。**还差的**：`requires` 运行时校验、版本目录与回滚、L1 声明式工具。
 
 ### 2.8 安全与治理 🟠
 
@@ -313,8 +314,8 @@ tools:
 | 0 | 修 `hello-pi` 与文档的错误写法（**已完成**） | `examples/plugins/hello-pi/main.py`、`docs/PLUGINS.md` | 0.2d | 示例工具真实调用返回文本 |
 | 1 | 插件开发工具 `plugin-kit`（**已完成**） | 新增 `plugin-kit/` | 2d | `new/check/dev/pack` 四个命令在模板上跑通 |
 | 2 | 官方插件包 + 市场条目（**已完成**） | 新增 `plugins/`、`market.py` 4 条 | 2d | 4 个插件通过 `check/dev/pack` 与 pytest；市场可一键安装 |
-| 3 | 加载状态可见 | `registry` 存 diagnostics、`GET /api/plugins/{id}/status`、`PluginsView` 展示 | 2d | 插件坏掉时 UI 显示原因与已注册工具 |
-| 4 | `api.config` 注入 | loader 注入 manifest 默认值 + 部署覆盖 | 0.5d | 同一插件两套配置不改代码 |
+| 3 | 加载状态可见（**已完成**） | `ExtensionRunner` 保留 diagnostics、`GET /api/plugins/status`、`PluginsView` 展示 | 2d | 插件坏掉时 UI 显示原因与已注册工具 |
+| 4 | `api.config` 注入（**已完成**） | loader 读 `plugin.json`：默认值 + `env` 覆盖 | 0.5d | 同一插件两套配置不改代码 |
 | 5 | 文档与技能 | `docs/PLUGIN-DEV.md`、`plugin-creator` skill、README 入口 | 1.5d | 新人按文档 10 分钟跑通首个工具 |
 
 ### P1：可治理、可分发（3–4 周）
@@ -323,9 +324,9 @@ tools:
 |---|---|---|---|
 | 7 | manifest v2 运行时校验（`requires`/`limits`/`permissions`/`config`） | 2d | 不满足 `requires.pi` 拒绝加载并说明原因 |
 | 8 | 生命周期：`api.effect()` + 逆序 dispose | 2d | 反复启停不累积监听器/连接 |
-| 9 | per-tool 超时 + AbortSignal 贯通 + 结果截断 | 2d | 死循环插件只失败一次调用，不拖死 worker |
+| 9 | per-tool 超时（**已完成，最小版**：`limits.timeoutSeconds` → `AgentTool.timeout_seconds`；取消 await，不杀线程） | 2d | 死循环插件只失败一次调用，不拖死 worker |
 | 10 | 最小服务缝：`api.provide/use` + 内置 `http`/`kb`/`cache` | 3d | 两个插件共用同一客户端，不复制代码 |
-| 11 | 投稿箱与审核：作者上传 pending、管理员看 permissions/扫描结果后安装 | 2d | 作者→上线 ≤ 1 个工作日，审核不看代码 |
+| 11 | 投稿箱与审核（**已完成**）：作者提交、管理员在「待审」页安装/驳回 | 2d | 作者→上线 ≤ 1 个工作日，审核不看代码 |
 | 12 | 远端插件索引（兼容 A 的 `format: 1` 子集） | 5d | 换 `PI_MARKET_URL` 即可看到新插件，无需发版 |
 | 13 | L1 声明式工具（只读 HTTP 先行） | 5–7d | 业务同学用 yaml 做出一个可用工具，零 Python |
 | 14 | 版本目录 + 原子切换 + 回滚 | 3d | 升级失败自动回退上一版 |
@@ -404,5 +405,9 @@ UI slot（1 个，先做「会话内卡片」）· 子进程/容器隔离插件�
 | `packages/pi-server/src/pi_server/market.py` | 新增 4 条官方插件条目，市场可一键安装 |
 | `extensions/api.py` + `extensions/loader.py` + `bootstrap.py` | 插件现在拿得到 `api.cwd`（工作区），不再依赖进程 cwd |
 | `packages/pi-coding-agent/.../plugins/__init__.py` | 新增 `workspace_path()`：把相对路径安全地解析到工作区 |
+| `packages/pi-server/.../app.py`（状态/投稿） | `GET /api/plugins/status`、投稿箱四个端点；顺带修了「安装插件」用 PUT 打 POST 路由的 405 |
+| `extensions/runner.py` + `agent_session.py` | 保留加载诊断并暴露 `status()`，UI 才能解释「为什么没生效」 |
+| `pi-agent-core`（`types.py` + `loop.py`） | `AgentTool.timeout_seconds` + agent 循环里的 `wait_for` |
+| `web/src/workbench/Workbench.tsx` | 插件状态行、待审页、提交入口；`api.postRaw` |
 | `examples/plugins/hello-pi/main.py` | 修正为可直接运行的写法 |
-| `docs/PLUGINS.md` | 修正示例，补 config/limits/权限说明 |
+| `docs/PLUGINS.md` | 修正示例，补 config/limits/状态/投稿说明 |

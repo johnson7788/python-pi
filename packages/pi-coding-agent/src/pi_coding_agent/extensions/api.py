@@ -114,6 +114,9 @@ class ExtensionAPI:
         #: process, so ``os.getcwd()`` is shared by every worker; file-based tools
         #: must resolve paths against this instead (see ``plugins.workspace_path``).
         self.cwd = cwd or ""
+        #: Plugin config: manifest defaults overridden by ``env``-named variables.
+        #: Empty for extensions (they have no manifest).
+        self.config: dict[str, Any] = {}
         self.handlers: dict[str, list[ExtensionHandler]] = {}
         self.tools: dict[str, AgentTool] = {}
         self.commands: dict[str, RegisteredCommand] = {}

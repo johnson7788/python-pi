@@ -118,8 +118,8 @@ python3 plugin-kit/pikit.py pack my-plugin --out dist/my-plugin.zip
 
 | 字段 | 谁在读 | 说明 |
 |---|---|---|
-| `config` | `pikit`（现在）/ 宿主（P1） | 默认值由 `pikit` 和未来的 loader 注入到 `api.config` |
-| `limits` | `pikit`（现在） | 超时与结果截断 |
+| `config` | 宿主 + `pikit` | 默认值 / `env` 覆盖由 loader 与 `pikit` 以同一规则注入 `api.config` |
+| `limits` | 宿主 + `pikit` | 宿主用 `timeoutSeconds` 给工具加超时；`pikit dev` 用它约束试跑 |
 | `permissions` | `pikit` 静态对照（现在） | 未来用于启用确认页与隔离决策 |
 | `requires` | `pikit`（现在） | 未来加载前校验，不满足拒绝加载 |
 

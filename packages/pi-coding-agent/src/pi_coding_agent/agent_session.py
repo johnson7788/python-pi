@@ -1084,6 +1084,12 @@ class AgentSession:
         self._base_system_prompt = self._build_system_prompt()
         self._agent.state.system_prompt = self._base_system_prompt
 
+    def extension_status(self) -> dict[str, Any]:
+        """Loaded extension/plugin surface plus load-time diagnostics."""
+        if self._extension_runner is None:
+            return {"extensions": [], "diagnostics": []}
+        return self._extension_runner.status()
+
     def get_commands(self) -> list[dict[str, Any]]:
         """Prompt templates, skills and extension commands, in that order."""
         commands: list[dict[str, Any]] = []

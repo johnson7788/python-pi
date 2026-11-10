@@ -57,8 +57,13 @@ class ExtensionRunner:
         extensions: Sequence[ExtensionAPI] = (),
         *,
         host: ExtensionHost | None = None,
+        diagnostics: Sequence[Any] = (),
     ) -> None:
         self.extensions: list[ExtensionAPI] = list(extensions)
+        #: Load-time diagnostics (unimportable files, factories that raised, ...).
+        #: Kept so the server can show *why* a plugin is missing instead of only
+        #: writing it to stderr.
+        self.diagnostics = list(diagnostics)
         self._host = host if host is not None else ExtensionHost()
         self._errors: list[ExtensionError] = []
         self._error_listeners: list[Callable[[ExtensionError], Any]] = []
@@ -80,6 +85,29 @@ class ExtensionRunner:
     @property
     def host(self) -> ExtensionHost:
         return self._host
+
+    def status(self) -> dict[str, Any]:
+        """A JSON-able snapshot: what loaded, and what failed to load."""
+        return {
+            "extensions": [
+                {
+                    "path": extension.path,
+                    "tools": sorted(extension.tools),
+                    "commands": sorted(extension.commands),
+                    "events": sorted(extension.handlers),
+                    "providers": [getattr(item, "name", "") for item in extension.providers],
+                }
+                for extension in self.extensions
+            ],
+            "diagnostics": [
+                {
+                    "path": str(getattr(item, "path", "")),
+                    "message": str(getattr(item, "message", "")),
+                    "severity": str(getattr(item, "severity", "warning")),
+                }
+                for item in self.diagnostics
+            ],
+        }
 
     def on_error(self, listener: Callable[[ExtensionError], Any]) -> Callable[[], None]:
         self._error_listeners.append(listener)

@@ -84,6 +84,9 @@ def setup(api: PluginAPI) -> None:
 官方起点包：[`plugins/`](plugins/README.md)——临床计算器、PubMed 检索、网页抓取、CSV 工具，
 四个可直接装的插件，也是四种典型写法的样板。
 
+团队成员不装也能先提交：插件页「提交插件」进入待审队列，管理员在「待审」页安装或驳回。
+每个插件条目会显示实时加载状态（已加载哪些工具 / 失败原因），不用再翻服务端日志。
+
 - 完整契约：[`docs/PLUGINS.md`](docs/PLUGINS.md)
 - 与 DSH 的差距、取舍和「用户自服务」路线：[`docs/PLUGIN-PLATFORM-GAP.md`](docs/PLUGIN-PLATFORM-GAP.md)
 - 让 agent 帮你写：[`template/skills/plugin-creator`](template/skills/plugin-creator/SKILL.md)

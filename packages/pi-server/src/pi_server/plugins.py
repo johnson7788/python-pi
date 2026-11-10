@@ -16,6 +16,10 @@ from typing import Any, Iterable
 
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
 _VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$")
+_SUBMISSION_ID = re.compile(r"^[a-f0-9]{12}$")
+
+#: Written next to a submitted package; the package itself lives in ``plugin/``.
+SUBMISSION_META = "submission.json"
 
 
 @dataclass(frozen=True)
@@ -93,3 +97,70 @@ def scan(root: str) -> list[PluginInfo]:
 def entry_paths(root: str, plugin_ids: Iterable[str]) -> list[str]:
     wanted = {str(plugin_id) for plugin_id in plugin_ids}
     return [info.entry_path for info in scan(root) if info.id in wanted]
+
+
+# --------------------------------------------------------------------------------------
+# Submissions: an author uploads, an administrator reviews, nothing is enabled yet.
+# --------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SubmissionInfo:
+    sid: str
+    plugin: PluginInfo
+    submitter: str
+    created_at: float
+
+    @property
+    def base(self) -> str:
+        """The submission directory (``plugin/`` plus ``submission.json``)."""
+        return os.path.dirname(self.plugin.path)
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "id": self.sid,
+            "pluginId": self.plugin.id,
+            "name": self.plugin.name,
+            "version": self.plugin.version,
+            "description": self.plugin.description,
+            "submitter": self.submitter,
+            "createdAt": self.created_at,
+        }
+
+
+def submissions_root(plugin_root: str) -> str:
+    """Sibling of the plugin root, so ``data_root`` holds both."""
+    return os.path.join(os.path.dirname(os.path.abspath(plugin_root)), "plugin-submissions")
+
+
+def scan_submissions(root: str) -> list[SubmissionInfo]:
+    if not os.path.isdir(root):
+        return []
+    found: list[SubmissionInfo] = []
+    for sid in sorted(os.listdir(root)):
+        if not _SUBMISSION_ID.match(sid):
+            continue
+        base = os.path.join(root, sid)
+        try:
+            with open(os.path.join(base, SUBMISSION_META), "r", encoding="utf-8") as handle:
+                meta = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        plugin = _load_manifest(os.path.join(base, "plugin"))
+        if plugin is None or not isinstance(meta, dict):
+            continue
+        found.append(
+            SubmissionInfo(
+                sid=sid,
+                plugin=plugin,
+                submitter=str(meta.get("submitter") or ""),
+                created_at=float(meta.get("createdAt") or 0.0),
+            )
+        )
+    return found
+
+
+def find_submission(root: str, sid: str) -> SubmissionInfo | None:
+    if not _SUBMISSION_ID.match(sid):
+        return None
+    return next((item for item in scan_submissions(root) if item.sid == sid), None)

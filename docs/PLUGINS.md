@@ -48,9 +48,10 @@
 - `entry` 必须是目录内文件，不能逃逸；
 - `permissions`：**当前是声明，v1/v2 运行时都不强制执行**；插件与 server 同进程、同权限，
   所以「启用插件」等于「授权它使用部署进程的全部权限」。只安装审核过的代码；
-- `config` / `limits` / `requires`：v2 元数据。`plugin-kit` 已经消费它们；
-  宿主目前只读 `id`/`name`/`version`/`entry`/`description`/`capabilities`，其余字段被忽略，
-  所以现在写 v2 不会破坏兼容。
+- `config`：加载时解析，默认值 + 环境变量注入 `api.config`（见下）；
+- `limits.timeoutSeconds`：加载时写到该插件每个工具的 `timeout_seconds`，由 agent 循环执行；
+  `limits.maxResultChars` 目前只由 `plugin-kit` 的 `dev` 使用，宿主不强制；
+- `requires`：仍未被宿主消费，只用于 `pikit check`（P1）。
 
 ## 入口
 
@@ -76,6 +77,29 @@ def setup(api: PluginAPI) -> None:
 `on(event, handler)`、`register_flag`、`register_provider` 等。工具名要在整个部署内唯一
 （v1 不做命名空间包装）。
 
+## 配置
+
+宿主加载插件时读取同目录 `plugin.json` 的 `config.properties`：
+
+```json
+{
+  "config": {
+    "type": "object",
+    "properties": {
+      "baseUrl": { "type": "string", "default": "https://kb.internal" },
+      "apiKey":  { "type": "string", "secret": true, "env": "KB_API_KEY" }
+    }
+  }
+}
+```
+
+- `default` 是默认值；
+- `env` 指向的环境变量存在时覆盖默认值——**密钥只走这条**，不要写进 manifest；
+- 结果在 `setup(api)` 里通过 `api.config` 读取（扩展没有 manifest，`api.config` 是 `{}`）。
+
+宿主不校验 `config` 的类型/必填（`pikit check` 会），因为校验失败时应当降级为默认值而不是
+让整个 worker 起不来。
+
 **返回值的正确形状**：`return "文本"` 就够了，运行时会包成 `TextContent`。
 也可以返回 `ToolResult`，但它是 `pi_agent.AgentToolResult`，字段是
 `content`/`details`/`usage`/`terminate`/`added_tool_names`——**没有 `text=` 参数**：
@@ -94,11 +118,24 @@ return ToolResult(content=[TextContent(text="...")])
 - 启用/停用会驱逐该应用/模式的 worker，下一条消息使用新插件集；
 - 不同应用可以用不同插件集；同名 worker 的 key 含 app/mode，互不影响。
 
-## 安装
+## 安装与投稿
+
+管理员两条安装路径：
 
 - 插件页「安装插件」上传 zip（≤10MB，解压 ≤20MB，zip 内恰好一个 `plugin.json`）；
-- 或从「市场」安装内置条目；
-- 卸载会删除目录、所有租户的启用记录，并驱逐已加载它的 worker。
+- 或从「市场」安装内置条目。
+
+团队成员不必找管理员要权限：在插件页点「提交插件」上传 zip，进入**待审队列**
+（`<data_root>/plugin-submissions/`），管理员在「待审」页点「安装」后才会进入
+`<data_root>/plugins/`。「驳回」只删除投稿，不动已安装的插件。
+
+卸载会删除目录、所有租户的启用记录，并驱逐已加载它的 worker。
+
+## 加载状态
+
+插件页每个条目会显示实时状态：`已加载 N 个工具：…`、`尚未加载（下一条消息生效）`、
+或 `加载失败：<原因>`。数据来自 `GET /api/plugins/status?app=<app>`，由当前 worker 的
+`ExtensionRunner` 快照 + 加载诊断组成——插件没生效时不用再翻服务端 stderr。
 
 当前限制：产品只做**团队形态**；安装只允许管理员（上传 zip 或从市场装），普通用户只能启停。
 作者写好插件后交给管理员，或走后续的「投稿箱」流程（见路线图 P1）。
@@ -136,7 +173,8 @@ path = workspace_path(api, "data/patients.csv")   # 越界（../、绝对路径�
 
 ## 限制
 
-- 进程内执行，崩溃/死循环可能影响服务；没有 per-tool 超时；
+- 进程内执行，崩溃仍可能影响服务；per-tool 超时只覆盖 `limits.timeoutSeconds` 声明的插件，
+  取消的是 await，已经交给线程的阻塞调用会跑完才退出；
 - 没有审核/签名/来源校验流程，只在安装时校验 manifest 与路径安全；
 - 没有热加载；启停后由 worker 重建生效（会中断进行中的对话）；
 - 工具没有命名空间前缀，作者需保证唯一；

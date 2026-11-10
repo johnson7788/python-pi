@@ -99,6 +99,12 @@ export const api = {
       raw: data,
       headers: { 'content-type': 'application/octet-stream' },
     }),
+  postRaw: <T>(path: string, data: Blob | ArrayBuffer) =>
+    request<T>(path, {
+      method: 'POST',
+      raw: data,
+      headers: { 'content-type': 'application/octet-stream' },
+    }),
 }
 
 /** Percent-encode a workspace path for use in a query string. */

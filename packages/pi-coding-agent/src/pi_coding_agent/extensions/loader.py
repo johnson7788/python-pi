@@ -41,6 +41,7 @@ import importlib
 import importlib.metadata
 import importlib.util
 import inspect
+import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
@@ -318,6 +319,43 @@ def _load_path(
     return _call_factory(factory, path, diagnostics, flag_values, cwd)
 
 
+def _plugin_metadata(path: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read ``config`` defaults and ``limits`` from a sibling ``plugin.json``.
+
+    Extensions have no manifest, so this is empty for them.  Defaults come from
+    ``config.properties[*].default``; a property with ``env`` is overridden by that
+    environment variable, which is how deployment-specific values and secrets arrive
+    without editing the plugin.
+    """
+    if not os.path.isfile(path):
+        return {}, {}
+    manifest_path = os.path.join(os.path.dirname(path), "plugin.json")
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}, {}
+    if not isinstance(manifest, dict):
+        return {}, {}
+
+    config: dict[str, Any] = {}
+    spec = manifest.get("config")
+    if isinstance(spec, dict):
+        properties = spec.get("properties")
+        if isinstance(properties, dict):
+            for key, item in properties.items():
+                if not isinstance(item, dict):
+                    continue
+                if "default" in item:
+                    config[key] = item["default"]
+                env = item.get("env")
+                if isinstance(env, str) and os.environ.get(env):
+                    config[key] = os.environ[env]
+
+    limits = manifest.get("limits")
+    return config, limits if isinstance(limits, dict) else {}
+
+
 def _find_factory(module: Any) -> Any:
     """First callable factory attribute on ``module``, or ``None``."""
     for attribute_name in FACTORY_ATTRIBUTE_NAMES:
@@ -336,6 +374,8 @@ def _call_factory(
 ) -> ExtensionAPI | None:
     """Run one factory against a fresh API; ``None`` if it raised."""
     api = ExtensionAPI(path=path, cwd=cwd)
+    config, limits = _plugin_metadata(path)
+    api.config = config
     try:
         returned = factory(api)
         if inspect.isawaitable(returned):
@@ -345,6 +385,8 @@ def _call_factory(
             ExtensionDiagnostic(path, f"Extension factory failed: {_describe(error)}", "error")
         )
         return None
+
+    _apply_tool_limits(api, limits)
 
     if flag_values is not None:
         api.set_flag_values(dict(flag_values))
@@ -530,6 +572,19 @@ def _load_entry_point(
     api = _call_factory(factory, descriptor, result.diagnostics, flag_values, cwd)
     if api is not None:
         result.apis.append(api)
+
+
+def _apply_tool_limits(api: ExtensionAPI, limits: Mapping[str, Any]) -> None:
+    """Give this plugin's tools the manifest's per-call timeout (if unset)."""
+    try:
+        timeout = float(limits.get("timeoutSeconds")) if limits.get("timeoutSeconds") else None
+    except (TypeError, ValueError):
+        timeout = None
+    if not timeout or timeout <= 0:
+        return
+    for tool in api.tools.values():
+        if getattr(tool, "timeout_seconds", None) is None:
+            tool.timeout_seconds = timeout
 
 
 def _describe(error: BaseException) -> str:

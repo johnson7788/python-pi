@@ -309,3 +309,198 @@ def test_market_install_copies_starter_plugin_without_pycache(tmp_path):
     assert result.diagnostics == []
     names = {tool.name for api in result.apis for tool in api.tools.values()}
     assert {"body_metrics", "renal_function", "risk_scores", "liver_scores"} <= names
+
+
+# --------------------------------------------------------------------------------------
+# host-side config + per-tool timeout
+# --------------------------------------------------------------------------------------
+
+
+def test_plugin_config_defaults_and_env_override(tmp_path, monkeypatch):
+    from pi_coding_agent.extensions import load_extensions
+
+    plugin = tmp_path / "cfg-plugin"
+    plugin.mkdir()
+    (plugin / "plugin.json").write_text(
+        json.dumps(
+            {
+                "id": "cfg-plugin",
+                "name": "cfg",
+                "version": "0.1.0",
+                "entry": "main.py",
+                "config": {
+                    "type": "object",
+                    "properties": {
+                        "greeting": {"type": "string", "default": "你好"},
+                        "token": {"type": "string", "secret": True, "env": "PI_TEST_TOKEN"},
+                    },
+                },
+                "limits": {"timeoutSeconds": 7},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (plugin / "main.py").write_text(
+        """
+def setup(api):
+    @api.register_tool(name="show_config", description="show", parameters={"type": "object", "properties": {}})
+    async def show_config(tool_call_id, args, signal, on_update):
+        return str(sorted(api.config.items()))
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PI_TEST_TOKEN", "s3cret")
+    result = load_extensions([str(plugin / "main.py")], discover_entry_points=False, cwd=str(tmp_path))
+    assert result.diagnostics == []
+    api = result.apis[0]
+    assert api.config == {"greeting": "你好", "token": "s3cret"}
+    tool = next(iter(api.tools.values()))
+    assert tool.timeout_seconds == 7
+
+
+def test_agent_loop_enforces_tool_timeout():
+    from types import SimpleNamespace
+
+    from pi_agent.loop import _Prepared, _execute_prepared_tool_call
+    from pi_agent.types import AgentTool
+
+    async def slow(tool_call_id, args, signal, on_update):
+        await asyncio.sleep(5)
+        return "late"
+
+    tool = AgentTool(name="slow", description="", execute=slow, timeout_seconds=0.05)
+    call = SimpleNamespace(id="call-1", name="slow", arguments={})
+    prepared = _Prepared(call, tool, {})
+
+    async def emit(_event):
+        return None
+
+    result, is_error = asyncio.run(_execute_prepared_tool_call(prepared, None, emit))
+    assert is_error is True
+    text = result.content[0].text if result.content else ""
+    assert "exceeded" in text
+
+
+# --------------------------------------------------------------------------------------
+# load status (runner snapshot + HTTP endpoint)
+# --------------------------------------------------------------------------------------
+
+
+def test_runner_status_lists_tools_and_diagnostics(tmp_path):
+    from pi_coding_agent.extensions import ExtensionRunner, load_extensions
+
+    plugin = tmp_path / "status-plugin"
+    plugin.mkdir()
+    (plugin / "plugin.json").write_text(
+        json.dumps({"id": "status-plugin", "name": "s", "version": "0.1.0", "entry": "main.py"}),
+        encoding="utf-8",
+    )
+    (plugin / "main.py").write_text(
+        """
+def setup(api):
+    @api.register_tool(name="ping", description="p", parameters={"type": "object", "properties": {}})
+    async def ping(tool_call_id, args, signal, on_update):
+        return "pong"
+""",
+        encoding="utf-8",
+    )
+    broken = tmp_path / "broken.py"
+    broken.write_text("this is not python\n", encoding="utf-8")
+
+    result = load_extensions(
+        [str(plugin / "main.py"), str(broken)], discover_entry_points=False, cwd=str(tmp_path)
+    )
+    runner = ExtensionRunner(result.apis, diagnostics=result.diagnostics)
+    snapshot = runner.status()
+    assert snapshot["extensions"][0]["tools"] == ["ping"]
+    assert any(item["severity"] == "error" for item in snapshot["diagnostics"])
+
+
+def test_plugin_status_endpoint_reports_not_loaded_before_a_worker(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from pi_coding_agent.bootstrap import BootstrapOptions
+    from pi_server.app import create_app
+    from pi_server.auth import ensure_admin
+    from pi_server.config import ServerConfig
+
+    config = ServerConfig(data_root=str(tmp_path), auth_mode="team", admin_password="pw123456")
+    app = create_app(
+        BootstrapOptions(cwd=str(tmp_path), agent_dir=str(tmp_path / "agent")), config=config
+    )
+    ensure_admin(app.state.db, "admin", "pw123456")
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "pw123456"})
+        client.post("/api/market/plugins/clinical-calc/install")
+        payload = client.get("/api/plugins/status?app=general").json()
+    assert payload["runtimeLoaded"] is False
+    row = next(item for item in payload["plugins"] if item["id"] == "clinical-calc")
+    assert row["loaded"] is False and row["tools"] == [] and row["errors"] == []
+
+
+# --------------------------------------------------------------------------------------
+# submission queue: author uploads, admin approves
+# --------------------------------------------------------------------------------------
+
+
+def _hello_pi_zip() -> bytes:
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name in ("plugin.json", "main.py"):
+            archive.write(ROOT / "examples" / "plugins" / "hello-pi" / name, f"hello-pi/{name}")
+    return buffer.getvalue()
+
+
+def test_submission_is_not_installed_until_approved(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from pi_coding_agent.bootstrap import BootstrapOptions
+    from pi_server.app import create_app
+    from pi_server.auth import ensure_admin
+    from pi_server.config import ServerConfig
+
+    config = ServerConfig(data_root=str(tmp_path), auth_mode="team", admin_password="pw123456")
+    app = create_app(
+        BootstrapOptions(cwd=str(tmp_path), agent_dir=str(tmp_path / "agent")), config=config
+    )
+    ensure_admin(app.state.db, "admin", "pw123456")
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "pw123456"})
+        submitted = client.post("/api/plugin-submissions", content=_hello_pi_zip())
+        assert submitted.status_code == 201, submitted.text
+        submission_id = submitted.json()["id"]
+        assert not (tmp_path / "plugins" / "hello-pi").exists()
+
+        listed = client.get("/api/plugin-submissions").json()["submissions"]
+        assert [item["pluginId"] for item in listed] == ["hello-pi"]
+        assert listed[0]["submitter"] == "admin"
+
+        approved = client.post(f"/api/plugin-submissions/{submission_id}/approve")
+        assert approved.status_code == 200, approved.text
+        assert (tmp_path / "plugins" / "hello-pi" / "main.py").is_file()
+        assert client.get("/api/plugin-submissions").json()["submissions"] == []
+        assert client.post(f"/api/plugin-submissions/{submission_id}/approve").status_code == 404
+
+
+def test_submission_can_be_rejected(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from pi_coding_agent.bootstrap import BootstrapOptions
+    from pi_server.app import create_app
+    from pi_server.auth import ensure_admin
+    from pi_server.config import ServerConfig
+
+    config = ServerConfig(data_root=str(tmp_path), auth_mode="team", admin_password="pw123456")
+    app = create_app(
+        BootstrapOptions(cwd=str(tmp_path), agent_dir=str(tmp_path / "agent")), config=config
+    )
+    ensure_admin(app.state.db, "admin", "pw123456")
+    with TestClient(app) as client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "pw123456"})
+        submission_id = client.post("/api/plugin-submissions", content=_hello_pi_zip()).json()["id"]
+        assert client.delete(f"/api/plugin-submissions/{submission_id}").status_code == 200
+        assert client.get("/api/plugin-submissions").json()["submissions"] == []
+        assert not (tmp_path / "plugin-submissions" / submission_id).exists()

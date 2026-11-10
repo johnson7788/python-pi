@@ -73,6 +73,9 @@ class AgentTool:
     execution_mode: Literal["parallel", "sequential"] = "parallel"
     #: Optional hook to normalise raw arguments before validation.
     prepare_arguments: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    #: Per-call wall clock.  ``None`` keeps the historical "wait forever" behaviour;
+    #: plugins get this from their manifest's ``limits.timeoutSeconds``.
+    timeout_seconds: float | None = None
 
 
 # --------------------------------------------------------------------------------------
