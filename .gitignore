@@ -46,3 +46,4 @@ office/apps/*/node_modules/
 
 # Generated deliverables from the old cwd workspace
 output/
+airead.md
