@@ -9,6 +9,7 @@ degrade into an unsaved one.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -305,6 +306,73 @@ async def test_fork_rejects_an_invalid_position(tmp_path):
     with pytest.raises(ValueError, match="Invalid fork position"):
         await runtime.fork("whatever", position="sideways")
     await runtime.dispose()
+
+
+async def test_replacing_a_session_mid_turn_lets_the_run_finish(tmp_path, monkeypatch):
+    """Starting another task during a turn must not cancel that turn.
+
+    ``AgentSession.dispose`` aborts an active run, so a replacement while the
+    agent is streaming has to retire the old session instead: the user's click
+    moves the view, it does not delete the work in flight.
+    """
+    runtime = await _make_runtime(tmp_path, [FauxTurn(text="finished anyway")])
+    retired = runtime.session
+    await retired.prompt("hello")
+
+    disposed: list[bool] = []
+    retired.add_dispose_callback(lambda: disposed.append(True))
+
+    # No scripted turn lasts long enough to race against, so hold the one flag
+    # the replacement layer looks at.
+    monkeypatch.setattr(AgentSession, "is_streaming", property(lambda _session: True))
+
+    await runtime.new_session()
+
+    assert runtime.session is not retired, "the client moves to the new session"
+    assert runtime.has_retiring_runs() is True, "the abandoned run is still in flight"
+    assert disposed == [], "retiring must not dispose, which would abort the run"
+
+    monkeypatch.undo()
+    for _ in range(80):
+        if not runtime.has_retiring_runs():
+            break
+        await asyncio.sleep(0.05)
+    assert runtime.has_retiring_runs() is False
+    assert disposed == [True], "the retired session is released once it is idle"
+    await runtime.dispose()
+
+
+async def test_switching_back_adopts_the_still_running_session(tmp_path, monkeypatch):
+    """Returning to a session that is still streaming must not reopen a partial file.
+
+    Two live writers on one session file would interleave entries, so the runtime
+    hands the *same* session object back and the run keeps streaming.
+    """
+    runtime = await _make_runtime(tmp_path, [FauxTurn(text="still going")])
+    live = runtime.session
+    await live.prompt("hello")
+    target = live.session_file
+    assert target is not None
+
+    # Only the conversation left behind is "streaming"; the fresh one is empty.
+    monkeypatch.setattr(AgentSession, "is_streaming", property(lambda session: session is live))
+    await runtime.new_session()
+    assert runtime.session is not live
+    assert runtime.has_retiring_runs() is True
+
+    await runtime.switch_session(target)
+
+    assert runtime.session is live, "the running session is adopted, not rebuilt"
+    assert runtime.has_retiring_runs() is False, "adopting cancels the retirement"
+
+    disposed: list[bool] = []
+    live.add_dispose_callback(lambda: disposed.append(True))
+    await asyncio.sleep(0.1)
+    assert disposed == [], "the adopted session must not be disposed in the background"
+
+    monkeypatch.undo()
+    await runtime.dispose()
+    assert disposed == [True]
 
 
 async def test_dispose_releases_the_session(tmp_path):

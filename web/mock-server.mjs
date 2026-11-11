@@ -781,7 +781,26 @@ const server = createServer((request, response) => {
     case '/api/workspace/file': {
       const requested = url.searchParams.get('path') || '/'
       if (request.method === 'PUT') {
-        json({ path: requested, size: 0 })
+        let raw = ''
+        request.on('data', (chunk) => { raw += chunk })
+        request.on('end', () => {
+          MOCK_FILES[requested] = raw
+          const parent = requested.slice(0, requested.lastIndexOf('/')) || '/'
+          const name = requested.split('/').pop()
+          const list = MOCK_TREE[parent] || (MOCK_TREE[parent] = [])
+          const entry = {
+            name,
+            path: requested,
+            isDir: false,
+            size: Buffer.byteLength(raw),
+            modified: Math.floor(Date.now() / 1000),
+            hidden: false,
+          }
+          const index = list.findIndex((item) => item.path === requested)
+          if (index >= 0) list[index] = entry
+          else list.push(entry)
+          json({ path: requested, size: entry.size })
+        })
         return
       }
       const text = MOCK_FILES[requested]
@@ -796,9 +815,24 @@ const server = createServer((request, response) => {
       })
       return
     }
-    case '/api/workspace/directory':
-      json({ path: '/新目录', created: true })
+    case '/api/workspace/directory': {
+      let raw = ''
+      request.on('data', (chunk) => { raw += chunk })
+      request.on('end', () => {
+        let body = {}
+        try { body = JSON.parse(raw || '{}') } catch { body = {} }
+        const parent = body.parentPath || '/'
+        const name = body.name || '新目录'
+        const target = parent === '/' ? `/${name}` : `${parent}/${name}`
+        MOCK_TREE[target] = MOCK_TREE[target] || []
+        const list = MOCK_TREE[parent] || (MOCK_TREE[parent] = [])
+        if (!list.some((item) => item.path === target)) {
+          list.push({ name, path: target, isDir: true, size: 0, modified: Math.floor(Date.now() / 1000), hidden: false })
+        }
+        json({ path: target, created: true })
+      })
       return
+    }
     case '/api/workspace/download':
       response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
       response.end(MOCK_FILES[url.searchParams.get('path') || ''] || 'mock file\n')

@@ -357,7 +357,21 @@ function transcriptFromMessages(state: AgentStore, messages: Message[]): AgentSt
     // (for example after a reload), so they always top up the execution map.
     if (message.role === 'toolResult') tools = addOrphanToolExecution(tools, message)
   }
-  return { ...state, transcript, toolExecutions: tools, streamingKey: null, seq }
+
+  // A resync can land mid-turn — a reconnect, or coming back to a conversation
+  // whose run is still going in the background. That trailing assistant message
+  // (no `stopReason` yet) is where the next `message_update` deltas belong;
+  // without pointing `streamingKey` at it they would open a second, truncated
+  // entry and the reply would appear twice.
+  let streamingKey: string | null = null
+  const last = messages[messages.length - 1]
+  if (last?.role === 'assistant' && !last.stopReason && state.state?.isStreaming) {
+    const trailing = transcript[transcript.length - 1]
+    transcript[transcript.length - 1] = { ...trailing, streaming: true }
+    streamingKey = trailing.key
+  }
+
+  return { ...state, transcript, toolExecutions: tools, streamingKey, seq }
 }
 
 function pushError(state: AgentStore, source: string, message: string): AgentStore {
@@ -936,7 +950,7 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
   const loadSessions = useCallback(async () => {
     try {
       const response = await fetch(
-        `${resolveApiBase()}/api/sessions?workspace=${encodeURIComponent(
+        `${resolveApiBase()}/api/sessions?scope=all&workspace=${encodeURIComponent(
           workspaceRef.current,
         )}&app=${encodeURIComponent(appRef.current)}&mode=${encodeURIComponent(modeRef.current)}`,
         { credentials: 'same-origin' },

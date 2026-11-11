@@ -20,6 +20,7 @@ if (embed) {
   document.body.classList.add('office-embed')
   const style = document.createElement('style')
   style.textContent = '.office-embed .ai-dock,.office-embed .ai-panel,.office-embed .ai-entry,.office-embed .ribbon-group:has(.ai-entry){display:none!important}'
+    + '@media (max-width: 1000px){.office-embed .ribbon{display:none!important}}'
   document.head.appendChild(style)
 }
 

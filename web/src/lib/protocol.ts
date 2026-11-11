@@ -575,6 +575,8 @@ export interface SessionInfo {
   modified?: number | string
   messageCount?: number
   firstMessage?: string | null
+  /** Owning workspace; set only when the list spans every workspace (scope=all). */
+  workspace?: { id: string; name: string } | null
 }
 
 export interface SessionsResponse {

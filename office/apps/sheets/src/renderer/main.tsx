@@ -23,6 +23,7 @@ if (embed) {
   document.body.classList.add('office-embed')
   const style = document.createElement('style')
   style.textContent = '.office-embed .copilot,.office-embed .ai-panel-resizer,.office-embed .ai-entry,.office-embed .ribbon-group:has(.ai-entry){display:none!important}.office-embed .sheet-body{grid-template-columns:minmax(0,1fr)!important}'
+    + '@media (max-width: 1000px){.office-embed .ribbon{display:none!important}}'
   document.head.appendChild(style)
 }
 

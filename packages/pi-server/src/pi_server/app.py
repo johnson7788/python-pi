@@ -236,6 +236,12 @@ class SessionWorker:
         """
         if self._controller is None:
             return False
+        runtime = getattr(self._state, "runtime", None)
+        if runtime is not None and callable(getattr(runtime, "has_retiring_runs", None)):
+            # A conversation the user navigated away from is still finishing; evicting
+            # this worker now would abort work they expect to survive the click.
+            if runtime.has_retiring_runs():
+                return True
         manager = getattr(self._state, "subagent_manager", None)
         if manager is not None and manager.has_running():
             return True
@@ -3174,37 +3180,65 @@ def create_app(
     @app.get("/api/sessions")
     async def sessions(request: Request) -> dict[str, Any]:
         worker = await worker_for(request)
-        # `agent_dir` is what keeps this list per-user: the same call in single mode falls
-        # back to the default agent dir because the option is None there.
-        listed = await SessionManager.list(
-            worker.state.cwd,
-            agent_dir=worker.options.agent_dir,
-            session_dir=worker.options.session_dir,
-        )
         # Sessions written before apps existed have no app; keep them visible everywhere
         # instead of hiding half of someone's history.
         wanted_app = request.query_params.get("app") or ""
         wanted_mode = request.query_params.get("mode") or ""
+
+        def serialize(info: Any, workspace: dict[str, str] | None) -> dict[str, Any]:
+            return {
+                "path": info.path,
+                "id": info.id,
+                "cwd": info.cwd,
+                "name": info.name,
+                "app": info.app,
+                "mode": info.mode,
+                "modified": info.modified.isoformat(),
+                "messageCount": info.message_count,
+                "firstMessage": info.first_message,
+                "workspace": workspace,
+            }
+
+        # ``scope=all`` feeds the sidebar's "按工作区" grouping: one call for every
+        # workspace this user owns instead of one call per switch. The session dir is
+        # derived from (cwd, agent_dir), so each workspace has to be listed separately.
+        if (request.query_params.get("scope") or "") != "all":
+            # `agent_dir` is what keeps this list per-user: the same call in single mode
+            # falls back to the default agent dir because the option is None there.
+            listed = await SessionManager.list(
+                worker.state.cwd,
+                agent_dir=worker.options.agent_dir,
+                session_dir=worker.options.session_dir,
+            )
+            rows = [(info, None) for info in listed]
+        elif database is None:
+            listed = await SessionManager.list(
+                worker.state.cwd,
+                agent_dir=worker.options.agent_dir,
+                session_dir=worker.options.session_dir,
+            )
+            rows = [(info, {"id": "default", "name": "默认工作空间"}) for info in listed]
+        else:
+            user = auth.current_user(request)
+            if user is None:
+                raise auth.reject_unauthenticated()
+            ensure_default_workspace(user.uid)
+            rows = []
+            for workspace in database.list_workspaces(user.uid):
+                listed = await SessionManager.list(
+                    str(workspace["path"]),
+                    agent_dir=worker.options.agent_dir,
+                    session_dir=worker.options.session_dir,
+                )
+                tag = {"id": str(workspace["id"]), "name": str(workspace["name"])}
+                rows.extend((info, tag) for info in listed)
+
         if wanted_app:
-            listed = [info for info in listed if info.app in (None, wanted_app)]
+            rows = [(info, tag) for info, tag in rows if info.app in (None, wanted_app)]
         if wanted_mode:
-            listed = [info for info in listed if info.mode in (None, wanted_mode)]
-        return {
-            "sessions": [
-                {
-                    "path": info.path,
-                    "id": info.id,
-                    "cwd": info.cwd,
-                    "name": info.name,
-                    "app": info.app,
-                    "mode": info.mode,
-                    "modified": info.modified.isoformat(),
-                    "messageCount": info.message_count,
-                    "firstMessage": info.first_message,
-                }
-                for info in listed
-            ]
-        }
+            rows = [(info, tag) for info, tag in rows if info.mode in (None, wanted_mode)]
+        rows.sort(key=lambda row: row[0].modified, reverse=True)
+        return {"sessions": [serialize(info, tag) for info, tag in rows]}
 
     @app.get("/api/state")
     async def state(request: Request) -> dict[str, Any]:

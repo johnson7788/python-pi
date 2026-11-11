@@ -20,6 +20,12 @@ Two consequences are easy to miss and are documented here because callers hit th
 * a failed replacement propagates the error and leaves the runtime pointing at the
   previous session; the caller decides what to show the user.
 
+Replacing a session **mid-turn does not cancel that turn**.  Disposing a session
+aborts its active run, so a session left while it is streaming is *retired*
+instead: it keeps running in the background, keeps writing its session file, and
+is released once it goes idle.  Switching back to that file before it settles
+adopts the live session again, so the user keeps watching the same run.
+
 Extension lifecycle events (``session_before_switch`` / ``session_before_fork`` /
 ``session_shutdown``) are not emitted because this port has no extension system.
 The ``{"cancelled": bool}`` return shape is kept so a caller written against pi
@@ -54,8 +60,19 @@ class AgentSessionRuntimeResult:
     diagnostics: list[AgentSessionRuntimeDiagnostic] = field(default_factory=list)
 
 
+@dataclass
+class _RetiringSession:
+    """A replaced session whose in-flight turn is still running."""
+
+    session: AgentSession
+    task: asyncio.Task[None]
+
+
 #: ``(cwd, agent_dir, session_manager, session_start_event) -> result``
 CreateAgentSessionRuntimeFactory = Callable[..., Awaitable[AgentSessionRuntimeResult]]
+
+#: How long a session retired mid-turn may keep running before it is released anyway.
+_RETIRE_TIMEOUT_SECONDS = 60 * 60
 
 
 def extract_user_message_text(content: Any) -> str:
@@ -97,6 +114,9 @@ class AgentSessionRuntime:
         self._rebind_session: Callable[[AgentSession], Awaitable[None]] | None = None
         self._before_session_invalidate: Callable[[], None] | None = None
         self._lock = asyncio.Lock()
+        #: Sessions replaced mid-turn stay alive here until their run settles, so
+        #: switching away never cancels work the user already started.
+        self._retiring: dict[str, _RetiringSession] = {}
 
     # -- accessors ---------------------------------------------------------------------
 
@@ -130,6 +150,14 @@ class AgentSessionRuntime:
     def set_before_session_invalidate(self, callback: Callable[[], None] | None) -> None:
         """Called after teardown but before the old session is invalidated."""
         self._before_session_invalidate = callback
+
+    def has_retiring_runs(self) -> bool:
+        """True while a replaced session is still finishing its last turn.
+
+        Hosts use this to keep a worker alive (no idle eviction) until the work the
+        user walked away from has actually finished.
+        """
+        return any(not entry.task.done() for entry in self._retiring.values())
 
     # -- replacement -------------------------------------------------------------------
 
@@ -182,6 +210,17 @@ class AgentSessionRuntime:
                 "session_before_switch", reason="resume", target_session_file=session_path
             ):
                 return {"cancelled": True}
+
+            resumed = self._take_retiring(session_path)
+            if resumed is not None:
+                # That conversation is still streaming in the background: take the
+                # live session back instead of reopening a half-written file, so the
+                # user resumes watching the same run.
+                await self._teardown("resume", resumed.session_file)
+                self._session = resumed
+                await self._finish()
+                await self._notify_start("resume", previous_session_file)
+                return {"cancelled": False}
 
             manager = SessionManager.open(session_path, cwd=cwd_override)
             await self._teardown("resume", manager.get_session_file())
@@ -336,7 +375,65 @@ class AgentSessionRuntime:
 
     async def _teardown(self, reason: str, target_session_file: str | None) -> None:
         del reason, target_session_file  # only meaningful for extension events
+        session = self._session
+        if getattr(session, "is_streaming", False):
+            # The user switched away mid-turn.  Disposing here would abort the run
+            # (``AgentSession.dispose`` aborts an active run), so detach the session
+            # from this client and let it finish on its own; the turn keeps being
+            # written to its session file and is complete on the next visit.
+            self._release_listeners()
+            self._retire(session)
+            return
         self._dispose_current()
+
+    def _release_listeners(self) -> None:
+        if self._before_session_invalidate is not None:
+            self._before_session_invalidate()
+
+    def _retire(self, session: AgentSession) -> None:
+        """Dispose ``session`` once its in-flight turn settles."""
+        key = session.session_file or f"memory:{id(session)}"
+        existing = self._retiring.get(key)
+        if existing is not None and not existing.task.done():
+            return
+
+        task = asyncio.ensure_future(self._dispose_when_idle(session))
+        self._retiring[key] = _RetiringSession(session, task)
+
+        def _forget(finished: asyncio.Task[None], retiring_key: str = key) -> None:
+            current = self._retiring.get(retiring_key)
+            if current is not None and current.task is finished:
+                self._retiring.pop(retiring_key, None)
+            # Surface nothing: a retired session must never break the new one.
+
+        task.add_done_callback(_forget)
+
+    async def _dispose_when_idle(self, session: AgentSession) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _RETIRE_TIMEOUT_SECONDS
+        # A cancellation here means the session was adopted back by ``switch_session``
+        # (or superseded), so the run must keep going: only an idle session is freed.
+        while session.is_streaming and loop.time() < deadline:
+            await asyncio.sleep(0.25)
+        try:
+            session.dispose()
+        except Exception:  # noqa: BLE001 - teardown is best effort
+            pass
+
+    def _take_retiring(self, session_path: str) -> AgentSession | None:
+        """Claim a still-running retired session for ``session_path``, if any."""
+        target = os.path.realpath(session_path)
+        for key, entry in list(self._retiring.items()):
+            if key.startswith("memory:") or os.path.realpath(key) != target:
+                continue
+            if entry.task.done():
+                # It settled (and was disposed) between the click and this check.
+                self._retiring.pop(key, None)
+                continue
+            self._retiring.pop(key, None)
+            entry.task.cancel()
+            return entry.session
+        return None
 
 
 async def create_agent_session_runtime(

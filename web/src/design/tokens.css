@@ -1,0 +1,153 @@
+/* ===========================================================================
+ * Pi 1.0 设计令牌 · 飞书风格
+ *
+ * 单一来源：登录页、工作台外壳和所有子页面都从这里取色/取字号/取圆角。
+ * 浅色写在 :root，深色跟随系统（prefers-color-scheme）或 html[data-theme]
+ * 手动覆盖——两者取值完全一致，改色时两处一起改。
+ *
+ * 约定：
+ *   - 蓝色只有一支 #3370FF；正文级别的文字链接用 #245BDB 保证对比度。
+ *   - 中性色 5 档（bg / card / fill-1 / fill-2 / line / line-2），不要临时取色。
+ *   - 圆角只用 4 / 6 / 8 / 10 / pill 五档；阴影只在浮层出现。
+ * =========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* 中性色 */
+  --bg: #f5f6f7;          /* 页面底 / 侧栏 */
+  --panel: #f5f6f7;       /* 列表栏 */
+  --card: #ffffff;        /* 内容区 */
+  --fill-1: #f2f3f5;      /* 输入框、代码块、hover */
+  --fill-2: #ebedf0;      /* 选中底、分段轨道 */
+
+  /* 文字 */
+  --t1: #1f2329;
+  --t2: #4e5560;
+  --t3: #6e747d;
+  --t4: #bbbfc4;          /* 仅图标 / 禁用 / placeholder */
+
+  /* 线 */
+  --line: #e5e6eb;
+  --line-2: #dee0e3;
+
+  /* 品牌 */
+  --primary: #3370ff;
+  --primary-hover: #245bdb;
+  --primary-text: #245bdb;
+  --primary-soft: #e8f0ff;
+  --primary-ring: rgba(51, 112, 255, 0.18);
+
+  /* 语义 */
+  --success: #2ea121;
+  --success-bg: #e8f7e5;
+  --warning: #d97706;
+  --warning-bg: #fff3e0;
+  --danger: #d83931;
+  --danger-bg: #fdeceb;
+  --purple: #7b61ff;
+  --purple-bg: #f0edff;
+  --orange: #e37318;
+  --orange-bg: #fdf1e7;
+
+  /* 圆角 */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-pill: 999px;
+
+  /* 阴影 */
+  --shadow-1: 0 1px 2px rgba(31, 35, 41, 0.06), 0 0 0 1px rgba(31, 35, 41, 0.03);
+  --shadow-2: 0 4px 12px rgba(31, 35, 41, 0.08);
+  --shadow-3: 0 12px 32px rgba(31, 35, 41, 0.14);
+
+  /* 字体 */
+  --font: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans GB",
+    "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 深色：跟随系统（手动锁定浅色时不生效） */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --bg: #17181a;
+    --panel: #1f2023;
+    --card: #26282b;
+    --fill-1: #2f3134;
+    --fill-2: #3a3c40;
+
+    --t1: #e8e9eb;
+    --t2: #b4b8be;
+    --t3: #8a8f96;
+    --t4: #5f6368;
+
+    --line: #33353a;
+    --line-2: #3f4147;
+
+    --primary: #3370ff;
+    --primary-hover: #4d7dff;
+    --primary-text: #6b92ff;
+    --primary-soft: rgba(77, 125, 255, 0.16);
+    --primary-ring: rgba(77, 125, 255, 0.28);
+
+    --success: #4cc23d;
+    --success-bg: rgba(76, 194, 61, 0.14);
+    --warning: #f0a648;
+    --warning-bg: rgba(240, 166, 72, 0.14);
+    --danger: #f06a63;
+    --danger-bg: rgba(240, 106, 99, 0.14);
+    --purple: #a091ff;
+    --purple-bg: rgba(160, 145, 255, 0.14);
+    --orange: #f08a4b;
+    --orange-bg: rgba(240, 138, 75, 0.14);
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.55);
+    --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.7);
+  }
+}
+
+/* 深色：手动覆盖（工作台右上角开关走这条） */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #17181a;
+  --panel: #1f2023;
+  --card: #26282b;
+  --fill-1: #2f3134;
+  --fill-2: #3a3c40;
+
+  --t1: #e8e9eb;
+  --t2: #b4b8be;
+  --t3: #8a8f96;
+  --t4: #5f6368;
+
+  --line: #33353a;
+  --line-2: #3f4147;
+
+  --primary: #3370ff;
+  --primary-hover: #4d7dff;
+  --primary-text: #6b92ff;
+  --primary-soft: rgba(77, 125, 255, 0.16);
+  --primary-ring: rgba(77, 125, 255, 0.28);
+
+  --success: #4cc23d;
+  --success-bg: rgba(76, 194, 61, 0.14);
+  --warning: #f0a648;
+  --warning-bg: rgba(240, 166, 72, 0.14);
+  --danger: #f06a63;
+  --danger-bg: rgba(240, 106, 99, 0.14);
+  --purple: #a091ff;
+  --purple-bg: rgba(160, 145, 255, 0.14);
+  --orange: #f08a4b;
+  --orange-bg: rgba(240, 138, 75, 0.14);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.55);
+  --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.7);
+}

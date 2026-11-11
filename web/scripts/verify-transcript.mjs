@@ -173,9 +173,18 @@ try {
   socket.deliver({ type: "message_start", message: { role: "toolResult", toolCallId: "c1", toolName: "bash", content: [{ type: "text", text: "RESULT" }], isError: false, timestamp: ts } });
   socket.deliver({ type: "message_end", message: { role: "toolResult", toolCallId: "c1", toolName: "bash", content: [{ type: "text", text: "RESULT" }], isError: false, timestamp: ts } });
   await sleep(150);
-  // A tool result renders as a ToolCard (<article class="message--tool">),
-  // so count blocks rather than the raw text.
-  const toolResultCount = window.document.querySelectorAll("article.message--tool").length;
+  // Process steps are collapsed by default, so the turn has to be opened before
+  // its rows exist in the DOM at all.
+  const turnHead = window.document.querySelector(".wb-turn-process-head");
+  if (turnHead) {
+    turnHead.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await sleep(150);
+  }
+  // A tool result renders as one process row inside the turn (<details class="wb-process-row">),
+  // so count rows carrying the output rather than the raw text.
+  const toolResultCount = [...window.document.querySelectorAll(".wb-process-row")].filter(
+    (node) => (node.textContent ?? "").includes("RESULT"),
+  ).length;
 
   const rows = [
     ["user  prompt", userAfter, 1],

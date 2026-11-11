@@ -41,12 +41,14 @@ npm run verify:mock    # headless smoke test of the mock server over /api/ws
 
 ## Appearance
 
-One stylesheet, one set of tokens. Light is the default; dark follows
-`prefers-color-scheme`, and the sun/moon button in the toolbar writes
-`html[data-theme]` (plus `localStorage`) to override it. `applyTheme(readStoredTheme())`
-runs in `main.tsx` *before* the first render, so a forced theme never flashes the
-other one on load. Below 900px the sidebar slides in from the left, driven by the
-menu button in the toolbar.
+One token file, two scoped stylesheets. `design/tokens.css` holds every colour,
+radius and shadow (light + dark); `styles.css` owns the base, the login page and the
+shared widgets; `workbench/workbench.css` styles the shell under `.wb`. Light is the
+default, dark follows `prefers-color-scheme`, and the ☾/☀ button in the top bar
+writes `html[data-theme]` (plus `localStorage`) to override it.
+`applyTheme(readStoredTheme())` runs in `main.tsx` *before* the first render, so a
+forced theme never flashes the other one on load. Below 920px the conversation panel
+becomes a slide-over drawer driven by the menu button in the top bar.
 
 ## Configuration
 
@@ -74,22 +76,27 @@ PI_API_TARGET=http://127.0.0.1:8899 npm run dev   # terminal 2
 ```
 src/
   main.tsx                 React root
-  App.tsx                  page shell: sidebar + transcript + composer + overlays
-  styles.css               the only stylesheet; theme lives in :root custom properties
+  App.tsx                  auth gate: login / forced password change / workbench
+  design/tokens.css        design tokens (colour, radius, shadow; light + dark)
+  styles.css               base typography, login page, dialog / toast / shared widgets
   lib/protocol.ts          TS types for every command, event and REST payload
   lib/useAgent.ts          the WebSocket client hook: connect, send, reduce, reconnect
   lib/markdown.ts          marked + DOMPurify (sanitized HTML)
   lib/useTheme.ts          light / dark: follow the system, or a stored override
   components/
-    Sidebar.tsx            sessions, 新会话, model / thinking pickers, stats, statuses
-    Transcript.tsx         scrolling list + auto-follow
-    Message.tsx            one message: user text, Markdown, thinking, tool calls
     ToolCard.tsx           one tool call: spinner, pretty args, live + final output
-    Composer.tsx           growing textarea, Enter/Shift+Enter, steering toggle, /
     Dialog.tsx             extension select / confirm / input / editor
     Toasts.tsx             extension notify
+    Page.tsx               card / field / empty primitives for subpages
+  workbench/
+    Workbench.tsx          shell (60px icon rail + 264px list panel + topbar) and
+                           every view: home, chat, apps, skills, plugins, market,
+                           schedules, library, help, users
+    workbench.css          all `.wb-*` styles
 mock-server.mjs            protocol-faithful backend stand-in
 scripts/verify-mock.mjs    headless assertion over the WS endpoint
+scripts/verify-dom.mjs     jsdom mount check (single + team modes)
+scripts/verify-transcript.mjs  "message rendered twice" regression check
 ```
 
 ## How it fits together

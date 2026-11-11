@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 
 import { DialogHost } from '../components/Dialog'
+import { PromptHost, askConfirm, askText } from '../components/Prompt'
 import { Toasts } from '../components/Toasts'
 import { ToolCard } from '../components/ToolCard'
 import { api } from '../lib/api'
@@ -27,15 +28,27 @@ import type {
   ImageAttachment,
   ImageBlock,
   Message,
+  ModelInfo,
   Usage,
 } from '../lib/protocol'
 import { navigate } from '../lib/router'
 import { useAgent } from '../lib/useAgent'
+import { useTheme } from '../lib/useTheme'
 import type { AgentApi, ToolExecution, TranscriptEntry } from '../lib/useAgent'
 import type { AuthApi } from '../lib/useAuth'
 import './workbench.css'
 
-type View = 'home' | 'chat' | 'apps' | 'skills' | 'plugins' | 'scheduled' | 'files' | 'help' | 'users'
+type View =
+  | 'home'
+  | 'chat'
+  | 'apps'
+  | 'skills'
+  | 'plugins'
+  | 'scheduled'
+  | 'files'
+  | 'market'
+  | 'help'
+  | 'users'
 
 interface WorkspaceRow {
   id: string
@@ -104,13 +117,32 @@ interface NotificationRow {
   createdAt: string
 }
 
-const NAV: { view: View; label: string; icon: IconName }[] = [
+/** 图标栏 = 产品的一级导航（对应原型左侧 60px 竖栏）。 */
+const RAIL: { view: View; label: string; icon: IconName }[] = [
   { view: 'apps', label: '应用', icon: 'apps' },
-  { view: 'skills', label: '技能', icon: 'skill' },
+  { view: 'skills', label: '技能', icon: 'spark' },
   { view: 'plugins', label: '插件', icon: 'plugin' },
-  { view: 'scheduled', label: '定时任务', icon: 'clock' },
-  { view: 'files', label: '资料库', icon: 'book' },
+  { view: 'scheduled', label: '定时', icon: 'clock' },
+  { view: 'files', label: '资料库', icon: 'folder' },
+  { view: 'market', label: '市场', icon: 'bag' },
 ]
+
+/** 顶栏标题：一级页面固定，首页/会话按当前上下文拼。 */
+const PAGE_META: Partial<Record<View, { title: string; sub?: string }>> = {
+  apps: { title: '应用', sub: '应用与工作模式' },
+  skills: { title: '技能', sub: 'SKILL.md 做事方法' },
+  plugins: { title: '插件', sub: 'Python SDK 工具扩展' },
+  scheduled: { title: '定时任务', sub: '按计划自动执行 prompt' },
+  files: { title: '资料库', sub: '工作区文件' },
+  market: { title: '市场', sub: '安装技能与插件' },
+  help: { title: '帮助', sub: '使用说明与快捷键' },
+  users: { title: '用户管理', sub: '团队成员与权限' },
+}
+
+/** Bump when `office-dist` is rebuilt: it forces the editor frame to fetch a fresh
+ *  shell instead of reusing a cached one (the office app hides its AI dock in embed
+ *  mode, and that CSS ships inside the shell's hashed bundle). */
+const OFFICE_SHELL_REV = '3'
 
 const MODES = {
   office: {
@@ -298,6 +330,52 @@ const ICON_PATHS: Record<string, ReactNode> = {
     </>
   ),
   logout: <path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4M16 8l4 4-4 4M20 12H9" />,
+  bag: (
+    <>
+      <path d="M4 9h16l-1.2 9.2a1.8 1.8 0 0 1-1.8 1.6H7a1.8 1.8 0 0 1-1.8-1.6L4 9Z" />
+      <path d="M8.5 9V6.8a3.5 3.5 0 0 1 7 0V9" />
+    </>
+  ),
+  help: (
+    <>
+      <circle cx="12" cy="12" r="8.2" />
+      <path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.4" />
+      <circle cx="12" cy="16.6" r=".7" fill="currentColor" stroke="none" />
+    </>
+  ),
+  settings: (
+    <>
+      <circle cx="12" cy="12" r="2.8" />
+      <path d="M19.2 14.6a1.6 1.6 0 0 0 .3 1.8l.1.1a1.9 1.9 0 1 1-2.7 2.7l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5v.2a1.9 1.9 0 1 1-3.8 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a1.9 1.9 0 1 1-2.7-2.7l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1h-.2a1.9 1.9 0 1 1 0-3.8h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a1.9 1.9 0 1 1 2.7-2.7l.1.1a1.6 1.6 0 0 0 1.8.3h.1a1.6 1.6 0 0 0 1-1.5v-.2a1.9 1.9 0 1 1 3.8 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a1.9 1.9 0 1 1 2.7 2.7l-.1.1a1.6 1.6 0 0 0-.3 1.8v.1a1.6 1.6 0 0 0 1.5 1h.2a1.9 1.9 0 1 1 0 3.8h-.1a1.6 1.6 0 0 0-1.5 1Z" />
+    </>
+  ),
+  attach: (
+    <path d="M20.5 11.5 12 20a5.6 5.6 0 0 1-8-8l8.2-8.2a3.8 3.8 0 0 1 5.4 5.4l-8.2 8.2a1.9 1.9 0 0 1-2.7-2.7l7.6-7.6" />
+  ),
+  check: <path d="m5 12.5 4.5 4.5L19 7" />,
+  close: <path d="M6 6l12 12M18 6 6 18" />,
+  list: <path d="M4 7h16M4 12h16M4 17h16" />,
+  sliders: (
+    <>
+      <path d="M4 8h9M17 8h3M4 16h3M11 16h9" />
+      <circle cx="15" cy="8" r="2" />
+      <circle cx="9" cy="16" r="2" />
+    </>
+  ),
+  folderPlus: (
+    <>
+      <path d="M3.5 7.5a2 2 0 0 1 2-2h3.2l2 2h7.3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-10Z" />
+      <path d="M12 11v6M9 14h6" />
+    </>
+  ),
+  chevronRight: <path d="m9 6 6 6-6 6" />,
+  copy: (
+    <>
+      <rect x="8.5" y="8.5" width="11" height="11" rx="2" />
+      <path d="M15.5 5.5h-7a3 3 0 0 0-3 3v7" />
+    </>
+  ),
+  slash: <path d="M5 5h6M8 5v14M14 9h5M16.5 9v10" />,
 }
 
 type IconName = keyof typeof ICON_PATHS
@@ -330,6 +408,7 @@ function viewFromRoute(route: string): View {
   if (section === 'plugins') return 'plugins'
   if (section === 'scheduled') return 'scheduled'
   if (section === 'files') return 'files'
+  if (section === 'market') return 'market'
   if (section === 'help') return 'help'
   if (section === 'users') return 'users'
   return 'home'
@@ -352,6 +431,71 @@ function formatWhen(value: number | string | undefined): string {
 
 function sessionTitle(session: { name?: string | null; firstMessage?: string | null; id: string }): string {
   return session.name?.trim() || session.firstMessage?.trim() || session.id.slice(0, 8)
+}
+
+
+function formatClock(value: number | undefined): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+type SidebarGroup = 'workspace' | 'flat'
+type SidebarSort = 'recent' | 'name'
+
+function sessionStamp(value: number | string | undefined): number {
+  if (value === undefined || value === '') return 0
+  const time = new Date(value).getTime()
+  return Number.isNaN(time) ? 0 : time
+}
+
+/** "刚刚 / 9分钟 / 4小时 / 1天"，一周以上退回日期，和 DSH 的书架一致。 */
+function timeLabel(value: number | string | undefined): string {
+  const stamp = sessionStamp(value)
+  if (!stamp) return ''
+  const minute = 60_000
+  const diff = Date.now() - stamp
+  if (diff < minute) return '刚刚'
+  if (diff < 60 * minute) return `${Math.floor(diff / minute)}分钟`
+  if (diff < 24 * 60 * minute) return `${Math.floor(diff / (60 * minute))}小时`
+  if (diff < 7 * 24 * 60 * minute) return `${Math.floor(diff / (24 * 60 * minute))}天`
+  const date = new Date(stamp)
+  return `${date.getMonth() + 1}/${date.getDate()}`
+}
+
+/**
+ * One folder per workspace (DSH's shelf) or a single flat list.
+ * Sessions carry their workspace when the server answers `scope=all`; before that
+ * (or on an older server) they all fall into the active workspace.
+ */
+function buildSessionGroups(
+  sessions: WorkspaceSession[],
+  groupBy: SidebarGroup,
+  sortBy: SidebarSort,
+  workspaces: WorkspaceRow[],
+  activeWorkspace: string,
+  activeWorkspaceName: string,
+): { key: string; label: string; rows: WorkspaceSession[] }[] {
+  const sorted = [...sessions].sort((left, right) =>
+    sortBy === 'name'
+      ? sessionTitle(left).localeCompare(sessionTitle(right), 'zh-Hans-CN')
+      : sessionStamp(right.modified) - sessionStamp(left.modified),
+  )
+  if (groupBy === 'flat') return sorted.length > 0 ? [{ key: 'flat', label: '', rows: sorted }] : []
+
+  const buckets = new Map<string, { key: string; label: string; rows: WorkspaceSession[] }>()
+  const seed = (id: string, name: string) => {
+    if (!buckets.has(id)) buckets.set(id, { key: id, label: name, rows: [] })
+  }
+  for (const workspace of workspaces) seed(workspace.id, workspace.name)
+  seed(activeWorkspace, activeWorkspaceName)
+  for (const session of sorted) {
+    const id = session.workspace?.id ?? activeWorkspace
+    seed(id, session.workspace?.name ?? activeWorkspaceName)
+    buckets.get(id)?.rows.push(session)
+  }
+  return [...buckets.values()].filter((bucket) => bucket.rows.length > 0)
 }
 
 function userText(message: Message): string {
@@ -388,6 +532,8 @@ interface WorkspaceSession {
   app?: string | null
   mode?: string | null
   modified?: number | string
+  /** Set by the server when the list spans workspaces (`scope=all`). */
+  workspace?: { id: string; name: string } | null
 }
 interface ScheduleRunRow {
   id: string
@@ -415,6 +561,7 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const [activeModeId, setActiveModeId] = useState(
     () => (typeof window === 'undefined' ? '' : window.localStorage.getItem('pi.activeMode')) || 'office',
   )
+  const theme = useTheme()
   const agent = useAgent({
     enabled: true,
     workspace: activeWorkspace,
@@ -423,16 +570,28 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
     onUnauthorized: auth.onUnauthorized,
   })
   const view = viewFromRoute(route)
-  const [folded, setFolded] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
-  const [moreOpen, setMoreOpen] = useState(false)
+  const [railMenuOpen, setRailMenuOpen] = useState(false)
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false)
+  const [viewMenuOpen, setViewMenuOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  // Sidebar layout prefers the DSH shelf: one folder per workspace, newest first.
+  const [groupBy, setGroupBy] = useState<SidebarGroup>(
+    () => (typeof window === 'undefined' ? 'workspace' : (window.localStorage.getItem('pi.sidebar.group') as SidebarGroup) || 'workspace'),
+  )
+  const [sortBy, setSortBy] = useState<SidebarSort>(
+    () => (typeof window === 'undefined' ? 'recent' : (window.localStorage.getItem('pi.sidebar.sort') as SidebarSort) || 'recent'),
+  )
+  // A conversation in another workspace can only be opened after the socket has been
+  // re-bound to that workspace, so the click parks the path here and the effect below
+  // opens it once the new worker is connected.
+  const pendingSessionRef = useRef<string | null>(null)
+  const [artifactsOpen, setArtifactsOpen] = useState(false)
+  const [artifactFocus, setArtifactFocus] = useState<string | null>(null)
   const [notifications, setNotifications] = useState<NotificationRow[]>([])
   const [unread, setUnread] = useState(0)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
-  const [tasksOpen, setTasksOpen] = useState(true)
-  const [spacesOpen, setSpacesOpen] = useState(true)
-  const [expandedSpaces, setExpandedSpaces] = useState<Record<string, boolean>>({})
-  const [workspaceSessions, setWorkspaceSessions] = useState<Record<string, WorkspaceSession[]>>({})
   const [scheduleRuns, setScheduleRuns] = useState<ScheduleRunRow[] | null>(null)
   const [draft, setDraft] = useState('')
   const [chatDraft, setChatDraft] = useState('')
@@ -445,8 +604,9 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const workspacePath =
     workspaces.find((workspace) => workspace.id === activeWorkspace)?.path || ''
   const availableApps = apps.length > 0 ? apps : [FALLBACK_APP]
-  const activeApp = availableApps.find((app) => app.id === activeAppId) || availableApps[0]
-  const activeMode = activeApp.modes.find((item) => item.id === activeModeId) || activeApp.modes[0]
+  const activeApp = availableApps.find((app) => app.id === activeAppId) || availableApps[0] || FALLBACK_APP
+  const activeMode =
+    activeApp.modes.find((item) => item.id === activeModeId) || activeApp.modes[0] || FALLBACK_APP.modes[0]
   const userName = auth.user?.displayName || auth.user?.username || '本地用户'
 
   useEffect(() => {
@@ -458,28 +618,24 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
     }
   }, [activeAppId, activeModeId])
 
-  const appName = (appId?: string | null) =>
-    apps.find((app) => app.id === appId)?.name || (appId === 'general' ? '通用工作台' : appId || '')
-
   useEffect(() => {
     api
       .get<{ workspaces: WorkspaceRow[]; canCreate: boolean }>('/api/workspaces')
       .then((payload) => {
-        setWorkspaces(payload.workspaces)
-        setCanCreateWorkspace(payload.canCreate)
+        // A server that omits the list (or an older one) must not take the shell
+        // down with it: normalise to an array before it reaches render.
+        const rows = Array.isArray(payload.workspaces) ? payload.workspaces : []
+        setWorkspaces(rows)
+        setCanCreateWorkspace(Boolean(payload.canCreate))
         setWorkspaceError(null)
-        if (!payload.workspaces.some((workspace) => workspace.id === activeWorkspace)) {
-          setActiveWorkspace(payload.workspaces[0]?.id || 'default')
+        if (!rows.some((workspace) => workspace.id === activeWorkspace)) {
+          setActiveWorkspace(rows[0]?.id || 'default')
         }
       })
       .catch((failure: unknown) => {
         setWorkspaceError(failure instanceof Error ? failure.message : '读取工作区失败')
       })
   }, [activeWorkspace])
-
-  useEffect(() => {
-    setWorkspaceSessions((current) => ({ ...current, [activeWorkspace]: agent.sessions }))
-  }, [agent.sessions, activeWorkspace])
 
   useEffect(() => {
     let alive = true
@@ -501,35 +657,18 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
     }
   }, [])
 
-  const loadWorkspaceSessions = async (workspace: string) => {
-    if (workspaceSessions[workspace]) return
-    try {
-      const payload = await api.get<{ sessions: WorkspaceSession[] }>(
-        `/api/sessions?workspace=${encodeURIComponent(workspace)}`,
-      )
-      setWorkspaceSessions((current) => ({ ...current, [workspace]: payload.sessions }))
-    } catch {
-      setWorkspaceSessions((current) => ({ ...current, [workspace]: [] }))
-    }
-  }
-
-  const toggleWorkspace = (workspace: string) => {
-    const opening = !expandedSpaces[workspace]
-    setExpandedSpaces((current) => ({ ...current, [workspace]: opening }))
-    if (opening) void loadWorkspaceSessions(workspace)
-  }
-
   const loadApps = () => {
     api
       .get<{ apps: AppRow[]; canManage?: boolean }>('/api/apps')
       .then((payload) => {
-        setApps(payload.apps)
+        const rows = Array.isArray(payload.apps) ? payload.apps : []
+        setApps(rows)
         setCanManageApps(Boolean(payload.canManage))
-        if (payload.apps.length > 0) {
-          const current = payload.apps.find((app) => app.id === activeAppId)
+        if (rows.length > 0) {
+          const current = rows.find((app) => app.id === activeAppId)
           if (!current) {
-            setActiveAppId(payload.apps[0].id)
-            setActiveModeId(payload.apps[0].modes[0]?.id || 'office')
+            setActiveAppId(rows[0].id)
+            setActiveModeId(rows[0].modes[0]?.id || 'office')
           }
         }
       })
@@ -547,8 +686,8 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
         .get<{ notifications: NotificationRow[]; unread: number }>('/api/notifications')
         .then((payload) => {
           if (!alive) return
-          setNotifications(payload.notifications)
-          setUnread(payload.unread)
+          setNotifications(Array.isArray(payload.notifications) ? payload.notifications : [])
+          setUnread(Number(payload.unread) || 0)
         })
         .catch(() => {
           // Single mode (or a server without notifications) just hides the badge.
@@ -575,11 +714,48 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   }, [navOpen])
 
   useEffect(() => {
-    if (!moreOpen) return
-    const close = () => setMoreOpen(false)
+    window.localStorage.setItem('pi.sidebar.group', groupBy)
+  }, [groupBy])
+
+  useEffect(() => {
+    window.localStorage.setItem('pi.sidebar.sort', sortBy)
+  }, [sortBy])
+
+  // Closing a menu on an outside click, same contract as the other popovers.
+  useEffect(() => {
+    if (!viewMenuOpen && !workspaceMenuOpen) return
+    const close = () => {
+      setViewMenuOpen(false)
+      setWorkspaceMenuOpen(false)
+    }
     window.addEventListener('click', close)
     return () => window.removeEventListener('click', close)
-  }, [moreOpen])
+  }, [viewMenuOpen, workspaceMenuOpen])
+
+  // Opening a parked cross-workspace session needs the *new* socket: the click still
+  // sees the old one as open, so wait for a real down→up transition.
+  const connectionRef = useRef(agent.connection)
+  useEffect(() => {
+    const previous = connectionRef.current
+    connectionRef.current = agent.connection
+    if (agent.connection !== 'open' || previous === 'open') return
+    const path = pendingSessionRef.current
+    if (!path) return
+    pendingSessionRef.current = null
+    agent.switchSession(path)
+    go('/workbench/chat')
+    // `agent` is rebuilt every render; the ref guard above keeps this a one-shot.
+  }, [agent.connection])
+
+  useEffect(() => {
+    if (!railMenuOpen && !workspaceMenuOpen) return
+    const close = () => {
+      setRailMenuOpen(false)
+      setWorkspaceMenuOpen(false)
+    }
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [railMenuOpen, workspaceMenuOpen])
 
   const goView = (next: View) => {
     setNavOpen(false)
@@ -606,7 +782,12 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   }
 
   const createWorkspace = async () => {
-    const name = window.prompt('新工作区名称')?.trim()
+    const name = (await askText({
+      title: '新建工作区',
+      label: '工作区名称',
+      placeholder: '例如：研究空间',
+      confirmText: '创建',
+    }))?.trim()
     if (!name) return
     try {
       const created = await api.post<WorkspaceRow>('/api/workspaces', { name })
@@ -622,6 +803,17 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
     agent.switchSession(path)
     setNavOpen(false)
     go('/workbench/chat')
+  }
+
+  /** Opens a session even when it belongs to another workspace: switch, then open. */
+  const openAnySession = (session: WorkspaceSession) => {
+    const workspace = session.workspace?.id
+    if (workspace && workspace !== activeWorkspace) {
+      pendingSessionRef.current = session.path
+      switchWorkspace(workspace)
+      return
+    }
+    openSession(session.path)
   }
 
   // Images are downscaled in the browser and travel to the server as inline
@@ -701,270 +893,448 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const visibleSessions = (rows: WorkspaceSession[] | undefined) =>
     rows?.filter((session) => !scheduledSessionFiles.has(session.path))
 
-  return (
+  const allSessions = visibleSessions(agent.sessions) ?? []
+  const query = search.trim().toLowerCase()
+  const listedSessions = query
+    ? allSessions.filter((session) => sessionTitle(session).toLowerCase().includes(query))
+    : allSessions
+  const sessionGroups = buildSessionGroups(
+    listedSessions,
+    groupBy,
+    sortBy,
+    workspaces,
+    activeWorkspace,
+    workspaceName,
+  )
+  const runningSessions = (scheduleRuns ?? []).slice(0, 4)
+  const activeSessionPath = agent.state?.sessionFile
+  const chatTitle = agent.state?.sessionName?.trim() || '新任务'
+  const pageMeta = PAGE_META[view]
+  const topTitle =
+    view === 'home' ? '首页' : view === 'chat' ? chatTitle : pageMeta?.title ?? 'Pi'
+  const topSub =
+    view === 'home'
+      ? `${activeApp.name} · ${activeMode.name}`
+      : view === 'chat'
+        ? `${workspaceName} / ${activeApp.name} / ${activeMode.name}`
+        : pageMeta?.sub ?? ''
+
+  const accountMenu = (
     <>
-      <div className={`wb${folded ? ' is-folded' : ''}${navOpen ? ' is-nav-open' : ''}`}>
-        <aside className="wb-sidebar">
-          <div className="wb-side-head">
-            <button type="button" className="wb-logo" onClick={() => goView('home')} aria-label="回到首页">
-              <img src="/pi-icon.png" alt="" />
-              <span>Pi</span>
-            </button>
+      {auth.authMode === 'team' ? (
+        <>
+          {auth.user?.isAdmin ? (
             <button
               type="button"
-              className="wb-fold"
-              onClick={() => setFolded((value) => !value)}
-              aria-label={folded ? '展开侧栏' : '收起侧栏'}
+              onClick={() => {
+                setRailMenuOpen(false)
+                go('/workbench/users')
+              }}
             >
-              <Icon name="panel" size={17} />
+              用户管理
             </button>
-          </div>
-          <div className="wb-version">V0.1.0</div>
-
-          <button type="button" className="wb-new" onClick={newTask}>
-            <Icon name="plus" size={16} />
-            <span>新建任务</span>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              setRailMenuOpen(false)
+              go('/account')
+            }}
+          >
+            修改密码
           </button>
+          <div className="wb-more-line" />
+          <button
+            type="button"
+            onClick={() => {
+              setRailMenuOpen(false)
+              void auth.logout()
+            }}
+          >
+            退出登录
+          </button>
+          <div className="wb-more-line" />
+        </>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => {
+          setRailMenuOpen(false)
+          go('/workbench/help')
+        }}
+      >
+        帮助
+      </button>
+      {auth.authMode !== 'team' ? <small>单机模式 · 无需登录</small> : null}
+    </>
+  )
 
-          <nav className="wb-nav" aria-label="主导航">
-            {NAV.map((item) => (
-              <button
-                key={item.view}
-                type="button"
-                className={`wb-nav-item${view === item.view ? ' is-active' : ''}`}
-                onClick={() => goView(item.view)}
-              >
-                <Icon name={item.icon} size={19} />
-                <span>{item.label}</span>
-                {item.view === 'scheduled' ? <i className="wb-dot" /> : null}
-              </button>
-            ))}
+  return (
+    <>
+      <div className={`wb${navOpen ? ' is-nav-open' : ''}`}>
+        <aside className="wb-rail">
+          <button type="button" className="rail-logo" onClick={() => goView('home')} title="Pi 工作台">
+            π
+          </button>
+          <nav className="rail-nav" aria-label="功能">
+            {RAIL.map((item) => {
+              // 首页与会话都属于「应用」这一层，和视觉稿的选中态一致。
+              const activeView = view === 'home' || view === 'chat' ? 'apps' : view
+              return (
+                <button
+                  key={item.view}
+                  type="button"
+                  className={`rail-item${activeView === item.view ? ' is-active' : ''}`}
+                  onClick={() => goView(item.view)}
+                  title={item.label}
+                  aria-current={activeView === item.view ? 'page' : undefined}
+                >
+                  <Icon name={item.icon} size={19} />
+                  <span>{item.label}</span>
+                </button>
+              )
+            })}
+          </nav>
+          <div className="rail-foot">
+            <button
+              type="button"
+              className={`rail-item${view === 'help' ? ' is-active' : ''}`}
+              onClick={() => goView('help')}
+              title="帮助"
+            >
+              <Icon name="help" size={19} />
+              <span>帮助</span>
+            </button>
             <div className="wb-more-anchor">
               <button
                 type="button"
-                className="wb-nav-item"
+                className={`rail-item${railMenuOpen || view === 'users' ? ' is-active' : ''}`}
                 onClick={(event) => {
                   event.stopPropagation()
-                  setMoreOpen((value) => !value)
+                  setRailMenuOpen((value) => !value)
                 }}
+                title="设置"
               >
-                <Icon name="more" size={19} />
-                <span>更多</span>
+                <Icon name="settings" size={19} />
+                <span>设置</span>
               </button>
-              {moreOpen ? (
-                <div className="wb-more" onClick={(event) => event.stopPropagation()}>
-                  {auth.authMode === 'team' ? (
-                    <>
-                      {auth.user?.isAdmin ? (
-                        <button type="button" onClick={() => { setMoreOpen(false); go('/workbench/users') }}>
-                          用户管理
-                        </button>
-                      ) : null}
-                      <button type="button" onClick={() => { setMoreOpen(false); go('/account') }}>
-                        修改密码
-                      </button>
-                      <div className="wb-more-line" />
-                      <button type="button" onClick={() => void auth.logout()}>
-                        退出登录
-                      </button>
-                      <div className="wb-more-line" />
-                    </>
-                  ) : null}
-                  <button type="button" onClick={() => { setMoreOpen(false); go('/workbench/help') }}>
-                    帮助
-                  </button>
-                  {auth.authMode !== 'team' ? <small>单机模式 · 无需登录</small> : null}
+              {railMenuOpen ? (
+                <div className="rail-menu" onClick={(event) => event.stopPropagation()}>
+                  {accountMenu}
                 </div>
               ) : null}
             </div>
-          </nav>
-
-          <div className="wb-scroll">
-            <div className="wb-section-head">
-              <button
-                type="button"
-                className="wb-section-toggle"
-                onClick={() => setTasksOpen((value) => !value)}
-                aria-expanded={tasksOpen}
-              >
-                <span>定时任务</span>
-                <b>({scheduleRuns?.length ?? 0})</b>
-              </button>
-            </div>
-            {tasksOpen ? (
-              <div className="wb-session-list">
-                {scheduleRuns === null ? <p className="wb-side-empty">读取中…</p> : scheduleRuns.length === 0 ? (
-                  <p className="wb-side-empty">还没有定时任务运行</p>
-                ) : (
-                  scheduleRuns.map((run) => {
-                    const active = Boolean(run.sessionFile && agent.state?.sessionFile === run.sessionFile)
-                    return (
-                      <button
-                        key={run.id}
-                        type="button"
-                        className={`wb-session${active ? ' is-active' : ''}`}
-                        title={`${run.scheduleName}${run.error ? ` · ${run.error}` : ''}`}
-                        onClick={() => {
-                          if (run.sessionFile) openSession(run.sessionFile)
-                          else go('/workbench/scheduled')
-                        }}
-                      >
-                        <span>{run.scheduleName} · {run.status === 'success' ? '完成' : run.status === 'failed' ? '失败' : '运行中'}</span>
-                        <time>{formatWhen(run.startedAt)}</time>
-                      </button>
-                    )
-                  })
-                )}
-              </div>
-            ) : null}
-
-            <div className="wb-section-head">
-              <button
-                type="button"
-                className="wb-section-toggle"
-                onClick={() => setSpacesOpen((value) => !value)}
-                aria-expanded={spacesOpen}
-              >
-                <span>工作区</span>
-                <b>({workspaces.length})</b>
-              </button>
-              {canCreateWorkspace ? (
-                <button
-                  type="button"
-                  className="wb-section-add"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void createWorkspace()
-                  }}
-                  aria-label="新建工作区"
-                >
-                  <Icon name="plus" size={13} />
-                </button>
-              ) : null}
-            </div>
-            {spacesOpen ? (
-              <>
-                {workspaceError ? <p className="wb-side-empty">{workspaceError}</p> : null}
-                {workspaces.map((workspace) => {
-                  const expanded = Boolean(expandedSpaces[workspace.id])
-                  const listed = visibleSessions(workspaceSessions[workspace.id])
-                  const count = workspace.id === activeWorkspace
-                    ? visibleSessions(agent.sessions)?.length
-                    : listed?.length
-                  return (
-                    <div className="wb-space-block" key={workspace.id}>
-                      <div className={`wb-space-row${workspace.id === activeWorkspace ? ' is-active' : ''}`}>
-                        <button
-                          type="button"
-                          className="wb-space"
-                          aria-expanded={expanded}
-                          onClick={() => {
-                            if (workspace.id !== activeWorkspace) {
-                              switchWorkspace(workspace.id)
-                              setExpandedSpaces((current) => ({ ...current, [workspace.id]: true }))
-                              void loadWorkspaceSessions(workspace.id)
-                              return
-                            }
-                            toggleWorkspace(workspace.id)
-                          }}
-                          title={workspace.path || workspace.name}
-                        >
-                          <Icon name="folder" size={17} />
-                          <span>{workspace.name}</span>
-                          {typeof count === 'number' ? <i>{count}</i> : null}
-                        </button>
-                      </div>
-                      {expanded ? (
-                        <div className="wb-space-sessions">
-                          {listed === undefined ? (
-                            <p className="wb-side-empty">读取对话…</p>
-                          ) : listed.length === 0 ? (
-                            <p className="wb-side-empty">还没有对话</p>
-                          ) : (
-                            listed.map((session) => (
-                              <button
-                                key={session.path || session.id}
-                                type="button"
-                                className="wb-space-session"
-                                title={sessionTitle(session)}
-                                onClick={() => openSession(session.path)}
-                              >
-                                <span>
-                                  {sessionTitle(session)}
-                                  {session.app && session.app !== activeAppId ? (
-                                    <i className="wb-session-app">{appName(session.app)}</i>
-                                  ) : null}
-                                </span>
-                                <time>{formatWhen(session.modified)}</time>
-                              </button>
-                            ))
-                          )}
-                        </div>
-                      ) : null}
-                    </div>
-                  )
-                })}
-              </>
-            ) : null}
-          </div>
-
-          <div className="wb-foot">
-            <span className="wb-avatar">{userName.slice(0, 1)}</span>
-            <span className="wb-who">{userName}</span>
             <button
               type="button"
-              className="wb-bell"
-              title={unread ? `${unread} 条未读通知` : '通知'}
+              className="rail-avatar"
               onClick={(event) => {
                 event.stopPropagation()
-                setNotificationsOpen((value) => !value)
+                setRailMenuOpen((value) => !value)
               }}
+              title={userName}
+              aria-label={`账号：${userName}`}
             >
-              <Icon name="bell" size={17} />
-              {unread > 0 ? <i>{unread > 9 ? '9+' : unread}</i> : null}
+              {userName.slice(0, 1)}
             </button>
           </div>
+        </aside>
 
-          {notificationsOpen ? (
-            <div className="wb-notifications" onClick={(event) => event.stopPropagation()}>
-              <header>
-                <b>通知</b>
-                <button type="button" className="wb-link" onClick={() => void readAllNotifications()}>
-                  全部已读
+        <aside className="wb-panel">
+          <div className="panel-head">
+            {searchOpen ? (
+              <div className="panel-search is-inline">
+                <Icon name="search" size={14} />
+                <input
+                  autoFocus
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="搜索会话名称"
+                  aria-label="搜索会话"
+                />
+                <button
+                  type="button"
+                  className="search-clear"
+                  aria-label="关闭搜索"
+                  onClick={() => {
+                    setSearchOpen(false)
+                    setSearch('')
+                  }}
+                >
+                  <Icon name="close" size={13} />
                 </button>
-              </header>
-              <div className="wb-notification-list">
-                {notifications.length === 0 ? (
-                  <p className="wb-muted">还没有通知。</p>
-                ) : (
-                  notifications.map((notification) => (
-                    <button
-                      key={notification.id}
-                      type="button"
-                      className={`wb-notification${notification.read ? '' : ' is-unread'}`}
-                      onClick={() => void readNotification(notification)}
-                    >
-                      <span className={`wb-run-dot is-${notification.kind.endsWith('failed') ? 'failed' : 'success'}`} />
-                      <span>
-                        <b>{notification.title}</b>
-                        <i>{notification.body}</i>
-                        <time>{formatDateTime(notification.createdAt)}</time>
-                      </span>
-                    </button>
-                  ))
-                )}
               </div>
-            </div>
-          ) : null}
+            ) : (
+              <>
+                <h2 className="panel-title">工作区</h2>
+                <div className="panel-head-actions">
+                  <button
+                    type="button"
+                    className="panel-icon-btn"
+                    title="搜索会话"
+                    aria-label="搜索会话"
+                    onClick={() => setSearchOpen(true)}
+                  >
+                    <Icon name="search" size={16} />
+                  </button>
+                  <div className="panel-menu-anchor">
+                    <button
+                      type="button"
+                      className={`panel-icon-btn${viewMenuOpen ? ' is-active' : ''}`}
+                      title="显示选项"
+                      aria-haspopup="menu"
+                      aria-expanded={viewMenuOpen}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setViewMenuOpen((value) => !value)
+                        setWorkspaceMenuOpen(false)
+                      }}
+                    >
+                      <Icon name="sliders" size={16} />
+                    </button>
+                    {viewMenuOpen ? (
+                      <div className="panel-menu" role="menu" onClick={(event) => event.stopPropagation()}>
+                        <div className="menu-label">分组方式</div>
+                        <button type="button" onClick={() => setGroupBy('workspace')}>
+                          <Icon name="folder" size={14} />
+                          <span>按工作区</span>
+                          {groupBy === 'workspace' ? <Icon name="check" size={14} /> : null}
+                        </button>
+                        <button type="button" onClick={() => setGroupBy('flat')}>
+                          <Icon name="list" size={14} />
+                          <span>单列表</span>
+                          {groupBy === 'flat' ? <Icon name="check" size={14} /> : null}
+                        </button>
+                        <div className="panel-menu-line" />
+                        <div className="menu-label">排序方式</div>
+                        <button type="button" onClick={() => setSortBy('recent')}>
+                          <Icon name="clock" size={14} />
+                          <span>最近更新</span>
+                          {sortBy === 'recent' ? <Icon name="check" size={14} /> : null}
+                        </button>
+                        <button type="button" onClick={() => setSortBy('name')}>
+                          <Icon name="file" size={14} />
+                          <span>会话名称</span>
+                          {sortBy === 'name' ? <Icon name="check" size={14} /> : null}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="panel-menu-anchor">
+                    <button
+                      type="button"
+                      className={`panel-icon-btn${workspaceMenuOpen ? ' is-active' : ''}`}
+                      title="新建或切换工作区"
+                      aria-haspopup="menu"
+                      aria-expanded={workspaceMenuOpen}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setWorkspaceMenuOpen((value) => !value)
+                        setViewMenuOpen(false)
+                      }}
+                    >
+                      <Icon name="folderPlus" size={16} />
+                    </button>
+                    {workspaceMenuOpen ? (
+                      <div className="panel-menu" role="menu" onClick={(event) => event.stopPropagation()}>
+                        {canCreateWorkspace ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setWorkspaceMenuOpen(false)
+                                void createWorkspace()
+                              }}
+                            >
+                              <Icon name="plus" size={14} />
+                              <span>新建工作区</span>
+                            </button>
+                            <div className="panel-menu-line" />
+                          </>
+                        ) : null}
+                        <div className="menu-label">切换工作区</div>
+                        {workspaces.map((workspace) => (
+                          <button
+                            key={workspace.id}
+                            type="button"
+                            title={workspace.path || workspace.name}
+                            onClick={() => {
+                              setWorkspaceMenuOpen(false)
+                              switchWorkspace(workspace.id)
+                            }}
+                          >
+                            <Icon name="folder" size={14} />
+                            <span>{workspace.name}</span>
+                            {workspace.id === activeWorkspace ? <Icon name="check" size={14} /> : null}
+                          </button>
+                        ))}
+                        {workspaceError ? <div className="panel-menu-error">{workspaceError}</div> : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          <button type="button" className="panel-new" onClick={newTask}>
+            <Icon name="plus" size={14} />
+            新建任务
+          </button>
+
+          <div className="panel-scroll">
+            {runningSessions.length > 0 ? (
+              <>
+                <div className="list-label">定时运行</div>
+                {runningSessions.map((run) => (
+                  <button
+                    key={run.id}
+                    type="button"
+                    className={`conv${run.sessionFile && activeSessionPath === run.sessionFile ? ' is-active' : ''}`}
+                    title={`${run.scheduleName}${run.error ? ` · ${run.error}` : ''}`}
+                    onClick={() => {
+                      if (run.sessionFile) openSession(run.sessionFile)
+                      else go('/workbench/scheduled')
+                    }}
+                  >
+                    <span className="conv-glyph">
+                      <Icon name="clock" size={13} />
+                    </span>
+                    <span className="conv-title">{run.scheduleName}</span>
+                    <span
+                      className={`wb-run-dot is-${
+                        run.status === 'success' ? 'success' : run.status === 'failed' ? 'failed' : 'running'
+                      }`}
+                    />
+                  </button>
+                ))}
+              </>
+            ) : null}
+
+            {sessionGroups.length === 0 ? (
+              <p className="panel-empty">
+                {query ? '没有匹配的会话。' : '还没有会话，点上方「新建任务」开始。'}
+              </p>
+            ) : (
+              sessionGroups.map((group) => (
+                <div className="ws-group" key={group.key}>
+                  {group.label ? (
+                    <div className="ws-group-head">
+                      <Icon name="folder" size={14} />
+                      <span>{group.label}</span>
+                    </div>
+                  ) : null}
+                  {group.rows.map((session) => {
+                    const active = Boolean(activeSessionPath && activeSessionPath === session.path)
+                    return (
+                      <button
+                        key={session.path || session.id}
+                        type="button"
+                        className={`conv${active ? ' is-active' : ''}`}
+                        title={sessionTitle(session)}
+                        onClick={() => openAnySession(session)}
+                      >
+                        {active ? <span className="dot" /> : null}
+                        <span className="conv-title">{sessionTitle(session)}</span>
+                        <time>{timeLabel(session.modified)}</time>
+                      </button>
+                    )
+                  })}
+                </div>
+              ))
+            )}
+          </div>
 
         </aside>
 
         <div className="wb-scrim" onClick={() => setNavOpen(false)} />
 
         <main className="wb-main">
-          <button type="button" className="wb-mobile-menu" onClick={() => setNavOpen(true)} aria-label="打开导航">
-            <Icon name="panel" size={18} />
-          </button>
+          <header className="wb-topbar">
+            <button
+              type="button"
+              className="wb-mobile-menu"
+              onClick={() => setNavOpen(true)}
+              aria-label="打开导航"
+            >
+              <Icon name="panel" size={18} />
+            </button>
+            <div className="tb-title">
+              <b>{topTitle}</b>
+              {topSub ? <span className="sep">/</span> : null}
+              {topSub ? <span>{topSub}</span> : null}
+            </div>
+            <div className="tb-actions">
+              {view === 'chat' ? (
+                <button
+                  type="button"
+                  className={`wb-artifact-toggle${artifactsOpen ? ' is-active' : ''}`}
+                  onClick={() => setArtifactsOpen((value) => !value)}
+                  title="产物"
+                >
+                  <Icon name="book" size={15} />
+                  产物
+                </button>
+              ) : null}
+              <span className="tb-divider" />
+              <button
+                type="button"
+                className="wb-theme"
+                onClick={theme.toggle}
+                title={theme.isDark ? '切换到浅色' : '切换到深色'}
+                aria-label={theme.isDark ? '切换到浅色' : '切换到深色'}
+              >
+                <span aria-hidden="true">{theme.isDark ? '☀' : '☾'}</span>
+              </button>
+              <button
+                type="button"
+                className="wb-bell"
+                title={unread ? `${unread} 条未读通知` : '通知'}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setNotificationsOpen((value) => !value)
+                }}
+              >
+                <Icon name="bell" size={16} />
+                {unread > 0 ? <i>{unread > 9 ? '9+' : unread}</i> : null}
+              </button>
+            </div>
+
+            {notificationsOpen ? (
+              <div className="wb-notifications" onClick={(event) => event.stopPropagation()}>
+                <header>
+                  <b>通知</b>
+                  <button type="button" className="wb-link" onClick={() => void readAllNotifications()}>
+                    全部已读
+                  </button>
+                </header>
+                <div className="wb-notification-list">
+                  {notifications.length === 0 ? (
+                    <p className="wb-muted">还没有通知。</p>
+                  ) : (
+                    notifications.map((notification) => (
+                      <button
+                        key={notification.id}
+                        type="button"
+                        className={`wb-notification${notification.read ? '' : ' is-unread'}`}
+                        onClick={() => void readNotification(notification)}
+                      >
+                        <span
+                          className={`wb-run-dot is-${
+                            notification.kind.endsWith('failed') ? 'failed' : 'success'
+                          }`}
+                        />
+                        <span>
+                          <b>{notification.title}</b>
+                          <i>{notification.body}</i>
+                          <time>{formatDateTime(notification.createdAt)}</time>
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </header>
 
           {view === 'home' ? (
             <HomeView
@@ -981,6 +1351,9 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
               images={draftImages}
               onAddImages={(files) => void addImages('home', files)}
               onRemoveImage={(id) => removeImage('home', id)}
+              models={agent.models}
+              currentModel={agent.state?.model ?? null}
+              onSelectModel={agent.setModel}
             />
           ) : null}
 
@@ -991,15 +1364,27 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
               onDraft={setChatDraft}
               onSend={sendChat}
               disabled={!connectionOpen}
-              onHome={() => goView('home')}
               workspaceId={activeWorkspace}
               workspacePath={workspacePath}
               workspaceName={workspaceName}
-              appName={activeApp.name}
               modeName={activeMode.name}
               images={chatImages}
               onAddImages={(files) => void addImages('chat', files)}
               onRemoveImage={(id) => removeImage('chat', id)}
+              models={agent.models}
+              currentModel={agent.state?.model ?? null}
+              onSelectModel={agent.setModel}
+              onOpenArtifact={(path) => {
+                setArtifactFocus(workspaceRelative(path, workspacePath))
+                setArtifactsOpen(true)
+              }}
+              artifactsOpen={artifactsOpen}
+              onCloseArtifacts={() => {
+                setArtifactsOpen(false)
+                setArtifactFocus(null)
+              }}
+              artifactFocus={artifactFocus}
+              onArtifactFocusHandled={() => setArtifactFocus(null)}
             />
           ) : null}
 
@@ -1020,6 +1405,7 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
             />
           ) : null}
           {view === 'plugins' ? <PluginsView appId={activeAppId} /> : null}
+          {view === 'market' ? <MarketView /> : null}
           {view === 'scheduled' ? (
             <ScheduledView
               workspaces={workspaces}
@@ -1034,8 +1420,8 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
           {view === 'users' ? <UsersView isAdmin={Boolean(auth.user?.isAdmin)} /> : null}
         </main>
       </div>
-
       <DialogHost dialogs={agent.dialogs} onRespond={agent.respondDialog} />
+      <PromptHost />
       <Toasts toasts={agent.toasts} onDismiss={agent.dismissToast} />
     </>
   )
@@ -1055,6 +1441,9 @@ function HomeView({
   images,
   onAddImages,
   onRemoveImage,
+  models,
+  currentModel,
+  onSelectModel,
 }: {
   app: AppRow
   modeId: string
@@ -1069,48 +1458,63 @@ function HomeView({
   images: DraftImage[]
   onAddImages: (files: File[]) => void
   onRemoveImage: (id: string) => void
+  models: ModelInfo[]
+  currentModel: ModelInfo | null
+  onSelectModel: (model: ModelInfo) => void
 }) {
   const mode = app.modes.find((item) => item.id === modeId) || app.modes[0]
   const fallback = MODES[mode.id as Mode]
-  const quick = mode.capsules.length
+  const capsules = mode.capsules.length
     ? mode.capsules
     : (fallback?.quick ?? []).map((label) => ({ id: label, name: label, prompt: label }))
   const examples = mode.examples?.length ? mode.examples : fallback?.examples ?? []
   const placeholder = mode.placeholder || fallback?.placeholder || '输入消息，或 / 调用技能'
+  const cards = examples.slice(0, 4)
+  const tiles: IconName[] = ['file', 'slides', 'sheet', 'clock']
+  const tones = ['tile--blue', 'tile--orange', 'tile--green', 'tile--purple']
 
   return (
     <div className="wb-home">
       <div className="wb-home-inner">
-        <img className="wb-hero-icon" src="/pi-icon.png" alt="" />
-        <h1>Pi，我帮你</h1>
+        <h1>有什么可以帮你？</h1>
         <div className="wb-app-line">
-          <span style={{ background: app.accent }} />
+          <i />
           {app.name} · {mode.name}
         </div>
 
-        <div className="wb-modes" role="tablist" aria-label="工作模式">
-          {app.modes.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={mode.id === item.id}
-              className={`wb-mode${mode.id === item.id ? ' is-active' : ''}`}
-              onClick={() => onChangeMode(item.id)}
-              title={item.description}
-            >
-              <Icon name={((item.icon || MODES[item.id as Mode]?.icon || 'spark') as IconName)} size={15} />
-              {item.name}
-            </button>
-          ))}
-        </div>
-
-        <div className="wb-quick">
-          {quick.map((capsule) => (
-            <button key={capsule.id} type="button" onClick={() => onDraft(capsule.prompt)}>
-              {capsule.name}
-            </button>
-          ))}
+        <div className="home-controls">
+          <div className="wb-modes" role="tablist" aria-label="工作模式">
+            {app.modes.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={mode.id === item.id}
+                className={`wb-mode${mode.id === item.id ? ' is-active' : ''}`}
+                onClick={() => onChangeMode(item.id)}
+                title={item.description || item.name}
+              >
+                <Icon
+                  name={((item.icon || MODES[item.id as Mode]?.icon || 'spark') as IconName)}
+                  size={13}
+                />
+                {item.name}
+              </button>
+            ))}
+          </div>
+          <div className="wb-quick">
+            {capsules.slice(0, 3).map((capsule, index) => (
+              <button
+                key={capsule.id}
+                type="button"
+                className={index === 0 ? 'is-accent' : ''}
+                onClick={() => onDraft(capsule.prompt)}
+              >
+                {index === 0 ? <Icon name="spark" size={12} /> : null}
+                {capsule.name}
+              </button>
+            ))}
+          </div>
         </div>
 
         <WbComposer
@@ -1125,16 +1529,34 @@ function HomeView({
           images={images}
           onAddImages={onAddImages}
           onRemoveImage={onRemoveImage}
+          models={models}
+          currentModel={currentModel}
+          onSelectModel={onSelectModel}
         />
 
-        <div className="wb-examples">
-          {examples.map((example) => (
-            <button key={example} type="button" onClick={() => onDraft(example)}>
-              <span>{example}</span>
-              <Icon name="arrowUp" size={14} />
-            </button>
-          ))}
-        </div>
+        {cards.length > 0 ? (
+          <div className="quick-grid">
+            {cards.map((example, index) => (
+              <button
+                key={example}
+                type="button"
+                className="quick-card"
+                onClick={() => onDraft(example)}
+              >
+                <span className={`tile ${tones[index % tones.length]}`}>
+                  <Icon name={tiles[index % tiles.length]} size={16} />
+                </span>
+                <span className="txt">
+                  <b>{example}</b>
+                  <small>{mode.name} · 示例提示</small>
+                </span>
+                <span className="go">
+                  <Icon name="chevronRight" size={14} />
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         <p className="wb-declare">以上内容均由 AI 生成，仅供参考和借鉴</p>
       </div>
@@ -1148,34 +1570,43 @@ function ChatView({
   onDraft,
   onSend,
   disabled,
-  onHome,
   workspaceId,
   workspacePath,
   workspaceName,
-  appName,
   modeName,
   images,
   onAddImages,
   onRemoveImage,
+  models,
+  currentModel,
+  onSelectModel,
+  artifactsOpen,
+  onCloseArtifacts,
+  onOpenArtifact,
+  artifactFocus,
+  onArtifactFocusHandled,
 }: {
   agent: AgentApi
   draft: string
   onDraft: (value: string) => void
   onSend: () => void
   disabled: boolean
-  onHome: () => void
   workspaceId: string
   workspacePath: string
   workspaceName: string
-  appName: string
   modeName: string
   images: DraftImage[]
   onAddImages: (files: File[]) => void
   onRemoveImage: (id: string) => void
+  models: ModelInfo[]
+  currentModel: ModelInfo | null
+  onSelectModel: (model: ModelInfo) => void
+  artifactsOpen: boolean
+  onCloseArtifacts: () => void
+  onOpenArtifact: (path: string) => void
+  artifactFocus: string | null
+  onArtifactFocusHandled: () => void
 }) {
-  const title = agent.state?.sessionName?.trim() || '新任务'
-  const [artifactsOpen, setArtifactsOpen] = useState(false)
-  const [artifactFocus, setArtifactFocus] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<Record<number, number>>({})
   const sessionFile = agent.state?.sessionFile
 
@@ -1207,32 +1638,6 @@ function ChatView({
 
   return (
     <div className="wb-chat">
-      <header className="wb-chat-head">
-        <button type="button" className="wb-icon-button" onClick={onHome} aria-label="返回首页">
-          <Icon name="chevronLeft" size={19} />
-        </button>
-        <div className="wb-chat-title">
-          <b>{title}</b>
-          <span>
-            <Icon name="house" size={12} />
-            {workspaceName} · {appName} / {modeName}
-          </span>
-        </div>
-        <span className="wb-spacer" />
-        <button
-          type="button"
-          className={`wb-artifact-toggle${artifactsOpen ? ' is-active' : ''}`}
-          onClick={() => setArtifactsOpen((value) => !value)}
-          title="产物"
-        >
-          <Icon name="book" size={16} />
-          产物
-        </button>
-        <button type="button" className="wb-icon-button" title="搜索（即将支持）" disabled>
-          <Icon name="search" size={18} />
-        </button>
-      </header>
-
       <div className="wb-chat-body">
         <div className="wb-chat-main">
           <WbTranscript
@@ -1240,13 +1645,10 @@ function ChatView({
             workspaceId={workspaceId}
             workspacePath={workspacePath}
             sessionFile={sessionFile}
+            modeName={modeName}
             feedback={feedback}
             onFeedback={(timestamp, rating) => void rate(timestamp, rating)}
-            onOpenPresented={(path) => {
-              const relative = workspaceRelative(path, workspacePath)
-              setArtifactFocus(relative)
-              setArtifactsOpen(true)
-            }}
+            onOpenPresented={onOpenArtifact}
           />
           <div className="wb-chat-composer">
             <WbComposer
@@ -1256,24 +1658,28 @@ function ChatView({
               onAbort={agent.abort}
               streaming={agent.isStreaming}
               disabled={disabled}
-              placeholder="今天帮你做些什么？可以粘贴或拖入图片"
+              placeholder="继续追问，或 / 调用技能"
               workspaceName={workspaceName}
               images={images}
               onAddImages={onAddImages}
               onRemoveImage={onRemoveImage}
+              models={models}
+              currentModel={currentModel}
+              onSelectModel={onSelectModel}
               chat
             />
+            <div className="composer-hint">
+              <span>Enter 发送 · Shift + Enter 换行</span>
+              {agent.isStreaming ? <span>正在生成，可随时中断</span> : null}
+            </div>
           </div>
         </div>
         {artifactsOpen ? (
           <ArtifactPane
             workspaceId={workspaceId}
             focusPath={artifactFocus}
-            onFocusHandled={() => setArtifactFocus(null)}
-            onClose={() => {
-              setArtifactsOpen(false)
-              setArtifactFocus(null)
-            }}
+            onFocusHandled={onArtifactFocusHandled}
+            onClose={onCloseArtifacts}
           />
         ) : null}
       </div>
@@ -1399,8 +1805,8 @@ function OfficeEditor({
   const lower = path.toLowerCase()
   const kind = lower.endsWith('.pptx') ? 'slides' : lower.endsWith('.xlsx') ? 'sheets' : ''
   const editorUrl = kind
-    ? `/office/${kind}/?embed=1&open=${encodeURIComponent(docId)}`
-    : `/office/?embed=1&doc=${encodeURIComponent(docId)}`
+    ? `/office/${kind}/?embed=1&open=${encodeURIComponent(docId)}&v=${OFFICE_SHELL_REV}`
+    : `/office/?embed=1&doc=${encodeURIComponent(docId)}&v=${OFFICE_SHELL_REV}`
   const [phase, setPhase] = useState<'locking' | 'ready' | 'locked' | 'error'>('locking')
   const [message, setMessage] = useState('')
   const [saved, setSaved] = useState(false)
@@ -2057,9 +2463,10 @@ function PresentedFiles({
   return (
     <div className="wb-presented">
       <div className="wb-presented-title">
-        <Icon name="book" size={14} />
-        <span>交付文件</span>
+        <Icon name="book" size={13} />
+        <span>交付物 · {files.length} 个文件</span>
       </div>
+      <div className="wb-presented-list">
       {files.map((file) => {
         const name = file.path.split('/').filter(Boolean).pop() || file.path
         const extension = name.includes('.') ? name.split('.').pop()!.toUpperCase() : 'FILE'
@@ -2070,8 +2477,8 @@ function PresentedFiles({
           <div className="wb-presented-card" key={file.path}>
             <span className="wb-presented-icon"><Icon name={extension === 'PPTX' ? 'slides' : extension === 'XLSX' ? 'sheet' : 'file'} size={20} /></span>
             <span className="wb-presented-body">
-              <b>{name}</b>
-              <small>{file.description || extension}</small>
+              <b title={name}>{name}</b>
+              <small title={file.description || extension}>{file.description || extension}</small>
             </span>
             <button type="button" className="wb-button" onClick={() => onOpen(relative)}>
               {office ? '在线编辑' : '查看'}
@@ -2080,15 +2487,14 @@ function PresentedFiles({
           </div>
         )
       })}
+      </div>
     </div>
   )
 }
 
 function WbThinking({ text, running }: { text: string; running: boolean }) {
+  // 默认收起，和 DSH 一致：一行「思考 · 首句」，点开才看到过程。
   const [open, setOpen] = useState(false)
-  useEffect(() => {
-    if (!running) setOpen(false)
-  }, [running])
   const summary =
     text
       .split(/\n+/)
@@ -2105,8 +2511,13 @@ function WbThinking({ text, running }: { text: string; running: boolean }) {
         <Icon name="spark" size={14} />
         <span>思考</span>
         {running ? <em>思考中…</em> : null}
-        {!open ? <small>{summary}</small> : null}
-        <Icon name="chevronDown" size={12} />
+        {!open ? (
+          <small>
+            <i aria-hidden="true" />
+            <span>{summary}</span>
+          </small>
+        ) : null}
+        <Icon name="chevronDown" size={13} />
       </button>
       {open ? (
         <div className="wb-thinking-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />
@@ -2196,6 +2607,18 @@ function buildTurns(entries: TranscriptEntry[], streaming: boolean): ChatTurn[] 
   return turns
 }
 
+/** 这一轮有没有「过程」可看（思考 / 工具 / 自定义消息）；只有正文就不必显示折叠行。 */
+function hasProcessSteps(turn: ChatTurn): boolean {
+  return turn.entries.some((entry) => {
+    const message = entry.message
+    if (message.role === 'toolResult' || message.role === 'custom') return true
+    if (message.role !== 'assistant') return false
+    return message.content.some(
+      (block) => isThinkingBlock(block) || (isToolCallBlock(block) && block.name !== 'present'),
+    )
+  })
+}
+
 function TurnProcess({
   turn,
   children,
@@ -2207,10 +2630,8 @@ function TurnProcess({
   now: number
   lastActivityAt: number
 }) {
+  // 一轮结束默认收起：只留一行「已完成，用时 x」，点开才看每一步的思考和工具调用。
   const [open, setOpen] = useState(false)
-  useEffect(() => {
-    if (!turn.running) setOpen(false)
-  }, [turn.running])
   const elapsed = formatElapsed((turn.running ? now : turn.end) - turn.start)
   const quiet = turn.running && now - lastActivityAt > 20_000
   const stuck = turn.running && now - lastActivityAt > 45_000
@@ -2318,8 +2739,17 @@ function ProcessToolRow({
   const stalled = running && idleMs > 15_000
   const stuck = running && idleMs > 45_000
   const label = stuck ? '可能卡住' : stalled ? '等待输出' : toolStatus(execution)
+  // 默认收起，只留一行（状态在右侧），点开才看参数和输出。
+  const [expanded, setExpanded] = useState(false)
   return (
-    <details className={`wb-process-row is-${toolStatus(execution) === '失败' ? 'error' : execution?.status || 'done'}${stalled ? ' is-stalled' : ''}${stuck ? ' is-stuck' : ''}`}>
+    <details
+      open={expanded}
+      onToggle={(event) => {
+        const next = event.currentTarget.open
+        if (next !== expanded) setExpanded(next)
+      }}
+      className={`wb-process-row is-${toolStatus(execution) === '失败' ? 'error' : execution?.status || 'done'}${stalled ? ' is-stalled' : ''}${stuck ? ' is-stuck' : ''}`}
+    >
       <summary>
         <span className={`wb-process-glyph${running && !stalled ? ' is-running' : ''}`}><Icon name={(block as { name?: string }).name === 'bash' ? 'code' : (block as { name?: string }).name === 'present' ? 'book' : 'file'} size={14} /></span>
         <b>{title}</b>
@@ -2352,9 +2782,17 @@ function ProcessToolResult({
     ? message.content.filter(isImageBlock).filter((block) => Boolean(block.data))
     : []
   const name = message.role === 'toolResult' ? message.toolName || '工具' : '工具'
+  const [expanded, setExpanded] = useState(false)
   if (!text.trim()) return null
   return (
-    <details className={`wb-process-row${message.role === 'toolResult' && message.isError ? ' is-error' : ''}`}>
+    <details
+      open={expanded}
+      onToggle={(event) => {
+        const next = event.currentTarget.open
+        if (next !== expanded) setExpanded(next)
+      }}
+      className={`wb-process-row${message.role === 'toolResult' && message.isError ? ' is-error' : ''}`}
+    >
       <summary>
         <span className="wb-process-glyph"><Icon name="code" size={14} /></span>
         <b>{name}</b>
@@ -2426,39 +2864,69 @@ function TurnAnswer({
   feedback: Record<number, number>
   onFeedback: (timestamp: number, rating: number) => void
 }) {
+  // Hooks run before any early return so a turn that gains text mid-stream keeps
+  // the same hook order as one that already has it.
+  const [copied, setCopied] = useState(false)
   const blocks = turn.answers.flatMap((entry) =>
     entry.message.role === 'assistant' ? entry.message.content.filter(isTextBlock) : [],
   )
-  if (blocks.length === 0) return null
   const final = turn.final?.message.role === 'assistant' ? (turn.final.message as AssistantMessage) : null
+  const usage = usageLine(final?.usage)
+  const copyAnswer = async () => {
+    try {
+      await navigator.clipboard.writeText(blocks.map((block) => block.text).join('\n\n'))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // Clipboard permission is optional; leave the button silent on refusal.
+    }
+  }
+  if (blocks.length === 0) return null
   return (
-    <div className="wb-msg-ai is-answer">
-      <div className="wb-msg-body">
-        <div className="wb-msg-content">
-          {blocks.map((block, index) => (
-            <div className="wb-md" key={index} dangerouslySetInnerHTML={{ __html: renderMarkdown(block.text) }} />
-          ))}
-        </div>
-        {usageLine(final?.usage) ? <div className="wb-msg-usage">{usageLine(final?.usage)}</div> : null}
-        {final && sessionFile ? (
-          <div className="wb-feedback">
-            {[1, -1].map((rating) => (
-              <button
-                key={rating}
-                type="button"
-                className={feedback[final.timestamp ?? 0] === rating ? 'is-active' : ''}
-                onClick={() => onFeedback(final.timestamp ?? 0, rating)}
-                title={rating === 1 ? '有帮助' : '没帮助'}
-                aria-label={rating === 1 ? '有帮助' : '没帮助'}
-              >
-                {rating === 1 ? '👍' : '👎'}
-              </button>
-            ))}
-            {feedback[final.timestamp ?? 0] ? <span>已反馈</span> : null}
-          </div>
-        ) : null}
+    <>
+      <div className="wb-msg-content">
+        {blocks.map((block, index) => (
+          <div
+            className="wb-md"
+            key={index}
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(block.text) }}
+          />
+        ))}
       </div>
-    </div>
+      {usage || (final && sessionFile) ? (
+        <div className="wb-msg-foot">
+          {usage ? <span className="num">{usage}</span> : null}
+          <div className="wb-msg-actions">
+            <button
+              type="button"
+              className="wb-copy"
+              onClick={() => void copyAnswer()}
+              title={copied ? '已复制' : '复制回答'}
+              aria-label={copied ? '已复制' : '复制回答'}
+            >
+              {copied ? '已复制' : <Icon name="copy" size={13} />}
+            </button>
+          {final && sessionFile ? (
+            <div className="wb-feedback">
+              {[1, -1].map((rating) => (
+                <button
+                  key={rating}
+                  type="button"
+                  className={feedback[final.timestamp ?? 0] === rating ? 'is-active' : ''}
+                  onClick={() => onFeedback(final.timestamp ?? 0, rating)}
+                  title={rating === 1 ? '有帮助' : '没帮助'}
+                  aria-label={rating === 1 ? '有帮助' : '没帮助'}
+                >
+                  {rating === 1 ? '👍' : '👎'}
+                </button>
+              ))}
+              {feedback[final.timestamp ?? 0] ? <span>已反馈</span> : null}
+            </div>
+          ) : null}
+          </div>
+        </div>
+      ) : null}
+    </>
   )
 }
 
@@ -2467,6 +2935,7 @@ function WbTranscript({
   workspaceId,
   workspacePath,
   sessionFile,
+  modeName,
   feedback,
   onFeedback,
   onOpenPresented,
@@ -2475,6 +2944,7 @@ function WbTranscript({
   workspaceId: string
   workspacePath: string
   sessionFile?: string
+  modeName: string
   feedback: Record<number, number>
   onFeedback: (timestamp: number, rating: number) => void
   onOpenPresented: (path: string) => void
@@ -2568,17 +3038,30 @@ function WbTranscript({
                   onFeedback={onFeedback}
                 />
               ) : null}
-              {turn.entries.length > 0 || turn.final ? (
-                <TurnProcess turn={turn} now={now} lastActivityAt={lastActivity.current}>
-                  <ProcessEntries turn={turn} toolExecutions={agent.toolExecutions} />
-                </TurnProcess>
-              ) : null}
-              <TurnAnswer
-                turn={turn}
-                sessionFile={sessionFile}
-                feedback={feedback}
-                onFeedback={onFeedback}
-              />
+              <div className="wb-msg-ai">
+                <span className="wb-msg-avatar" aria-hidden="true">
+                  π
+                </span>
+                <div className="wb-msg-body">
+                  <div className="wb-msg-name">
+                    <b>Pi</b>
+                    <span>AI 助手</span>
+                    <span className="wb-msg-mode">· {modeName}</span>
+                    <time className="num">{formatClock(turn.start)}</time>
+                  </div>
+                  {turn.running || hasProcessSteps(turn) ? (
+                    <TurnProcess turn={turn} now={now} lastActivityAt={lastActivity.current}>
+                      <ProcessEntries turn={turn} toolExecutions={agent.toolExecutions} />
+                    </TurnProcess>
+                  ) : null}
+                  <TurnAnswer
+                    turn={turn}
+                    sessionFile={sessionFile}
+                    feedback={feedback}
+                    onFeedback={onFeedback}
+                  />
+                </div>
+              </div>
             </section>
           ))}
           {presented.length > 0 ? (
@@ -2628,6 +3111,9 @@ function WbMessage({
           </div>
         ) : null}
         {text ? <div className="wb-msg-user-text">{text}</div> : null}
+        {formatClock(messageTime(entry)) ? (
+          <time className="num">{formatClock(messageTime(entry))}</time>
+        ) : null}
       </div>
     )
   }
@@ -2640,9 +3126,17 @@ function WbMessage({
     })
     return (
       <div className={`wb-msg-ai${mode === 'answer' ? ' is-answer' : ''}`}>
-        <img className="wb-msg-avatar" src="/pi-icon.png" alt="" />
+        <span className="wb-msg-avatar" aria-hidden="true">
+          π
+        </span>
         <div className="wb-msg-body">
-          <div className="wb-msg-name">Pi <span>助手</span></div>
+          <div className="wb-msg-name">
+            <b>Pi</b>
+            <span>AI 助手</span>
+            {formatClock(assistant.timestamp) ? (
+              <time className="num">{formatClock(assistant.timestamp)}</time>
+            ) : null}
+          </div>
           <div className="wb-msg-content">
             {blocks.map((block, index) => (
               <WbBlock
@@ -2766,6 +3260,9 @@ function WbComposer({
   images,
   onAddImages,
   onRemoveImage,
+  models,
+  currentModel,
+  onSelectModel,
   chat = false,
 }: {
   value: string
@@ -2779,16 +3276,28 @@ function WbComposer({
   images: DraftImage[]
   onAddImages: (files: File[]) => void
   onRemoveImage: (id: string) => void
+  models: ModelInfo[]
+  currentModel: ModelInfo | null
+  onSelectModel: (model: ModelInfo) => void
   chat?: boolean
 }) {
   const ref = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const [modelOpen, setModelOpen] = useState(false)
+
   useEffect(() => {
     const node = ref.current
     if (!node) return
     node.style.height = 'auto'
-    node.style.height = `${Math.min(node.scrollHeight, 200)}px`
+    node.style.height = `${Math.min(node.scrollHeight, 240)}px`
   }, [value])
+
+  useEffect(() => {
+    if (!modelOpen) return
+    const close = () => setModelOpen(false)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [modelOpen])
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -2805,6 +3314,14 @@ function WbComposer({
   }
 
   const ready = value.trim().length > 0 || images.length > 0
+  const current = currentModel || models[0] || null
+  const modelLabel = current?.name || current?.id || '模型'
+
+  const insertSkillSlash = () => {
+    const next = value.trimEnd() ? `${value.trimEnd()} /` : '/'
+    onChange(next)
+    window.setTimeout(() => ref.current?.focus(), 0)
+  }
 
   return (
     <div
@@ -2868,31 +3385,94 @@ function WbComposer({
         disabled={disabled && !streaming}
       />
       <div className="wb-composer-bar">
+        <div className="model-anchor" onClick={(event) => event.stopPropagation()}>
+          <button
+            type="button"
+            className="model-chip"
+            title="选择模型"
+            aria-haspopup="menu"
+            aria-expanded={modelOpen}
+            onClick={() => setModelOpen((open) => !open)}
+          >
+            <Icon name="spark" size={12} />
+            <span>{modelLabel}</span>
+            {models.length > 0 ? <Icon name="chevronDown" size={11} /> : null}
+          </button>
+          {modelOpen ? (
+            <div className="model-menu" role="menu">
+              {models.length === 0 ? (
+                <p className="model-empty">当前部署没有上报可用模型。</p>
+              ) : (
+                models.map((model) => {
+                  const activeModel = current?.id === model.id
+                  return (
+                    <button
+                      key={`${model.provider}/${model.id}`}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={activeModel}
+                      className={activeModel ? 'is-active' : ''}
+                      onClick={() => {
+                        onSelectModel(model)
+                        setModelOpen(false)
+                      }}
+                    >
+                      <span>
+                        <b>{model.name || model.id}</b>
+                        <small>
+                          {model.provider} · {model.id}
+                        </small>
+                      </span>
+                      {activeModel ? (
+                        <span className="model-check">
+                          <Icon name="check" size={13} />
+                        </span>
+                      ) : null}
+                    </button>
+                  )
+                })
+              )}
+            </div>
+          ) : null}
+        </div>
         <button
           type="button"
-          className="wb-plus"
+          className="wb-attach"
           title="添加图片"
           onClick={() => fileRef.current?.click()}
           disabled={disabled}
         >
-          <Icon name="plus" size={15} />
+          <Icon name="attach" size={15} />
         </button>
-        <span className="wb-ws-hint">
-          <Icon name="house" size={13} />
-          {workspaceName}
-        </span>
+        <button
+          type="button"
+          className="wb-skill-btn"
+          title="调用技能（/）"
+          onClick={insertSkillSlash}
+        >
+          <Icon name="slash" size={15} />
+        </button>
         <span className="wb-spacer" />
-        <button type="button" className="wb-icon-button" title="语音输入（即将支持）">
-          <Icon name="mic" size={17} />
-        </button>
+        {chat ? (
+          <span className="wb-ws-hint" title={workspaceName}>
+            <Icon name="house" size={12} />
+            {workspaceName}
+          </span>
+        ) : null}
+        {streaming ? (
+          <button type="button" className="wb-abort" onClick={onAbort}>
+            中断
+          </button>
+        ) : null}
         <button
           type="button"
           className={`wb-send${ready ? ' is-ready' : ''}${streaming ? ' is-stop' : ''}`}
           onClick={streaming ? onAbort : onSend}
           disabled={!streaming && (!ready || disabled)}
           aria-label={streaming ? '停止生成' : '发送'}
+          title={streaming ? '停止生成' : '发送'}
         >
-          <Icon name={streaming ? 'stop' : 'arrowUp'} size={20} />
+          <Icon name={streaming ? 'stop' : 'arrowUp'} size={streaming ? 14 : 17} />
         </button>
       </div>
     </div>
@@ -3131,9 +3711,45 @@ function MarketPanel({ kind, onInstalled }: { kind: 'skill' | 'plugin'; onInstal
   )
 }
 
+function MarketView() {
+  const [kind, setKind] = useState<'skill' | 'plugin'>('skill')
+  return (
+    <div className="wb-page">
+      <div className="wb-page-inner">
+        <header className="wb-page-head">
+          <div>
+            <h2>市场</h2>
+            <p>技能与插件都从这里安装；装好后在「技能」「插件」页启停。只安装可信来源。</p>
+          </div>
+          <div className="wb-tabs" role="tablist" aria-label="市场类型">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={kind === 'skill'}
+              className={kind === 'skill' ? 'is-active' : ''}
+              onClick={() => setKind('skill')}
+            >
+              技能
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={kind === 'plugin'}
+              className={kind === 'plugin' ? 'is-active' : ''}
+              onClick={() => setKind('plugin')}
+            >
+              插件
+            </button>
+          </div>
+        </header>
+        <MarketPanel kind={kind} onInstalled={() => undefined} />
+      </div>
+    </div>
+  )
+}
+
 function SkillsView({ workspace }: { workspace: string }) {
   const [skills, setSkills] = useState<SkillRow[] | null>(null)
-  const [view, setView] = useState<'installed' | 'market'>('installed')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
@@ -3181,17 +3797,12 @@ function SkillsView({ workspace }: { workspace: string }) {
             <h2>技能</h2>
             <p>技能是 SKILL.md 表达的做事方法；启停只影响本账号后续请求的系统提示词。</p>
           </div>
-          {view === 'installed' && skills ? <span className="wb-chip">{enabled} / {skills.length} 启用</span> : null}
-          <div className="wb-tabs">
-            <button type="button" className={view === 'installed' ? 'is-active' : ''} onClick={() => setView('installed')}>已安装</button>
-            <button type="button" className={view === 'market' ? 'is-active' : ''} onClick={() => setView('market')}>市场</button>
-          </div>
+          {skills ? <span className="wb-chip">{enabled} / {skills.length} 启用</span> : null}
+          <button type="button" className="wb-button" onClick={() => go('/workbench/market')}>
+            去市场
+          </button>
         </header>
 
-        {view === 'market' ? (
-          <MarketPanel kind="skill" onInstalled={load} />
-        ) : (
-          <>
         {error ? <div className="wb-alert">{error}</div> : null}
 
         {skills === null ? (
@@ -3229,8 +3840,6 @@ function SkillsView({ workspace }: { workspace: string }) {
         <div className="wb-footnote">
           启停会在下一条消息生效；已打开的其他标签页可能需要刷新。
         </div>
-          </>
-        )}
       </div>
     </div>
   )
@@ -3326,7 +3935,7 @@ function LibraryView({ workspace }: { workspace: string }) {
   }
 
   const createFolder = async () => {
-    const name = window.prompt('目录名称')?.trim()
+    const name = (await askText({ title: '新建目录', label: '目录名称', placeholder: '例如：资料' }))?.trim()
     if (!name) return
     try {
       await api.post(
@@ -3513,7 +4122,13 @@ function AppsView({
   }
 
   const restore = async (app: AppRow) => {
-    if (!window.confirm(`恢复「${app.name}」的内置默认配置？当前修改会被覆盖。`)) return
+    const restoreConfirmed = await askConfirm({
+      title: '恢复默认配置',
+      message: `恢复「${app.name}」的内置默认配置？当前修改会被覆盖。`,
+      confirmText: '恢复',
+      danger: true,
+    })
+    if (!restoreConfirmed) return
     setBusy(true)
     setError(null)
     try {
@@ -3642,7 +4257,13 @@ function AppsView({
 
   const remove = async () => {
     if (!draft?.id || draft.builtin) return
-    if (!window.confirm(`删除应用「${draft.name}」？`)) return
+    const removeConfirmed = await askConfirm({
+      title: '删除应用',
+      message: `删除应用「${draft.name}」？此操作不可撤销。`,
+      confirmText: '删除',
+      danger: true,
+    })
+    if (!removeConfirmed) return
     setBusy(true)
     try {
       await api.del(`/api/apps/${encodeURIComponent(draft.id)}`)
@@ -4398,7 +5019,7 @@ function PendingPanel({ onChanged }: { onChanged: () => void }) {
 
 function PluginsView({ appId }: { appId: string }) {
   const [plugins, setPlugins] = useState<PluginRow[] | null>(null)
-  const [view, setView] = useState<'installed' | 'market' | 'pending'>('installed')
+  const [view, setView] = useState<'installed' | 'pending'>('installed')
   const [canManage, setCanManage] = useState(false)
   const [canInstall, setCanInstall] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -4468,7 +5089,13 @@ function PluginsView({ appId }: { appId: string }) {
   }
 
   const uninstall = async (plugin: PluginRow) => {
-    if (!window.confirm(`卸载插件「${plugin.name}」？目录和所有租户的启用记录都会删除。`)) return
+    const uninstallConfirmed = await askConfirm({
+      title: '卸载插件',
+      message: `卸载插件「${plugin.name}」？目录和所有租户的启用记录都会删除。`,
+      confirmText: '卸载',
+      danger: true,
+    })
+    if (!uninstallConfirmed) return
     setBusy(plugin.id)
     setError(null)
     try {
@@ -4512,7 +5139,6 @@ function PluginsView({ appId }: { appId: string }) {
           {view === 'installed' && plugins ? <span className="wb-chip">{plugins.filter((item) => item.enabled).length} / {plugins.length} 启用</span> : null}
           <div className="wb-tabs">
             <button type="button" className={view === 'installed' ? 'is-active' : ''} onClick={() => setView('installed')}>已安装</button>
-            <button type="button" className={view === 'market' ? 'is-active' : ''} onClick={() => setView('market')}>市场</button>
             {canInstall ? (
               <button type="button" className={view === 'pending' ? 'is-active' : ''} onClick={() => setView('pending')}>待审</button>
             ) : null}
@@ -4556,9 +5182,7 @@ function PluginsView({ appId }: { appId: string }) {
         </header>
 
         {notice ? <div className="wb-alert">{notice}</div> : null}
-        {view === 'market' ? (
-          <MarketPanel kind="plugin" onInstalled={load} />
-        ) : view === 'pending' ? (
+        {view === 'pending' ? (
           <PendingPanel onChanged={load} />
         ) : (
           <>
@@ -4800,7 +5424,13 @@ function ScheduledView({
   }
 
   const remove = async (schedule: ScheduleRow) => {
-    if (!window.confirm(`删除「${schedule.name}」？运行历史也会删除。`)) return
+    const removeConfirmed = await askConfirm({
+      title: '删除定时任务',
+      message: `删除「${schedule.name}」？运行历史也会删除。`,
+      confirmText: '删除',
+      danger: true,
+    })
+    if (!removeConfirmed) return
     try {
       await api.del(`/api/schedules/${schedule.id}`)
       load()

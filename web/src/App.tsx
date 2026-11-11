@@ -39,7 +39,18 @@ export function App() {
       <>
         <a
           href="#/workbench"
-          style={{ position: 'fixed', left: 24, top: 20, zIndex: 10, fontSize: 13, color: '#3B5FBA' }}
+          style={{
+            position: 'fixed',
+            left: 24,
+            top: 20,
+            zIndex: 10,
+            padding: '6px 10px',
+            borderRadius: 6,
+            background: 'var(--card)',
+            border: '1px solid var(--line)',
+            fontSize: 13,
+            color: 'var(--primary-text)',
+          }}
         >
           ← 返回工作台
         </a>

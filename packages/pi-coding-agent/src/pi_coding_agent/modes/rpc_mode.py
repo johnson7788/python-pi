@@ -257,6 +257,12 @@ class RpcMode:
         if runtime is not None:
             # Replacement swaps the session object; re-attach or events stop flowing.
             runtime.set_rebind_session(self._rebind_session)
+            # A session retired mid-turn keeps running in the background: stop
+            # forwarding its events here so they cannot leak into the replacement.
+            # Optional, so a minimal runtime (tests, embedders) still works.
+            detach_hook = getattr(runtime, "set_before_session_invalidate", None)
+            if callable(detach_hook):
+                detach_hook(self._detach_session)
 
     @property
     def session(self) -> AgentSession:
@@ -270,9 +276,14 @@ class RpcMode:
     def _bind_session(self) -> None:
         self._unsubscribe = self.session.subscribe(self._on_session_event)
 
-    async def _rebind_session(self, session: AgentSession) -> None:
+    def _detach_session(self) -> None:
+        """Stop forwarding the current session's events (it may outlive its turn)."""
         if self._unsubscribe is not None:
             self._unsubscribe()
+            self._unsubscribe = None
+
+    async def _rebind_session(self, session: AgentSession) -> None:
+        self._detach_session()
         self._unsubscribe = session.subscribe(self._on_session_event)
 
     def _emit(self, payload: Any) -> None:
