@@ -1,10 +1,9 @@
 /**
- * Chat image attachments, prepared in the browser before they are sent.
+ * Chat attachments, prepared in the browser before they are sent.
  *
- * The server accepts inline base64 only, and a phone screenshot easily exceeds
- * 4 MB.  Downscaling here keeps a prompt small enough for the WebSocket frame
- * limit and for the model's own image budget, while still leaving text legible
- * (1568px is the long edge most vision APIs recommend).
+ * Images are downscaled and travel to the server as inline base64.  Everything
+ * else (PDF, Word, CSV, …) is uploaded to the active workspace and the agent is
+ * given its path, because the chat protocol only carries images.
  */
 
 export interface DraftImage {
@@ -18,8 +17,21 @@ export interface DraftImage {
   bytes: number
 }
 
+export interface DraftFile {
+  id: string
+  name: string
+  mimeType: string
+  bytes: number
+  /** Workspace-relative path returned by the upload endpoint. */
+  path: string
+}
+
 /** More than a handful of images in one turn is a bug, not a use case. */
 export const MAX_ATTACHMENTS = 4
+
+/** Non-image files are capped by the workspace upload limit (32 MB). */
+export const MAX_FILES = 8
+export const MAX_UPLOAD_BYTES = 32 * 1024 * 1024
 
 const MAX_DIMENSION = 1568
 const JPEG_QUALITY = 0.85

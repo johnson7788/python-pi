@@ -19,8 +19,8 @@ import { toolResultText } from '../lib/useAgent'
 import { resolveApiBase } from '../lib/endpoints'
 import { renderMarkdown } from '../lib/markdown'
 import { asRecord, isImageBlock, isTextBlock, isThinkingBlock, isToolCallBlock } from '../lib/protocol'
-import { MAX_ATTACHMENTS, prepareImageFile } from '../lib/images'
-import type { DraftImage } from '../lib/images'
+import { MAX_ATTACHMENTS, MAX_FILES, MAX_UPLOAD_BYTES, prepareImageFile } from '../lib/images'
+import type { DraftFile, DraftImage } from '../lib/images'
 import type {
   AssistantMessage,
   ContentBlock,
@@ -597,6 +597,8 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const [chatDraft, setChatDraft] = useState('')
   const [draftImages, setDraftImages] = useState<DraftImage[]>([])
   const [chatImages, setChatImages] = useState<DraftImage[]>([])
+  const [draftFiles, setDraftFiles] = useState<DraftFile[]>([])
+  const [chatFiles, setChatFiles] = useState<DraftFile[]>([])
 
   const connectionOpen = agent.connection === 'open'
   const workspaceName =
@@ -776,6 +778,8 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
     setChatDraft('')
     setDraftImages([])
     setChatImages([])
+    setDraftFiles([])
+    setChatFiles([])
     setActiveWorkspace(workspace)
     setNavOpen(false)
     goView('home')
@@ -841,15 +845,73 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
     else setChatImages(drop)
   }
 
+  /**
+   * Non-image files cannot travel through the chat protocol (it is text + inline
+   * images).  Put them in the active workspace instead and hand the agent their
+   * paths in the message; the workspace is the agent's cwd, so every tool and
+   * skill can open them.
+   */
+  const addFiles = async (target: 'home' | 'chat', files: File[]) => {
+    const workspace = activeWorkspace
+    const prepared: DraftFile[] = []
+    for (const file of files) {
+      if (file.size > MAX_UPLOAD_BYTES) {
+        window.alert(`${file.name} 超过 32 MB，无法上传。`)
+        continue
+      }
+      const safeName =
+        (file.name || 'file').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'file'
+      const targetPath = `/attachments/${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}-${safeName}`
+      try {
+        await api.upload(
+          `/api/workspace/file?path=${encodeURIComponent(targetPath)}&workspace=${encodeURIComponent(workspace)}`,
+          await file.arrayBuffer(),
+        )
+        prepared.push({
+          id: `file-${Date.now()}-${prepared.length}`,
+          name: file.name || safeName,
+          mimeType: file.type || 'application/octet-stream',
+          bytes: file.size,
+          path: targetPath.replace(/^\/+/, ''),
+        })
+      } catch (failure) {
+        window.alert(
+          `上传 ${file.name} 失败：${failure instanceof Error ? failure.message : '未知错误'}`,
+        )
+      }
+    }
+    if (prepared.length === 0) return
+    const append = (current: DraftFile[]) => [...current, ...prepared].slice(0, MAX_FILES)
+    if (target === 'home') setDraftFiles(append)
+    else setChatFiles(append)
+  }
+
+  const removeFile = (target: 'home' | 'chat', id: string) => {
+    const drop = (current: DraftFile[]) => current.filter((file) => file.id !== id)
+    if (target === 'home') setDraftFiles(drop)
+    else setChatFiles(drop)
+  }
+
+  const attachmentNote = (files: DraftFile[]) =>
+    files.length
+      ? `\n\n附件已上传到工作区，请直接使用这些路径：\n${files
+          .map((file) => `- ${file.path}（${file.name}，${formatBytes(file.bytes)}）`)
+          .join('\n')}`
+      : ''
+
   const attachmentsOf = (images: DraftImage[]): ImageAttachment[] =>
     images.map((image) => ({ type: 'image', mimeType: image.mimeType, data: image.data }))
 
   const sendHome = () => {
     const text = draft.trim()
-    if ((!text && draftImages.length === 0) || !connectionOpen) return
-    agent.sendPrompt(text, undefined, draftImages.length ? attachmentsOf(draftImages) : undefined)
+    if ((!text && draftImages.length === 0 && draftFiles.length === 0) || !connectionOpen) return
+    const message = `${text}${attachmentNote(draftFiles)}`.trim()
+    agent.sendPrompt(message, undefined, draftImages.length ? attachmentsOf(draftImages) : undefined)
     setDraft('')
     setDraftImages([])
+    setDraftFiles([])
     go('/workbench/chat')
   }
 
@@ -881,10 +943,12 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
 
   const sendChat = () => {
     const text = chatDraft.trim()
-    if ((!text && chatImages.length === 0) || !connectionOpen) return
-    agent.sendPrompt(text, undefined, chatImages.length ? attachmentsOf(chatImages) : undefined)
+    if ((!text && chatImages.length === 0 && chatFiles.length === 0) || !connectionOpen) return
+    const message = `${text}${attachmentNote(chatFiles)}`.trim()
+    agent.sendPrompt(message, undefined, chatImages.length ? attachmentsOf(chatImages) : undefined)
     setChatDraft('')
     setChatImages([])
+    setChatFiles([])
   }
 
   const scheduledSessionFiles = new Set(
@@ -1351,6 +1415,9 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
               images={draftImages}
               onAddImages={(files) => void addImages('home', files)}
               onRemoveImage={(id) => removeImage('home', id)}
+              files={draftFiles}
+              onAddFiles={(files) => void addFiles('home', files)}
+              onRemoveFile={(id) => removeFile('home', id)}
               models={agent.models}
               currentModel={agent.state?.model ?? null}
               onSelectModel={agent.setModel}
@@ -1371,6 +1438,9 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
               images={chatImages}
               onAddImages={(files) => void addImages('chat', files)}
               onRemoveImage={(id) => removeImage('chat', id)}
+              files={chatFiles}
+              onAddFiles={(files) => void addFiles('chat', files)}
+              onRemoveFile={(id) => removeFile('chat', id)}
               models={agent.models}
               currentModel={agent.state?.model ?? null}
               onSelectModel={agent.setModel}
@@ -1441,6 +1511,9 @@ function HomeView({
   images,
   onAddImages,
   onRemoveImage,
+  files,
+  onAddFiles,
+  onRemoveFile,
   models,
   currentModel,
   onSelectModel,
@@ -1458,6 +1531,9 @@ function HomeView({
   images: DraftImage[]
   onAddImages: (files: File[]) => void
   onRemoveImage: (id: string) => void
+  files: DraftFile[]
+  onAddFiles: (files: File[]) => void
+  onRemoveFile: (id: string) => void
   models: ModelInfo[]
   currentModel: ModelInfo | null
   onSelectModel: (model: ModelInfo) => void
@@ -1529,6 +1605,9 @@ function HomeView({
           images={images}
           onAddImages={onAddImages}
           onRemoveImage={onRemoveImage}
+          files={files}
+          onAddFiles={onAddFiles}
+          onRemoveFile={onRemoveFile}
           models={models}
           currentModel={currentModel}
           onSelectModel={onSelectModel}
@@ -1577,6 +1656,9 @@ function ChatView({
   images,
   onAddImages,
   onRemoveImage,
+  files,
+  onAddFiles,
+  onRemoveFile,
   models,
   currentModel,
   onSelectModel,
@@ -1598,6 +1680,9 @@ function ChatView({
   images: DraftImage[]
   onAddImages: (files: File[]) => void
   onRemoveImage: (id: string) => void
+  files: DraftFile[]
+  onAddFiles: (files: File[]) => void
+  onRemoveFile: (id: string) => void
   models: ModelInfo[]
   currentModel: ModelInfo | null
   onSelectModel: (model: ModelInfo) => void
@@ -1663,6 +1748,9 @@ function ChatView({
               images={images}
               onAddImages={onAddImages}
               onRemoveImage={onRemoveImage}
+              files={files}
+              onAddFiles={onAddFiles}
+              onRemoveFile={onRemoveFile}
               models={models}
               currentModel={currentModel}
               onSelectModel={onSelectModel}
@@ -3260,6 +3348,9 @@ function WbComposer({
   images,
   onAddImages,
   onRemoveImage,
+  files,
+  onAddFiles,
+  onRemoveFile,
   models,
   currentModel,
   onSelectModel,
@@ -3276,6 +3367,9 @@ function WbComposer({
   images: DraftImage[]
   onAddImages: (files: File[]) => void
   onRemoveImage: (id: string) => void
+  files: DraftFile[]
+  onAddFiles: (files: File[]) => void
+  onRemoveFile: (id: string) => void
   models: ModelInfo[]
   currentModel: ModelInfo | null
   onSelectModel: (model: ModelInfo) => void
@@ -3309,11 +3403,14 @@ function WbComposer({
 
   const acceptFiles = (files: FileList | File[] | null | undefined) => {
     if (!files) return
-    const picked = Array.from(files).filter((file) => file.type.startsWith('image/'))
-    if (picked.length > 0) onAddImages(picked.slice(0, MAX_ATTACHMENTS))
+    const picked = Array.from(files)
+    const images = picked.filter((file) => file.type.startsWith('image/'))
+    const others = picked.filter((file) => !file.type.startsWith('image/'))
+    if (images.length > 0) onAddImages(images.slice(0, MAX_ATTACHMENTS))
+    if (others.length > 0) onAddFiles(others.slice(0, MAX_FILES))
   }
 
-  const ready = value.trim().length > 0 || images.length > 0
+  const ready = value.trim().length > 0 || images.length > 0 || files.length > 0
   const current = currentModel || models[0] || null
   const modelLabel = current?.name || current?.id || '模型'
 
@@ -3330,17 +3427,16 @@ function WbComposer({
         if (event.dataTransfer.types.includes('Files')) event.preventDefault()
       }}
       onDrop={(event) => {
-        const files = Array.from(event.dataTransfer.files)
-        if (files.some((file) => file.type.startsWith('image/'))) {
+        const dropped = Array.from(event.dataTransfer.files)
+        if (dropped.length > 0) {
           event.preventDefault()
-          acceptFiles(files)
+          acceptFiles(dropped)
         }
       }}
     >
       <input
         ref={fileRef}
         type="file"
-        accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
         multiple
         hidden
         onChange={(event) => {
@@ -3348,7 +3444,7 @@ function WbComposer({
           event.target.value = ''
         }}
       />
-      {images.length > 0 ? (
+      {images.length > 0 || files.length > 0 ? (
         <div className="wb-attachments">
           {images.map((image) => (
             <div className="wb-attachment" key={image.id}>
@@ -3364,6 +3460,24 @@ function WbComposer({
               </button>
             </div>
           ))}
+          {files.map((file) => (
+            <div className="wb-attachment is-file" key={file.id} title={file.path}>
+              <Icon name="file" size={16} />
+              <span className="wb-attachment-name">
+                <b>{file.name}</b>
+                <i>{formatBytes(file.bytes)}</i>
+              </span>
+              <button
+                type="button"
+                className="wb-attachment-remove"
+                onClick={() => onRemoveFile(file.id)}
+                aria-label={`移除 ${file.name}`}
+                title="移除附件"
+              >
+                ×
+              </button>
+            </div>
+          ))}
         </div>
       ) : null}
       <textarea
@@ -3374,12 +3488,10 @@ function WbComposer({
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={onKeyDown}
         onPaste={(event) => {
-          const files = Array.from(event.clipboardData.files).filter((file) =>
-            file.type.startsWith('image/'),
-          )
-          if (files.length > 0) {
+          const pasted = Array.from(event.clipboardData.files)
+          if (pasted.length > 0) {
             event.preventDefault()
-            onAddImages(files.slice(0, MAX_ATTACHMENTS))
+            acceptFiles(pasted)
           }
         }}
         disabled={disabled && !streaming}
@@ -3438,7 +3550,7 @@ function WbComposer({
         <button
           type="button"
           className="wb-attach"
-          title="添加图片"
+          title="添加附件（图片、PDF、Word 等任意文件）"
           onClick={() => fileRef.current?.click()}
           disabled={disabled}
         >
