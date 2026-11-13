@@ -1,0 +1,130 @@
+{
+  "id": "waterfall",
+  "name": "瀑布图",
+  "family": "compare",
+  "use": "从期初到期末，拆解每一步的增减贡献",
+  "avoid": "步骤超过 8 个；增减顺序没有业务含义",
+  "bind": {
+    "columns": [
+      "step",
+      "base",
+      "delta"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "step",
+      "base",
+      "delta"
+    ],
+    "rows": [
+      [
+        "期初",
+        0,
+        120
+      ],
+      [
+        "新增",
+        120,
+        40
+      ],
+      [
+        "流失",
+        160,
+        -30
+      ],
+      [
+        "提价",
+        130,
+        15
+      ],
+      [
+        "期末",
+        0,
+        145
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "shadow"
+      }
+    },
+    "xAxis": {
+      "type": "category",
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "环节"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "客户数"
+    },
+    "series": [
+      {
+        "type": "bar",
+        "stack": "w",
+        "silent": true,
+        "itemStyle": {
+          "color": "transparent"
+        },
+        "encode": {
+          "x": "step",
+          "y": "base"
+        }
+      },
+      {
+        "type": "bar",
+        "stack": "w",
+        "encode": {
+          "x": "step",
+          "y": "delta"
+        },
+        "barMaxWidth": 36,
+        "label": {
+          "show": true,
+          "position": "top",
+          "formatter": "{@delta}"
+        },
+        "stackStrategy": "all"
+      }
+    ],
+    "visualMap": {
+      "show": false,
+      "dimension": 2,
+      "seriesIndex": 1,
+      "pieces": [
+        {
+          "lt": 0,
+          "color": "#dc2626"
+        },
+        {
+          "gte": 0,
+          "color": "#2563eb"
+        }
+      ]
+    }
+  },
+  "title": "客户数拆解：新增 40，流失 30",
+  "note": "柱体跨度是这一步的变动区间；红=减、蓝=增，label 带符号",
+  "notes": {
+    "unit": "户",
+    "caveat": "流失口径：当月未续费"
+  },
+  "pitfalls": [
+    "base 是该步开始前的累计值，算错整张图就错；首尾要能对上",
+    "负增量必须配 `stackStrategy: 'all'`，否则会从 0 往下画",
+    "增/减靠 visualMap 按 delta 正负上色；这一段依赖数据集第 2 列"
+  ],
+  "schema": "pi.chart-template/1"
+}

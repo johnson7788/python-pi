@@ -1,0 +1,128 @@
+{
+  "id": "heatmap",
+  "name": "热力图（二维密度）",
+  "family": "distribution",
+  "use": "两个类目维度 × 数值（星期 × 小时、科室 × 月份）",
+  "avoid": "两个维度都超过 15 档（格子太小）；只需要看总量",
+  "bind": {
+    "columns": [
+      "weekday",
+      "hour",
+      "count"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "weekday",
+      "hour",
+      "count"
+    ],
+    "rows": [
+      [
+        "周一",
+        "9",
+        12
+      ],
+      [
+        "周一",
+        "12",
+        28
+      ],
+      [
+        "周一",
+        "18",
+        9
+      ],
+      [
+        "周二",
+        "9",
+        15
+      ],
+      [
+        "周二",
+        "12",
+        34
+      ],
+      [
+        "周二",
+        "18",
+        11
+      ],
+      [
+        "周三",
+        "9",
+        18
+      ],
+      [
+        "周三",
+        "12",
+        31
+      ],
+      [
+        "周三",
+        "18",
+        14
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "tooltip": {
+      "position": "top"
+    },
+    "grid": {
+      "left": 72,
+      "right": 104,
+      "top": 24,
+      "bottom": 48
+    },
+    "xAxis": {
+      "type": "category",
+      "name": "时段",
+      "splitArea": {
+        "show": true
+      }
+    },
+    "yAxis": {
+      "type": "category",
+      "name": "星期",
+      "splitArea": {
+        "show": true
+      },
+      "inverse": true
+    },
+    "visualMap": {
+      "min": 0,
+      "max": 40,
+      "calculable": true,
+      "orient": "vertical",
+      "right": 12,
+      "top": "center",
+      "itemHeight": 110
+    },
+    "series": [
+      {
+        "type": "heatmap",
+        "encode": {
+          "x": "hour",
+          "y": "weekday",
+          "value": "count"
+        },
+        "label": {
+          "show": false
+        }
+      }
+    ]
+  },
+  "title": "周二中午是高峰",
+  "note": "颜色是分档的，具体值看 tooltip 或标注；色阶要有图例",
+  "notes": {
+    "unit": "次",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "visualMap 的 min/max 用数据范围，别用 0–100 默认值",
+    "色阶不要用红绿（色盲）；色阶放在图外，别压住轴标签"
+  ],
+  "schema": "pi.chart-template/1"
+}

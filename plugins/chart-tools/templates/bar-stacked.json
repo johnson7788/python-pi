@@ -1,0 +1,105 @@
+{
+  "id": "bar-stacked",
+  "name": "堆叠柱状图",
+  "family": "compare",
+  "use": "类目内看构成，同时保留总量",
+  "avoid": "堆叠项里有负数（会互相抵消）；要比较各项之间的大小",
+  "bind": {
+    "columns": [
+      "month",
+      "new",
+      "renew"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "month",
+      "new",
+      "renew"
+    ],
+    "rows": [
+      [
+        "1月",
+        120,
+        80
+      ],
+      [
+        "2月",
+        90,
+        95
+      ],
+      [
+        "3月",
+        140,
+        110
+      ],
+      [
+        "4月",
+        160,
+        120
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "shadow"
+      }
+    },
+    "legend": {
+      "top": 0
+    },
+    "xAxis": {
+      "type": "category",
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "月份"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "订单（单）"
+    },
+    "series": [
+      {
+        "type": "bar",
+        "name": "新客",
+        "stack": "total",
+        "encode": {
+          "x": "month",
+          "y": "new"
+        },
+        "barMaxWidth": 34
+      },
+      {
+        "type": "bar",
+        "name": "复购",
+        "stack": "total",
+        "encode": {
+          "x": "month",
+          "y": "renew"
+        },
+        "barMaxWidth": 34
+      }
+    ]
+  },
+  "title": "月度订单：新客与复购构成",
+  "note": "只能比总量和构成，不要比较中间那一段的高度",
+  "notes": {
+    "unit": "单",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "负数堆叠会抵消，先拆正负",
+    "别用堆叠比较各分项之间的大小"
+  ],
+  "schema": "pi.chart-template/1"
+}

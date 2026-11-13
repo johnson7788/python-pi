@@ -1,0 +1,105 @@
+{
+  "id": "bar-percent",
+  "name": "百分比堆叠",
+  "family": "compare",
+  "use": "看结构随时间/类目变化（占比之和 100%）",
+  "avoid": "需要看绝对值；占比的基数很小时（1–2 个样本）",
+  "bind": {
+    "columns": [
+      "month",
+      "online_pct",
+      "offline_pct"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "month",
+      "online_pct",
+      "offline_pct"
+    ],
+    "rows": [
+      [
+        "1月",
+        62,
+        38
+      ],
+      [
+        "2月",
+        66,
+        34
+      ],
+      [
+        "3月",
+        71,
+        29
+      ],
+      [
+        "4月",
+        74,
+        26
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "valueFormatter": "{value}%"
+    },
+    "legend": {
+      "top": 0
+    },
+    "xAxis": {
+      "type": "category",
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "月份"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "占比（%）",
+      "min": 0,
+      "max": 100
+    },
+    "series": [
+      {
+        "type": "bar",
+        "name": "线上",
+        "stack": "share",
+        "encode": {
+          "x": "month",
+          "y": "online_pct"
+        },
+        "barMaxWidth": 34
+      },
+      {
+        "type": "bar",
+        "name": "线下",
+        "stack": "share",
+        "encode": {
+          "x": "month",
+          "y": "offline_pct"
+        },
+        "barMaxWidth": 34
+      }
+    ]
+  },
+  "title": "线上占比逐月上升",
+  "note": "占比要先算好再画；基数（订单量）写在图注里",
+  "notes": {
+    "unit": "%",
+    "caveat": "占比按订单金额计算"
+  },
+  "pitfalls": [
+    "占比在数据侧算好，别拿原始值堆叠冒充百分比",
+    "Y 轴锁 0–100，否则视觉上会被放大"
+  ],
+  "schema": "pi.chart-template/1"
+}

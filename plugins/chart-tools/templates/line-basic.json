@@ -1,0 +1,96 @@
+{
+  "id": "line-basic",
+  "name": "基础折线图",
+  "family": "trend",
+  "use": "时间序列看趋势（月度、周度、日度）",
+  "avoid": "类目 ≤4 个（柱状更清楚）；类目之间没有顺序",
+  "bind": {
+    "columns": [
+      "month",
+      "sales"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "month",
+      "sales"
+    ],
+    "rows": [
+      [
+        "1月",
+        124
+      ],
+      [
+        "2月",
+        138
+      ],
+      [
+        "3月",
+        156
+      ],
+      [
+        "4月",
+        168
+      ],
+      [
+        "5月",
+        185
+      ],
+      [
+        "6月",
+        183
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "line"
+      }
+    },
+    "xAxis": {
+      "type": "category",
+      "boundaryGap": false,
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "月份"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "销售额（万元）"
+    },
+    "series": [
+      {
+        "type": "line",
+        "encode": {
+          "x": "month",
+          "y": "sales"
+        },
+        "symbolSize": 6,
+        "lineStyle": {
+          "width": 2.5
+        }
+      }
+    ]
+  },
+  "title": "销售额逐月上升，6 月首次回落",
+  "note": "折线看的是方向和速度，不是单点精确值",
+  "notes": {
+    "unit": "万元",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "点数很多时关掉 symbol（`showSymbol: false`）",
+    "不要用平滑曲线掩盖真实波动；要平滑就说明"
+  ],
+  "schema": "pi.chart-template/1"
+}

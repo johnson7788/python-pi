@@ -1,0 +1,119 @@
+{
+  "id": "area-band",
+  "name": "区间带（置信/波动范围）",
+  "family": "trend",
+  "use": "中心值 + 上下界（置信区间、P25–P75、预测区间）",
+  "avoid": "只有单点值；上下界不是同一口径",
+  "bind": {
+    "columns": [
+      "day",
+      "lower",
+      "upper"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "day",
+      "lower",
+      "upper"
+    ],
+    "rows": [
+      [
+        "D1",
+        98,
+        132
+      ],
+      [
+        "D2",
+        102,
+        140
+      ],
+      [
+        "D3",
+        110,
+        148
+      ],
+      [
+        "D4",
+        105,
+        152
+      ],
+      [
+        "D5",
+        118,
+        160
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "line"
+      }
+    },
+    "xAxis": {
+      "type": "category",
+      "boundaryGap": false,
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "日期"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "销售额（万元）"
+    },
+    "series": [
+      {
+        "type": "line",
+        "stack": "band",
+        "symbol": "none",
+        "silent": true,
+        "lineStyle": {
+          "opacity": 0
+        },
+        "areaStyle": {
+          "opacity": 0
+        },
+        "encode": {
+          "x": "day",
+          "y": "lower"
+        }
+      },
+      {
+        "type": "line",
+        "stack": "band",
+        "symbol": "none",
+        "lineStyle": {
+          "opacity": 0
+        },
+        "areaStyle": {
+          "opacity": 0.16
+        },
+        "encode": {
+          "x": "day",
+          "y": "upper"
+        }
+      }
+    ]
+  },
+  "title": "预测区间随天数变宽",
+  "note": "带宽表示不确定性；下界那条线要透明，观众只应看到带",
+  "notes": {
+    "unit": "万元",
+    "caveat": "区间为 P10–P90"
+  },
+  "pitfalls": [
+    "用 stack 做带宽是技巧：下界必须透明且 silent",
+    "区间以哪个口径算的要写进图注"
+  ],
+  "schema": "pi.chart-template/1"
+}

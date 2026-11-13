@@ -1,0 +1,98 @@
+{
+  "id": "bar-grouped",
+  "name": "分组柱状图",
+  "family": "compare",
+  "use": "同一批类目下比较两组数值（计划 vs 实际、今年 vs 去年）",
+  "avoid": "三组以上会挤（改堆叠或分面）；量纲不同不要硬放一张图",
+  "bind": {
+    "columns": [
+      "region",
+      "plan",
+      "actual"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "region",
+      "plan",
+      "actual"
+    ],
+    "rows": [
+      [
+        "华东",
+        300,
+        320
+      ],
+      [
+        "华北",
+        200,
+        180
+      ],
+      [
+        "华南",
+        220,
+        240
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "shadow"
+      }
+    },
+    "legend": {
+      "top": 0
+    },
+    "xAxis": {
+      "type": "category",
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "地区"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "销售额（万元）"
+    },
+    "series": [
+      {
+        "type": "bar",
+        "name": "计划",
+        "encode": {
+          "x": "region",
+          "y": "plan"
+        },
+        "barMaxWidth": 22
+      },
+      {
+        "type": "bar",
+        "name": "实际",
+        "encode": {
+          "x": "region",
+          "y": "actual"
+        },
+        "barMaxWidth": 22
+      }
+    ]
+  },
+  "title": "计划 vs 实际：华南超额，华北缺口最大",
+  "note": "两组同量纲才可比；差距比高度更值得写",
+  "notes": {
+    "unit": "万元",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "图例放顶部，别让默认位置压住柱子",
+    "别把增长率（%）和金额（元）放同一根轴"
+  ],
+  "schema": "pi.chart-template/1"
+}

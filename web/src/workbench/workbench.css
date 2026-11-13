@@ -304,16 +304,32 @@
 
 .list-label { padding: 12px 8px 4px; font-size: 11px; color: var(--t3); }
 .ws-group + .ws-group { margin-top: 2px; }
+/* 分组标题同时是折叠开关：整行可点，悬停给反馈。 */
 .ws-group-head {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 12px 8px 4px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px;
+  border-radius: var(--r-sm);
   font-size: 12px;
   color: var(--t2);
+  text-align: left;
+  user-select: none;
 }
+.ws-group-head:hover { background: var(--fill-1); color: var(--t1); }
 .ws-group-head svg { flex: none; color: var(--t3); }
+.ws-group-head:hover svg { color: var(--t2); }
 .ws-group-head span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-group-count {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  font-style: normal;
+  color: var(--t3);
+  font-variant-numeric: tabular-nums;
+}
 
 .conv {
   display: flex;
@@ -1310,6 +1326,8 @@
   color: var(--t3);
 }
 .wb-copy:hover { background: var(--fill-1); color: var(--t1); }
+.wb-copy:disabled { opacity: 0.5; cursor: progress; }
+
 .wb-turn-process + .wb-msg-content { margin-top: 14px; }
 
 /* 会话底部输入区 */

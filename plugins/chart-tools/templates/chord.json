@@ -1,0 +1,86 @@
+{
+  "id": "chord",
+  "name": "和弦图（双向关系）",
+  "family": "composition",
+  "use": "两个维度之间的双向流量（地区之间、渠道之间）",
+  "avoid": "关系数量少（<3）；需要精确读数",
+  "bind": null,
+  "sample": null,
+  "dataNote": "结构性数据：nodes/links 写在 option 里；ECharts 6 新增，旧版本不支持",
+  "option": {
+    "tooltip": {
+      "trigger": "item"
+    },
+    "legend": {
+      "bottom": 0
+    },
+    "series": [
+      {
+        "type": "chord",
+        "radius": [
+          "58%",
+          "76%"
+        ],
+        "center": [
+          "50%",
+          "46%"
+        ],
+        "label": {
+          "fontSize": 12
+        },
+        "data": [
+          {
+            "name": "华东"
+          },
+          {
+            "name": "华北"
+          },
+          {
+            "name": "华南"
+          },
+          {
+            "name": "西南"
+          }
+        ],
+        "links": [
+          {
+            "source": "华东",
+            "target": "华北",
+            "value": 40
+          },
+          {
+            "source": "华东",
+            "target": "华南",
+            "value": 26
+          },
+          {
+            "source": "华北",
+            "target": "华南",
+            "value": 18
+          },
+          {
+            "source": "华南",
+            "target": "西南",
+            "value": 12
+          },
+          {
+            "source": "西南",
+            "target": "华东",
+            "value": 9
+          }
+        ]
+      }
+    ]
+  },
+  "title": "华东与华北之间流动最频繁",
+  "note": "弦的宽度是流量；双向关系用两条有向边",
+  "notes": {
+    "unit": "次",
+    "caveat": "跨区调拨记录"
+  },
+  "pitfalls": [
+    "和弦图只在 ECharts 6+ 可用，旧版渲染失败",
+    "节点多时弦会缠在一起，>6 个节点换桑基图"
+  ],
+  "schema": "pi.chart-template/1"
+}

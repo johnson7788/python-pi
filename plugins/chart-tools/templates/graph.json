@@ -1,0 +1,110 @@
+{
+  "id": "graph",
+  "name": "关系图",
+  "family": "relation",
+  "use": "实体之间的关系强度（合作、引用、共现）",
+  "avoid": "节点超过 40 个（force 布局会变成毛球）；只需要看层级（用 tree）",
+  "bind": null,
+  "sample": null,
+  "dataNote": "结构性数据：nodes/links 写在 option 里；权重来自汇总，不要估",
+  "option": {
+    "tooltip": {
+      "trigger": "item"
+    },
+    "legend": {
+      "top": 0
+    },
+    "series": [
+      {
+        "type": "graph",
+        "layout": "force",
+        "roam": true,
+        "force": {
+          "repulsion": 220,
+          "edgeLength": 90,
+          "gravity": 0.08
+        },
+        "label": {
+          "show": true,
+          "position": "right",
+          "fontSize": 12
+        },
+        "lineStyle": {
+          "curveness": 0.12,
+          "opacity": 0.5
+        },
+        "categories": [
+          {
+            "name": "医院"
+          },
+          {
+            "name": "药企"
+          },
+          {
+            "name": "学会"
+          }
+        ],
+        "data": [
+          {
+            "name": "A医院",
+            "symbolSize": 26,
+            "category": 0
+          },
+          {
+            "name": "B医院",
+            "symbolSize": 20,
+            "category": 0
+          },
+          {
+            "name": "X药企",
+            "symbolSize": 24,
+            "category": 1
+          },
+          {
+            "name": "Y药企",
+            "symbolSize": 18,
+            "category": 1
+          },
+          {
+            "name": "Z学会",
+            "symbolSize": 16,
+            "category": 2
+          }
+        ],
+        "links": [
+          {
+            "source": "A医院",
+            "target": "X药企",
+            "value": 8
+          },
+          {
+            "source": "B医院",
+            "target": "X药企",
+            "value": 5
+          },
+          {
+            "source": "A医院",
+            "target": "Z学会",
+            "value": 3
+          },
+          {
+            "source": "Z学会",
+            "target": "Y药企",
+            "value": 4
+          }
+        ]
+      }
+    ]
+  },
+  "title": "X 药企与两家医院合作最密",
+  "note": "线的粗细是关系强度；布局是随机的，节点位置没有含义",
+  "notes": {
+    "unit": "次",
+    "caveat": "近 12 个月合作记录"
+  },
+  "pitfalls": [
+    "force 布局每次位置不同，别在图注里描述方位",
+    "节点大小和图例要能对上"
+  ],
+  "schema": "pi.chart-template/1"
+}

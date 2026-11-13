@@ -329,6 +329,12 @@ const ICON_PATHS: Record<string, ReactNode> = {
       <circle cx="15.5" cy="9" r="1" fill="currentColor" stroke="none" />
     </>
   ),
+  chart: (
+    <>
+      <path d="M4 4v16h16" />
+      <path d="m7.5 15.5 3.5-4 2.5 2.5 4.5-6" />
+    </>
+  ),
   logout: <path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4M16 8l4 4-4 4M20 12H9" />,
   bag: (
     <>
@@ -376,6 +382,13 @@ const ICON_PATHS: Record<string, ReactNode> = {
     </>
   ),
   slash: <path d="M5 5h6M8 5v14M14 9h5M16.5 9v10" />,
+  download: (
+    <>
+      <path d="M12 4v10" />
+      <path d="m8 11 4 4 4-4" />
+      <path d="M5 19h14" />
+    </>
+  ),
 }
 
 type IconName = keyof typeof ICON_PATHS
@@ -583,6 +596,19 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   const [sortBy, setSortBy] = useState<SidebarSort>(
     () => (typeof window === 'undefined' ? 'recent' : (window.localStorage.getItem('pi.sidebar.sort') as SidebarSort) || 'recent'),
   )
+  // Group headers double as disclosure toggles; the collapsed set survives reloads.
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const parsed: unknown = JSON.parse(window.localStorage.getItem('pi.sidebar.collapsed') || '[]')
+      return Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === 'string') : []
+    } catch {
+      return []
+    }
+  })
+  const [runsCollapsed, setRunsCollapsed] = useState(
+    () => typeof window !== 'undefined' && window.localStorage.getItem('pi.sidebar.runsCollapsed') === '1',
+  )
   // A conversation in another workspace can only be opened after the socket has been
   // re-bound to that workspace, so the click parks the path here and the effect below
   // opens it once the new worker is connected.
@@ -722,6 +748,14 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   useEffect(() => {
     window.localStorage.setItem('pi.sidebar.sort', sortBy)
   }, [sortBy])
+
+  useEffect(() => {
+    window.localStorage.setItem('pi.sidebar.collapsed', JSON.stringify(collapsedGroups))
+  }, [collapsedGroups])
+
+  useEffect(() => {
+    window.localStorage.setItem('pi.sidebar.runsCollapsed', runsCollapsed ? '1' : '0')
+  }, [runsCollapsed])
 
   // Closing a menu on an outside click, same contract as the other popovers.
   useEffect(() => {
@@ -971,6 +1005,9 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
     workspaceName,
   )
   const runningSessions = (scheduleRuns ?? []).slice(0, 4)
+  const collapsedKeys = new Set(collapsedGroups)
+  const toggleGroup = (key: string) =>
+    setCollapsedGroups((keys) => (keys.includes(key) ? keys.filter((item) => item !== key) : [...keys, key]))
   const activeSessionPath = agent.state?.sessionFile
   const chatTitle = agent.state?.sessionName?.trim() || '新任务'
   const pageMeta = PAGE_META[view]
@@ -1247,31 +1284,44 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
 
           <div className="panel-scroll">
             {runningSessions.length > 0 ? (
-              <>
-                <div className="list-label">定时运行</div>
-                {runningSessions.map((run) => (
-                  <button
-                    key={run.id}
-                    type="button"
-                    className={`conv${run.sessionFile && activeSessionPath === run.sessionFile ? ' is-active' : ''}`}
-                    title={`${run.scheduleName}${run.error ? ` · ${run.error}` : ''}`}
-                    onClick={() => {
-                      if (run.sessionFile) openSession(run.sessionFile)
-                      else go('/workbench/scheduled')
-                    }}
-                  >
-                    <span className="conv-glyph">
-                      <Icon name="clock" size={13} />
-                    </span>
-                    <span className="conv-title">{run.scheduleName}</span>
-                    <span
-                      className={`wb-run-dot is-${
-                        run.status === 'success' ? 'success' : run.status === 'failed' ? 'failed' : 'running'
-                      }`}
-                    />
-                  </button>
-                ))}
-              </>
+              <div className="ws-group">
+                <button
+                  type="button"
+                  className="ws-group-head"
+                  aria-expanded={!runsCollapsed}
+                  title={runsCollapsed ? '展开定时运行' : '收起定时运行'}
+                  onClick={() => setRunsCollapsed((value) => !value)}
+                >
+                  <Icon name={runsCollapsed ? 'chevronRight' : 'chevronDown'} size={13} />
+                  <Icon name="clock" size={14} />
+                  <span>定时运行</span>
+                  <i className="ws-group-count">{runningSessions.length}</i>
+                </button>
+                {runsCollapsed
+                  ? null
+                  : runningSessions.map((run) => (
+                      <button
+                        key={run.id}
+                        type="button"
+                        className={`conv${run.sessionFile && activeSessionPath === run.sessionFile ? ' is-active' : ''}`}
+                        title={`${run.scheduleName}${run.error ? ` · ${run.error}` : ''}`}
+                        onClick={() => {
+                          if (run.sessionFile) openSession(run.sessionFile)
+                          else go('/workbench/scheduled')
+                        }}
+                      >
+                        <span className="conv-glyph">
+                          <Icon name="clock" size={13} />
+                        </span>
+                        <span className="conv-title">{run.scheduleName}</span>
+                        <span
+                          className={`wb-run-dot is-${
+                            run.status === 'success' ? 'success' : run.status === 'failed' ? 'failed' : 'running'
+                          }`}
+                        />
+                      </button>
+                    ))}
+              </div>
             ) : null}
 
             {sessionGroups.length === 0 ? (
@@ -1279,32 +1329,46 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
                 {query ? '没有匹配的会话。' : '还没有会话，点上方「新建任务」开始。'}
               </p>
             ) : (
-              sessionGroups.map((group) => (
-                <div className="ws-group" key={group.key}>
-                  {group.label ? (
-                    <div className="ws-group-head">
-                      <Icon name="folder" size={14} />
-                      <span>{group.label}</span>
-                    </div>
-                  ) : null}
-                  {group.rows.map((session) => {
-                    const active = Boolean(activeSessionPath && activeSessionPath === session.path)
-                    return (
+              sessionGroups.map((group) => {
+                // A search should never leave matches hidden inside a collapsed folder.
+                const collapsed = Boolean(group.label) && !query && collapsedKeys.has(group.key)
+                return (
+                  <div className="ws-group" key={group.key}>
+                    {group.label ? (
                       <button
-                        key={session.path || session.id}
                         type="button"
-                        className={`conv${active ? ' is-active' : ''}`}
-                        title={sessionTitle(session)}
-                        onClick={() => openAnySession(session)}
+                        className="ws-group-head"
+                        aria-expanded={!collapsed}
+                        title={collapsed ? `展开 ${group.label}` : `收起 ${group.label}`}
+                        onClick={() => toggleGroup(group.key)}
                       >
-                        {active ? <span className="dot" /> : null}
-                        <span className="conv-title">{sessionTitle(session)}</span>
-                        <time>{timeLabel(session.modified)}</time>
+                        <Icon name={collapsed ? 'chevronRight' : 'chevronDown'} size={13} />
+                        <Icon name="folder" size={14} />
+                        <span>{group.label}</span>
+                        <i className="ws-group-count">{group.rows.length}</i>
                       </button>
-                    )
-                  })}
-                </div>
-              ))
+                    ) : null}
+                    {collapsed
+                      ? null
+                      : group.rows.map((session) => {
+                          const active = Boolean(activeSessionPath && activeSessionPath === session.path)
+                          return (
+                            <button
+                              key={session.path || session.id}
+                              type="button"
+                              className={`conv${active ? ' is-active' : ''}`}
+                              title={sessionTitle(session)}
+                              onClick={() => openAnySession(session)}
+                            >
+                              {active ? <span className="dot" /> : null}
+                              <span className="conv-title">{sessionTitle(session)}</span>
+                              <time>{timeLabel(session.modified)}</time>
+                            </button>
+                          )
+                        })}
+                  </div>
+                )
+              })
             )}
           </div>
 
@@ -2324,11 +2388,19 @@ function ArtifactPane({
               )}
             </div>
           ) : selected.extension === 'html' || selected.extension === 'htm' ? (
-            htmlPreview ? (
+            preview?.truncated ? (
+              <p className="wb-muted">
+                文件超过 512KB，只截断了预览，脚本不会运行。下载后在浏览器里打开，或让 agent 缩小内联数据。
+              </p>
+            ) : htmlPreview ? (
               <iframe
                 className="wb-html-preview"
                 title={selected.name}
-                sandbox="allow-same-origin"
+                /* 脚本必须能跑，图才画得出来；但不能给 allow-same-origin：srcdoc 继承父页面
+                   的源，两者同时给等于把工作台交给任意 HTML。只给 scripts 时文档落在不透明
+                   源上，拿不到父页面 DOM、cookie、localStorage，也读不到同源接口。 */
+                sandbox="allow-scripts allow-downloads"
+                referrerPolicy="no-referrer"
                 srcDoc={text}
               />
             ) : (
@@ -2955,6 +3027,7 @@ function TurnAnswer({
   // Hooks run before any early return so a turn that gains text mid-stream keeps
   // the same hook order as one that already has it.
   const [copied, setCopied] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const blocks = turn.answers.flatMap((entry) =>
     entry.message.role === 'assistant' ? entry.message.content.filter(isTextBlock) : [],
   )
@@ -2969,6 +3042,32 @@ function TurnAnswer({
       // Clipboard permission is optional; leave the button silent on refusal.
     }
   }
+  const downloadDocx = async () => {
+    setDownloading(true)
+    try {
+      const response = await fetch('/api/export/docx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          markdown: blocks.map((block) => block.text).join('\n\n'),
+          title: '回答',
+          subtitle: new Date().toLocaleDateString('zh-CN'),
+        }),
+      })
+      if (!response.ok) throw new Error(await response.text())
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `回答-${new Date().toISOString().slice(0, 10)}.docx`
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch {
+      // 导出失败不打断阅读：用户还在看答案，给个 title 提示即可。
+    } finally {
+      setDownloading(false)
+    }
+  }
   if (blocks.length === 0) return null
   return (
     <>
@@ -2981,8 +3080,7 @@ function TurnAnswer({
           />
         ))}
       </div>
-      {usage || (final && sessionFile) ? (
-        <div className="wb-msg-foot">
+      <div className="wb-msg-foot">
           {usage ? <span className="num">{usage}</span> : null}
           <div className="wb-msg-actions">
             <button
@@ -2993,6 +3091,16 @@ function TurnAnswer({
               aria-label={copied ? '已复制' : '复制回答'}
             >
               {copied ? '已复制' : <Icon name="copy" size={13} />}
+            </button>
+            <button
+              type="button"
+              className="wb-copy"
+              onClick={() => void downloadDocx()}
+              title={downloading ? '正在生成…' : '下载 Word'}
+              aria-label={downloading ? '正在生成' : '下载 Word'}
+              disabled={downloading}
+            >
+              <Icon name="download" size={13} />
             </button>
           {final && sessionFile ? (
             <div className="wb-feedback">
@@ -3012,8 +3120,7 @@ function TurnAnswer({
             </div>
           ) : null}
           </div>
-        </div>
-      ) : null}
+      </div>
     </>
   )
 }

@@ -1,0 +1,100 @@
+{
+  "id": "matrix",
+  "name": "矩阵坐标系（多小图）",
+  "family": "relation",
+  "use": "两个维度交叉的数值（渠道 × 地区），既看格子也看大小",
+  "avoid": "格子数超过 30；同一格有多个值（矩阵一格只能放一组数）",
+  "bind": null,
+  "sample": null,
+  "dataNote": "结构性数据：行/列是 matrix 的 x/y，数据是 [列序号, 行序号, 数值]；ECharts 6 新增。一个系列即可，不要每个格子建一个系列",
+  "option": {
+    "tooltip": {
+      "trigger": "item"
+    },
+    "visualMap": {
+      "min": 0,
+      "max": 15,
+      "dimension": 2,
+      "show": false,
+      "inRange": {
+        "symbolSize": [
+          8,
+          28
+        ]
+      }
+    },
+    "matrix": {
+      "x": {
+        "data": [
+          "线上",
+          "线下"
+        ],
+        "levelSize": 30
+      },
+      "y": {
+        "data": [
+          "华东",
+          "华北",
+          "华南"
+        ],
+        "levelSize": 30
+      },
+      "left": 80,
+      "right": 24,
+      "top": 40,
+      "bottom": 40
+    },
+    "series": [
+      {
+        "type": "scatter",
+        "coordinateSystem": "matrix",
+        "itemStyle": {
+          "opacity": 0.75
+        },
+        "data": [
+          [
+            0,
+            0,
+            12
+          ],
+          [
+            1,
+            0,
+            8
+          ],
+          [
+            0,
+            1,
+            5
+          ],
+          [
+            1,
+            1,
+            9
+          ],
+          [
+            0,
+            2,
+            3
+          ],
+          [
+            1,
+            2,
+            6
+          ]
+        ]
+      }
+    ]
+  },
+  "title": "华东线上最强，华南线下偏弱",
+  "note": "每一格是一个交叉点，气泡大小是数值；格子位置没有大小含义",
+  "notes": {
+    "unit": "分",
+    "caveat": "仅示意矩阵布局"
+  },
+  "pitfalls": [
+    "matrix 是矩阵坐标系（v6）：一格只能放一个/一组值，不是小图容器",
+    "气泡大小要配说明或 visualMap，否则读者不知道面积代表什么"
+  ],
+  "schema": "pi.chart-template/1"
+}

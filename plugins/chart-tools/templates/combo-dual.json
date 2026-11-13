@@ -1,0 +1,121 @@
+{
+  "id": "combo-dual",
+  "name": "双轴组合（柱 + 折线）",
+  "family": "relation",
+  "use": "两个相关但量纲不同的指标（金额 vs 毛利率）",
+  "avoid": "能拆成上下两张图就不要双轴；两条线的交叉点没有含义",
+  "bind": {
+    "columns": [
+      "month",
+      "sales",
+      "margin"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "month",
+      "sales",
+      "margin"
+    ],
+    "rows": [
+      [
+        "1月",
+        124,
+        0.325
+      ],
+      [
+        "2月",
+        138,
+        0.28
+      ],
+      [
+        "3月",
+        156,
+        0.251
+      ],
+      [
+        "4月",
+        168,
+        0.282
+      ],
+      [
+        "5月",
+        185,
+        0.317
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 64,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis"
+    },
+    "legend": {
+      "top": 0
+    },
+    "xAxis": {
+      "type": "category",
+      "name": "月份",
+      "axisLabel": {
+        "hideOverlap": true
+      }
+    },
+    "yAxis": [
+      {
+        "type": "value",
+        "name": "销售额（万元）"
+      },
+      {
+        "type": "value",
+        "name": "毛利率",
+        "axisLabel": {
+          "formatter": "{value}%"
+        },
+        "splitLine": {
+          "show": false
+        }
+      }
+    ],
+    "series": [
+      {
+        "type": "bar",
+        "name": "销售额",
+        "encode": {
+          "x": "month",
+          "y": "sales"
+        },
+        "barMaxWidth": 26
+      },
+      {
+        "type": "line",
+        "name": "毛利率",
+        "yAxisIndex": 1,
+        "encode": {
+          "x": "month",
+          "y": "margin"
+        },
+        "symbolSize": 6,
+        "lineStyle": {
+          "width": 2.5
+        }
+      }
+    ]
+  },
+  "title": "销售额上升，毛利率反而回落",
+  "note": "两条轴的单位不同；只能看方向，不能比高低",
+  "notes": {
+    "unit": "万元 / %",
+    "caveat": "毛利率为小数，轴标签补 %"
+  },
+  "pitfalls": [
+    "两个轴的范围都可以调，调过就会改变「看起来谁更强」",
+    "读者默认两条线可比，图注必须写明单位不同"
+  ],
+  "schema": "pi.chart-template/1"
+}

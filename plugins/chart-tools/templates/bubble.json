@@ -1,0 +1,100 @@
+{
+  "id": "bubble",
+  "name": "气泡图",
+  "family": "relation",
+  "use": "三变量：x、y 之外再用面积编码一个量",
+  "avoid": "第三维与 x/y 高度相关（信息重复）；面积差异 <2 倍（读不出）",
+  "bind": {
+    "columns": [
+      "spend",
+      "orders",
+      "users"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "spend",
+      "orders",
+      "users"
+    ],
+    "rows": [
+      [
+        12,
+        30,
+        120
+      ],
+      [
+        18,
+        44,
+        180
+      ],
+      [
+        25,
+        52,
+        260
+      ],
+      [
+        31,
+        70,
+        320
+      ],
+      [
+        44,
+        92,
+        460
+      ],
+      [
+        60,
+        118,
+        620
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "item"
+    },
+    "xAxis": {
+      "type": "value",
+      "name": "投放（万元）",
+      "scale": true
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "订单（单）",
+      "scale": true
+    },
+    "series": [
+      {
+        "type": "scatter",
+        "encode": {
+          "x": "spend",
+          "y": "orders",
+          "size": "users"
+        },
+        "symbolSize": 26,
+        "itemStyle": {
+          "opacity": 0.6
+        }
+      }
+    ]
+  },
+  "title": "投放越大，用户覆盖越广",
+  "note": "面积按平方映射，视觉差异会被放大；图注给面积口径",
+  "notes": {
+    "unit": "万元 / 单 / 人",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "气泡大小要配图例（visualMap 或文字），否则读者不知道面积代表什么",
+    "别用气泡颜色再编码第四个维度"
+  ],
+  "schema": "pi.chart-template/1"
+}

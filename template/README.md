@@ -7,27 +7,30 @@
 ```
 template/
 └── skills/               # 默认技能，每个子目录一个 skill（含 SKILL.md）
-    ├── skill-creator/    # 怎么写一个新技能
-    ├── plugin-creator/   # 怎么让 agent 按访谈生成一个可安装的插件
-    └── documents/        # DOCX 创建/编辑/修订/批注 + 渲染核对
+    ├── skill-creator/       # 怎么写一个新技能
+    ├── plugin-creator/      # 怎么让 agent 按访谈生成一个可安装的插件
+    ├── chart-spec/          # 数据绘图：图表 spec 的写法
+    └── chart-gallery/       # 数据绘图：图表模板库
 ```
+
+> 技能一律放在**这里**，不放在 `apps/<name>/` 下：运行时按名字从全局目录里挑
+> （应用的 `skillBinding` 是名字 allowlist），技能和"属于哪个应用"没有关系——
+> `skill-creator` / `plugin-creator` 这类通用技能根本没有归属应用。
 
 ## 接线方式
 
-`start.sh` 在启动时做一次幂等链接，把 `template/skills` 挂到实际的模板 agent 目录
-（默认是 `$PI_AGENT_DIR`，团队模式是 `PI_TEMPLATE_AGENT_DIR`）：
+服务端的模板目录是 `PI_TEMPLATE_AGENT_DIR`（`start.sh` 在 team 模式下默认设成
+`$PI_AGENT_DIR`，通常是 `~/.pi/agent`）。新用户登录时，`ensure_user_layout()` 把
+`<template>/skills` 链进 `<data_root>/agents/<uid>/skills`；已有的链不会被覆盖。
 
-```
-<template agent dir>/skills -> <repo>/template/skills
-```
-
-新用户登录时，`ensure_user_layout()` 再把这一条链进
-`<data_root>/agents/<uid>/skills`。已有的链不会被覆盖，方便本地临时替换成自己的版本。
-
-等价于手工执行：
+`start.sh` **不会**自动建这条软链，需要手工指一次（或者把技能复制进去）：
 
 ```bash
-ln -sfn "$PWD/template/skills" .local/agent-litellm/skills
+# 让仓库里的 template/skills 成为共享目录
+ln -sfn "$PWD/template/skills" ~/.pi/agent/skills
+
+# 或者只同步某个应用的技能（apps/<name>/install.sh 就是这么做的）
+./apps/chart/install.sh --team
 ```
 
 ## 加一个默认技能

@@ -1,0 +1,92 @@
+{
+  "id": "theme-river",
+  "name": "主题河流图",
+  "family": "trend",
+  "use": "多个主题的体量随时间此消彼长（主题演化）",
+  "avoid": "主题超过 8 个；需要精确读数",
+  "bind": null,
+  "sample": null,
+  "dataNote": "结构性数据：data 为 [日期, 数值, 主题] 三元组，直接写在 option 里；数值必须来自 chart_data_profile 的汇总",
+  "option": {
+    "tooltip": {
+      "trigger": "axis"
+    },
+    "legend": {
+      "top": 0
+    },
+    "singleAxis": {
+      "top": 60,
+      "bottom": 40,
+      "type": "time",
+      "axisLabel": {
+        "hideOverlap": true
+      }
+    },
+    "series": [
+      {
+        "type": "themeRiver",
+        "label": {
+          "show": false
+        },
+        "data": [
+          [
+            "2024-01-01",
+            12,
+            "AI"
+          ],
+          [
+            "2024-02-01",
+            18,
+            "AI"
+          ],
+          [
+            "2024-03-01",
+            26,
+            "AI"
+          ],
+          [
+            "2024-01-01",
+            20,
+            "出海"
+          ],
+          [
+            "2024-02-01",
+            16,
+            "出海"
+          ],
+          [
+            "2024-03-01",
+            14,
+            "出海"
+          ],
+          [
+            "2024-01-01",
+            8,
+            "组织"
+          ],
+          [
+            "2024-02-01",
+            9,
+            "组织"
+          ],
+          [
+            "2024-03-01",
+            11,
+            "组织"
+          ]
+        ]
+      }
+    ]
+  },
+  "title": "AI 话题走高，出海回落",
+  "note": "河流宽度是相对体量，不能精确读数",
+  "notes": {
+    "unit": "篇",
+    "caveat": "按周汇总"
+  },
+  "pitfalls": [
+    "必须配 singleAxis，否则报错",
+    "主题数超过 8 个颜色会分不清"
+  ],
+  "schema": "pi.chart-template/1"
+}

@@ -1,0 +1,93 @@
+{
+  "id": "bar-horizontal",
+  "name": "横向条形图",
+  "family": "compare",
+  "use": "类目多（>8）或名字长；排名一眼看清",
+  "avoid": "类目很少（2–3 个）时柱状更紧凑；时间序列不要用",
+  "bind": {
+    "columns": [
+      "city",
+      "sales"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "city",
+      "sales"
+    ],
+    "rows": [
+      [
+        "上海",
+        420
+      ],
+      [
+        "北京",
+        380
+      ],
+      [
+        "深圳",
+        350
+      ],
+      [
+        "广州",
+        300
+      ],
+      [
+        "杭州",
+        260
+      ],
+      [
+        "成都",
+        210
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 96,
+      "right": 32,
+      "top": 16,
+      "bottom": 32
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "shadow"
+      }
+    },
+    "xAxis": {
+      "type": "value",
+      "name": "销售额（万元）"
+    },
+    "yAxis": {
+      "type": "category",
+      "name": "城市",
+      "inverse": true,
+      "axisLabel": {
+        "hideOverlap": true
+      }
+    },
+    "series": [
+      {
+        "type": "bar",
+        "encode": {
+          "x": "sales",
+          "y": "city"
+        },
+        "barMaxWidth": 18
+      }
+    ]
+  },
+  "title": "城市销售额排名：上海、北京领跑",
+  "note": "从高到低排；横向条形是排名最不容易误读的形式",
+  "notes": {
+    "unit": "万元",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "`inverse: true` 让第一名在最上面",
+    "别截断 X 轴"
+  ],
+  "schema": "pi.chart-template/1"
+}

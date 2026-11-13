@@ -131,6 +131,39 @@ async def test_extension_tool_is_merged_and_callable(tmp_path):
     assert tool_result.is_error is False
 
 
+async def test_the_four_argument_tool_shape_may_return_a_string(tmp_path):
+    """The documented ``(tool_call_id, args, signal, on_update)`` shape must normalise.
+
+    It used to be returned unwrapped, so a plugin returning a plain string reached the
+    loop without ``.content``: the model saw an empty tool result and no error, which
+    reads exactly like "the plugin did nothing".  plugins/pubmed and plugins/clinical-calc
+    are written in this shape.
+    """
+    api = ExtensionAPI(path="ext.py")
+
+    @api.register_tool(name="echo", description="Echo")
+    async def echo(tool_call_id, args, signal, on_update):
+        return f"echo {args['text']}"
+
+    session, _ = _session_with(
+        tmp_path,
+        [
+            FauxTurn(
+                tool_calls=[ToolCall(id="c1", name="echo", arguments={"text": "hi"})],
+                stop_reason="toolUse",
+            ),
+            _assistant("done"),
+        ],
+        api,
+    )
+
+    await session.prompt("echo hi")
+
+    tool_result = next(m for m in session.messages if m.role == "toolResult")
+    assert tool_result.content[0].text == "echo hi"
+    assert tool_result.is_error is False
+
+
 async def test_tool_call_handler_can_block_a_builtin_tool(tmp_path):
     api = ExtensionAPI(path="guard.py")
     blocked: list[str] = []

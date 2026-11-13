@@ -1,0 +1,117 @@
+{
+  "id": "candlestick",
+  "name": "K 线图",
+  "family": "special",
+  "use": "一段时间内的开盘/收盘/最高/最低（价格、指标区间）",
+  "avoid": "没有四个价格；日频以上数据（点太多）",
+  "bind": {
+    "columns": [
+      "date",
+      "open",
+      "close",
+      "low",
+      "high"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "date",
+      "open",
+      "close",
+      "low",
+      "high"
+    ],
+    "rows": [
+      [
+        "2024-01-02",
+        102,
+        106,
+        100,
+        108
+      ],
+      [
+        "2024-01-03",
+        106,
+        103,
+        101,
+        107
+      ],
+      [
+        "2024-01-04",
+        103,
+        109,
+        102,
+        110
+      ],
+      [
+        "2024-01-05",
+        109,
+        107,
+        105,
+        111
+      ],
+      [
+        "2024-01-08",
+        107,
+        112,
+        106,
+        113
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis"
+    },
+    "xAxis": {
+      "type": "category",
+      "name": "日期",
+      "axisLabel": {
+        "hideOverlap": true
+      }
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "价格（元）",
+      "scale": true
+    },
+    "series": [
+      {
+        "type": "candlestick",
+        "encode": {
+          "x": "date",
+          "y": [
+            "open",
+            "close",
+            "low",
+            "high"
+          ]
+        },
+        "itemStyle": {
+          "color": "#dc2626",
+          "color0": "#16a34a",
+          "borderColor": "#dc2626",
+          "borderColor0": "#16a34a"
+        }
+      }
+    ]
+  },
+  "title": "1 月 4 日放量上涨",
+  "note": "红涨绿跌是国内习惯，给海外读者看要反过来并说明",
+  "notes": {
+    "unit": "元",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "`encode.y` 的顺序是 开/收/低/高，写错图会乱但不报错",
+    "颜色约定要跟受众一致，图注写明"
+  ],
+  "schema": "pi.chart-template/1"
+}

@@ -323,16 +323,33 @@ class ExtensionAPI:
         await self._require_host().set_thinking_level(level)
 
 
+def _as_tool_result(result: Any) -> AgentToolResult:
+    """Coerce a handler's return value into the shape the loop expects.
+
+    Every documented handler shape may ``return "文本"``; a bare ``str`` that reaches the
+    loop unconverted has no ``.content``, so the tool call shows up as an **empty** result
+    with no error — the failure mode that looks like "the plugin does nothing".
+    """
+    if isinstance(result, AgentToolResult):
+        return result
+    from pi_ai import TextContent
+
+    return AgentToolResult(content=[TextContent(text=str(result))])
+
+
 def _wrap_execute(execute: Any) -> Any:
     """Normalise a decorated function into the ``AgentTool.execute`` signature.
 
     Accepts ``(tool_call_id, args, signal, on_update)``, ``(args)`` or ``(args, ctx)``
     shapes so simple tools do not need boilerplate.
     """
-    if inspect.iscoroutinefunction(execute):
-        arity = _arity(execute)
-        if arity >= 4:
-            return execute
+    if inspect.iscoroutinefunction(execute) and _arity(execute) >= 4:
+        async def _passthrough(
+            tool_call_id: str, args: Any, signal: Any, on_update: Any
+        ) -> AgentToolResult:
+            return _as_tool_result(await execute(tool_call_id, args, signal, on_update))
+
+        return _passthrough
 
     arity = _arity(execute)
 
@@ -346,11 +363,7 @@ def _wrap_execute(execute: Any) -> Any:
             result = execute(args, signal)
         if inspect.isawaitable(result):
             result = await result
-        if isinstance(result, AgentToolResult):
-            return result
-        from pi_ai import TextContent
-
-        return AgentToolResult(content=[TextContent(text=str(result))])
+        return _as_tool_result(result)
 
     return _execute
 

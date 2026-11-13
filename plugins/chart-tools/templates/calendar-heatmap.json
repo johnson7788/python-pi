@@ -1,0 +1,143 @@
+{
+  "id": "calendar-heatmap",
+  "name": "日历热力图",
+  "family": "distribution",
+  "use": "一年里每天的量（活跃、发稿、门诊量）",
+  "avoid": "时间跨度超过一年；数据点很少（>70% 空白）",
+  "bind": null,
+  "sample": null,
+  "option": {
+    "tooltip": {
+      "position": "top"
+    },
+    "visualMap": {
+      "min": 0,
+      "max": 10,
+      "calculable": true,
+      "orient": "vertical",
+      "right": 12,
+      "top": "middle",
+      "itemHeight": 110
+    },
+    "calendar": {
+      "top": 50,
+      "left": 40,
+      "right": 96,
+      "range": "2024",
+      "cellSize": [
+        "auto",
+        20
+      ],
+      "itemStyle": {
+        "borderWidth": 1,
+        "borderColor": "transparent"
+      },
+      "dayLabel": {
+        "nameMap": "ZH"
+      },
+      "monthLabel": {
+        "nameMap": "ZH"
+      },
+      "yearLabel": {
+        "show": false
+      }
+    },
+    "series": [
+      {
+        "type": "heatmap",
+        "coordinateSystem": "calendar",
+        "data": [
+          [
+            "2024-01-01",
+            3
+          ],
+          [
+            "2024-01-02",
+            7
+          ],
+          [
+            "2024-01-03",
+            1
+          ],
+          [
+            "2024-01-05",
+            9
+          ],
+          [
+            "2024-01-08",
+            5
+          ],
+          [
+            "2024-01-12",
+            8
+          ],
+          [
+            "2024-02-01",
+            4
+          ],
+          [
+            "2024-02-02",
+            8
+          ],
+          [
+            "2024-03-01",
+            2
+          ],
+          [
+            "2024-03-15",
+            6
+          ],
+          [
+            "2024-04-02",
+            7
+          ],
+          [
+            "2024-05-20",
+            9
+          ],
+          [
+            "2024-06-01",
+            3
+          ],
+          [
+            "2024-07-15",
+            6
+          ],
+          [
+            "2024-08-08",
+            8
+          ],
+          [
+            "2024-09-10",
+            5
+          ],
+          [
+            "2024-10-01",
+            7
+          ],
+          [
+            "2024-11-11",
+            10
+          ],
+          [
+            "2024-12-25",
+            2
+          ]
+        ]
+      }
+    ]
+  },
+  "title": "1 月前两周最活跃",
+  "note": "日历的空白格是「没有数据」，不是 0",
+  "notes": {
+    "unit": "次",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "calendar 坐标系不支持 dataset/encode 绑定（实测不填色），要写成 [日期, 数值] 数组",
+    "range 要覆盖数据日期，否则点会被丢弃",
+    "空白格和 0 值语义不同，图注要说明"
+  ],
+  "schema": "pi.chart-template/1",
+  "dataNote": "日历热力图的数据必须是 [日期, 数值] 数组，直接写在 option 里（dataset 的 encode 对 calendar 坐标系无效，实测不填色）；数值来自 chart_data_profile 的按日汇总"
+}

@@ -1,6 +1,6 @@
 # 官方插件包（starter pack）
 
-这批插件是「让团队第一天就能用起来」的四个起点。共同特征：**只读、边界清晰、可复核**。
+这批插件是「让团队第一天就能用起来」的几个起点。共同特征：**只读、边界清晰、可复核**。
 代码就是文档——每个目录都是独立的 `plugin.json` + `main.py`，可以直接改。
 
 | 插件 | 工具 | 依赖 | 适合谁 |
@@ -9,6 +9,7 @@
 | [`pubmed`](pubmed) | `pubmed_search`、`pubmed_abstract` | 联网（NCBI） | 医学、研发、医学事务 |
 | [`web-fetch`](web-fetch) | `web_fetch` | 联网 | 所有人 |
 | [`csv-tools`](csv-tools) | `csv_profile`、`csv_query` | 无 | 数据、运营、分析 |
+| [`chart-tools`](chart-tools) | `chart_templates`、`chart_data_profile`、`chart_check`、`chart_render_html` | 无（产物用浏览器加载 ECharts） | 数据、运营、汇报 |
 
 ## 安装
 
@@ -24,7 +25,7 @@
 
 `build.sh` 会先跑 `pikit check`，任何一个插件有 error 都不会打包。
 
-## 为什么是这四个
+## 为什么是这几个
 
 - **临床计算器**：模型算数不可靠、公式版本记不准（CKD-EPI 2021 去种族项、MELD-Na 的上下限）。
   把确定性知识交给代码，输出里带公式与出处，医生能复核。零依赖、零风险。
@@ -34,6 +35,8 @@
   SSRF 防护做成一步；同时是「怎么在插件里安全地联网」的参考实现。
 - **CSV 工具**：业务数据大量以表格流转。先 `csv_profile` 看结构，再 `csv_query` 挑记录，
   比让模型读整份 CSV 省一个数量级 token。
+- **数据绘图**：图最容易「看起来对、数字错」。`chart-tools` 不让模型写数字——spec 里禁止 `dataset.source`，
+  值一律从 CSV/XLSX 绑定并写进页脚 sha256；HTML 由固定模板生成，模型只提供 option JSON。
 
 ## 开发约定
 

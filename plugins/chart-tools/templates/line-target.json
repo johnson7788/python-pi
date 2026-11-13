@@ -1,0 +1,124 @@
+{
+  "id": "line-target",
+  "name": "趋势 + 目标线 + 区间标注",
+  "family": "trend",
+  "use": "趋势之外还要标目标值或某个事件窗口（促销期、政策期）",
+  "avoid": "目标频繁变动；标注太多把图盖住",
+  "bind": {
+    "columns": [
+      "month",
+      "sales"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "month",
+      "sales"
+    ],
+    "rows": [
+      [
+        "1月",
+        124
+      ],
+      [
+        "2月",
+        138
+      ],
+      [
+        "3月",
+        156
+      ],
+      [
+        "4月",
+        168
+      ],
+      [
+        "5月",
+        185
+      ],
+      [
+        "6月",
+        199
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "line"
+      }
+    },
+    "xAxis": {
+      "type": "category",
+      "boundaryGap": false,
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "月份"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "销售额（万元）"
+    },
+    "series": [
+      {
+        "type": "line",
+        "encode": {
+          "x": "month",
+          "y": "sales"
+        },
+        "symbolSize": 5,
+        "markLine": {
+          "symbol": "none",
+          "lineStyle": {
+            "type": "dashed"
+          },
+          "label": {
+            "position": "insideEndTop",
+            "formatter": "目标 {c}"
+          },
+          "data": [
+            {
+              "yAxis": 180
+            }
+          ]
+        },
+        "markArea": {
+          "itemStyle": {
+            "opacity": 0.08
+          },
+          "data": [
+            [
+              {
+                "xAxis": "3月",
+                "name": "促销期"
+              },
+              {
+                "xAxis": "4月"
+              }
+            ]
+          ]
+        }
+      }
+    ]
+  },
+  "title": "促销期（3–4 月）拉动明显",
+  "note": "区间标注说明「为什么这一段特殊」，目标线说明「期望在哪」",
+  "notes": {
+    "unit": "万元",
+    "caveat": "目标 180 为季度预算"
+  },
+  "pitfalls": [
+    "markLine/markArea 的数值是标注，不是数据，图注要写来源",
+    "标注超过 2 个就换成文字说明，别把图盖满"
+  ],
+  "schema": "pi.chart-template/1"
+}

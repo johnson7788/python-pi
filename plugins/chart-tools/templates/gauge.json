@@ -1,0 +1,76 @@
+{
+  "id": "gauge",
+  "name": "仪表盘（单指标）",
+  "family": "special",
+  "use": "一个 KPI + 目标区间（完成率、达标率）",
+  "avoid": "超过一个指标；精确读数（用数字卡）",
+  "bind": null,
+  "sample": null,
+  "dataNote": "单值指标：value 写在 option 里；数值必须来自数据，不要估",
+  "option": {
+    "series": [
+      {
+        "type": "gauge",
+        "min": 0,
+        "max": 120,
+        "startAngle": 210,
+        "endAngle": -30,
+        "progress": {
+          "show": true,
+          "width": 12
+        },
+        "axisLine": {
+          "lineStyle": {
+            "width": 12
+          }
+        },
+        "axisTick": {
+          "show": false
+        },
+        "splitLine": {
+          "length": 10
+        },
+        "axisLabel": {
+          "distance": 18,
+          "fontSize": 11
+        },
+        "pointer": {
+          "width": 4
+        },
+        "detail": {
+          "valueAnimation": true,
+          "formatter": "{value}%",
+          "fontSize": 26,
+          "offsetCenter": [
+            0,
+            "62%"
+          ]
+        },
+        "title": {
+          "offsetCenter": [
+            0,
+            "88%"
+          ],
+          "fontSize": 12
+        },
+        "data": [
+          {
+            "value": 86,
+            "name": "季度完成率"
+          }
+        ]
+      }
+    ]
+  },
+  "title": "季度完成率 86%",
+  "note": "max 要设成业务上限（这里是 120%），否则指针位置会骗人",
+  "notes": {
+    "unit": "%",
+    "caveat": "目标 100%，数据截至上月"
+  },
+  "pitfalls": [
+    "max 用默认 100 时，超额完成会被截断",
+    "一排三个表盘不如三个数字卡"
+  ],
+  "schema": "pi.chart-template/1"
+}

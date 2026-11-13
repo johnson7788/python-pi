@@ -44,7 +44,7 @@
 | 维度 | A：deepseek-harness | B：python-pi |
 |---|---|---|
 | 代码量 | 632,088 行 TS/TSX（8,866 文件，不含 node_modules/dist） | 25,314 行 Python + 6,665 行前端（web/src，含 CSS） |
-| 包结构 | 58 个顶层包 + 5 个 app，单一能力一个包 | 5 个包（含 coharness 研究包） |
+| 包结构 | 58 个顶层包 + 5 个 app，单一能力一个包 | 4 个包 |
 | 模型可见工具 | **71 个名字 / 35 个工具包**（`docs/tool-catalog.md`） | **7 个**，默认激活 **4 个**（`tools/__init__.py:38-41`） |
 | 会话格式 | 自有事件日志 v4（v0→v4 迁移链，`packages/session/session-format*`） | pi 的 JSONL v3 树（互通是资产，`session_manager.py`） |
 | 客户端 | 59 个 `ui-*` 包 + slots/client-modules 动态组合（`packages/client/`） | 25 个文件、6.6k 行固定 SPA（`web/src/`） |

@@ -1,0 +1,24 @@
+{
+  "id": "chart-tools",
+  "name": "数据绘图",
+  "version": "1.0.0",
+  "apiVersion": "2",
+  "entry": "main.py",
+  "description": "把数据画成可交付的 ECharts HTML：数据画像、数据绑定、spec 校验、HTML 生成（含 PNG/CSV 导出按钮）。图表里的每个数字都由工具从数据文件绑定，模型不手抄数字。",
+  "capabilities": ["tools"],
+  "permissions": {
+    "tools": [],
+    "filesystem": "write",
+    "network": false,
+    "process": false,
+    "secrets": []
+  },
+  "limits": {
+    "timeoutSeconds": 60,
+    "maxResultChars": 20000
+  },
+  "requires": {
+    "pi": ">=0.1.0",
+    "python": ">=3.10"
+  }
+}

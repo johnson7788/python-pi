@@ -1,0 +1,94 @@
+{
+  "id": "bar-bullet",
+  "name": "子弹图（目标 vs 实际）",
+  "family": "compare",
+  "use": "每个类目有一个目标值，看差距与达标",
+  "avoid": "没有明确目标；目标本身在变动（那就画两条线）",
+  "bind": {
+    "columns": [
+      "region",
+      "actual"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "region",
+      "actual"
+    ],
+    "rows": [
+      [
+        "华东",
+        320
+      ],
+      [
+        "华北",
+        180
+      ],
+      [
+        "华南",
+        240
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "shadow"
+      }
+    },
+    "xAxis": {
+      "type": "category",
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "地区"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "销售额（万元）"
+    },
+    "series": [
+      {
+        "type": "bar",
+        "encode": {
+          "x": "region",
+          "y": "actual"
+        },
+        "barMaxWidth": 26,
+        "markLine": {
+          "symbol": "none",
+          "lineStyle": {
+            "type": "dashed"
+          },
+          "label": {
+            "formatter": "目标 {c}"
+          },
+          "data": [
+            {
+              "yAxis": 300
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "title": "华东达标，华北缺口 40",
+  "note": "虚线是目标值；目标口径要写清（预算/去年/承诺）",
+  "notes": {
+    "unit": "万元",
+    "caveat": "目标 300 来自年度预算"
+  },
+  "pitfalls": [
+    "markLine 的目标值是策略参数，不是数据行，图注必须写出处",
+    "一类目一个目标时，改成横向条形 + 每行目标点更清楚"
+  ],
+  "schema": "pi.chart-template/1"
+}

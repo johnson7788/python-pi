@@ -1,0 +1,82 @@
+{
+  "id": "pie-rose",
+  "name": "玫瑰图（南丁格尔）",
+  "family": "composition",
+  "use": "类目多但想保留「环形」视觉，用半径编码数值",
+  "avoid": "需要精确比较（半径差异人眼读不准）；类目超过 10 个",
+  "bind": {
+    "columns": [
+      "region",
+      "sales"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "region",
+      "sales"
+    ],
+    "rows": [
+      [
+        "华东",
+        320
+      ],
+      [
+        "华北",
+        180
+      ],
+      [
+        "华南",
+        240
+      ],
+      [
+        "西南",
+        120
+      ],
+      [
+        "东北",
+        90
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "tooltip": {
+      "trigger": "item"
+    },
+    "legend": {
+      "bottom": 0
+    },
+    "series": [
+      {
+        "type": "pie",
+        "roseType": "radius",
+        "radius": [
+          "18%",
+          "72%"
+        ],
+        "center": [
+          "50%",
+          "46%"
+        ],
+        "encode": {
+          "itemName": "region",
+          "value": "sales"
+        },
+        "label": {
+          "formatter": "{b}\n{c}"
+        }
+      }
+    ]
+  },
+  "title": "各区销售额：华东最高",
+  "note": "玫瑰图适合看排序，不适合精确读数；差异小于 20% 时不要用",
+  "notes": {
+    "unit": "万元",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "半径编码会放大差异，图注要提醒",
+    "类目超过 10 个直接换横向条形"
+  ],
+  "schema": "pi.chart-template/1"
+}

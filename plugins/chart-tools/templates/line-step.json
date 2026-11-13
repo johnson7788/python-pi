@@ -1,0 +1,98 @@
+{
+  "id": "line-step",
+  "name": "阶梯折线",
+  "family": "trend",
+  "use": "数值在一段时间内不变、到某一时点才跳变（价格、档位、政策生效）",
+  "avoid": "连续变化的指标；读者不熟悉阶梯语义时",
+  "bind": {
+    "columns": [
+      "week",
+      "price"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "week",
+      "price"
+    ],
+    "rows": [
+      [
+        "W1",
+        99
+      ],
+      [
+        "W2",
+        99
+      ],
+      [
+        "W3",
+        89
+      ],
+      [
+        "W4",
+        89
+      ],
+      [
+        "W5",
+        89
+      ],
+      [
+        "W6",
+        79
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "line"
+      }
+    },
+    "xAxis": {
+      "type": "category",
+      "boundaryGap": false,
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "周"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "单价（元）",
+      "scale": true
+    },
+    "series": [
+      {
+        "type": "line",
+        "step": "end",
+        "encode": {
+          "x": "week",
+          "y": "price"
+        },
+        "symbolSize": 6,
+        "lineStyle": {
+          "width": 2.5
+        }
+      }
+    ]
+  },
+  "title": "W3、W6 两次降价，中间价格不变",
+  "note": "阶梯表示「到下一个点之前保持该值」",
+  "notes": {
+    "unit": "元",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "`step: 'end'` 表示跳变发生在后一个时点，和 'start' 语义相反",
+    "价格类指标可以截断 Y 轴，但要在图上标注范围"
+  ],
+  "schema": "pi.chart-template/1"
+}

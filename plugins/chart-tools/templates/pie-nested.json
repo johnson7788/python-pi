@@ -1,0 +1,111 @@
+{
+  "id": "pie-nested",
+  "name": "双层环（类目 + 子类）",
+  "family": "composition",
+  "use": "两级构成：外层子类、内层大类，且两级都加总为 100%",
+  "avoid": "层级超过两层；内外层不是同一总体",
+  "bind": {
+    "columns": [
+      "group",
+      "sub",
+      "value"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "group",
+      "sub",
+      "value"
+    ],
+    "rows": [
+      [
+        "线上",
+        "自营",
+        40
+      ],
+      [
+        "线上",
+        "平台",
+        25
+      ],
+      [
+        "线下",
+        "直营",
+        20
+      ],
+      [
+        "线下",
+        "经销",
+        15
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "tooltip": {
+      "trigger": "item",
+      "valueFormatter": "{c}%"
+    },
+    "legend": {
+      "bottom": 0
+    },
+    "series": [
+      {
+        "type": "pie",
+        "radius": [
+          0,
+          "34%"
+        ],
+        "center": [
+          "50%",
+          "46%"
+        ],
+        "encode": {
+          "itemName": "group",
+          "value": "value"
+        },
+        "label": {
+          "position": "inside",
+          "formatter": "{b}"
+        },
+        "itemStyle": {
+          "borderColor": "transparent",
+          "borderWidth": 2
+        }
+      },
+      {
+        "type": "pie",
+        "radius": [
+          "44%",
+          "68%"
+        ],
+        "center": [
+          "50%",
+          "46%"
+        ],
+        "encode": {
+          "itemName": "sub",
+          "value": "value"
+        },
+        "label": {
+          "formatter": "{b} {c}%"
+        },
+        "itemStyle": {
+          "borderColor": "transparent",
+          "borderWidth": 2
+        }
+      }
+    ]
+  },
+  "title": "线上占 65%，其中自营为主",
+  "note": "内环是大类，外环是子类；两级必须同一口径",
+  "notes": {
+    "unit": "%",
+    "caveat": "按 GMV 计"
+  },
+  "pitfalls": [
+    "两个 pie 共用 dataset，但 itemName 不同；别把 value 算两遍",
+    "内外环颜色要能对应，否则读者无法把子类归到父类"
+  ],
+  "schema": "pi.chart-template/1"
+}

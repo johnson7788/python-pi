@@ -1,0 +1,84 @@
+{
+  "id": "bar-basic",
+  "name": "基础柱状图",
+  "family": "compare",
+  "use": "分类之间比大小，类目 ≤12、名字不长",
+  "avoid": "类目超过 12 个或名字长（用 bar-horizontal）；看时间趋势用 line-basic",
+  "bind": {
+    "columns": [
+      "region",
+      "sales"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "region",
+      "sales"
+    ],
+    "rows": [
+      [
+        "华东",
+        320
+      ],
+      [
+        "华北",
+        180
+      ],
+      [
+        "华南",
+        240
+      ],
+      [
+        "西南",
+        120
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "shadow"
+      }
+    },
+    "xAxis": {
+      "type": "category",
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "地区"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "销售额（万元）"
+    },
+    "series": [
+      {
+        "type": "bar",
+        "encode": {
+          "x": "region",
+          "y": "sales"
+        },
+        "barMaxWidth": 28
+      }
+    ]
+  },
+  "title": "各地区销售额",
+  "note": "比的是绝对高度；柱宽不代表样本量",
+  "notes": {
+    "unit": "万元",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "Y 轴从 0 起，不要截断",
+    "类目按数值降序排，别按字母排"
+  ],
+  "schema": "pi.chart-template/1"
+}

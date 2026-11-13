@@ -1,0 +1,109 @@
+{
+  "id": "line-multi",
+  "name": "多指标折线",
+  "family": "trend",
+  "use": "2–3 个同量纲指标放在一起看差异",
+  "avoid": "量纲不同（改用 combo-dual 并说明）或指标超过 4 个（拆图）",
+  "bind": {
+    "columns": [
+      "month",
+      "online",
+      "offline"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "month",
+      "online",
+      "offline"
+    ],
+    "rows": [
+      [
+        "1月",
+        80,
+        44
+      ],
+      [
+        "2月",
+        92,
+        46
+      ],
+      [
+        "3月",
+        105,
+        51
+      ],
+      [
+        "4月",
+        118,
+        50
+      ],
+      [
+        "5月",
+        130,
+        55
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "line"
+      }
+    },
+    "legend": {
+      "top": 0
+    },
+    "xAxis": {
+      "type": "category",
+      "boundaryGap": false,
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "月份"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "销售额（万元）"
+    },
+    "series": [
+      {
+        "type": "line",
+        "name": "线上",
+        "encode": {
+          "x": "month",
+          "y": "online"
+        },
+        "symbolSize": 5
+      },
+      {
+        "type": "line",
+        "name": "线下",
+        "encode": {
+          "x": "month",
+          "y": "offline"
+        },
+        "symbolSize": 5
+      }
+    ]
+  },
+  "title": "线上增速快于线下，差距逐月拉大",
+  "note": "两条线必须同量纲；线多了就拆图",
+  "notes": {
+    "unit": "万元",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "同一张图不超过 4 条线",
+    "颜色要能区分（色盲友好），别用红绿对"
+  ],
+  "schema": "pi.chart-template/1"
+}

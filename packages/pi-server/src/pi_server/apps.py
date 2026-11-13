@@ -48,6 +48,11 @@ class App:
     description: str
     accent: str
     modes: tuple[Mode, ...]
+    #: Plugins this app needs in order to do its job.  They are still *installed* by an
+    #: administrator (a builtin app cannot ship executable code), but an app that declares
+    #: them is the deployment's deliberate choice — so they load without a per-user
+    #: "enable" click, which is what made a shared app arrive half-working.
+    plugins: tuple[str, ...] = ()
 
 
 GENERAL = App(
@@ -555,7 +560,136 @@ PATIENT = App(
     ),
 )
 
-APPS: tuple[App, ...] = (GENERAL, RESEARCH, SLIDES, DRUG, STATS, GRANT, MARKET, PATIENT)
+CHART = App(
+    id="chart",
+    name="数据绘图",
+    description="数据 → 图表：ECharts 交互图与仪表盘，可导出 PNG/CSV；图里的每个数字都能回到数据行。",
+    accent="#b45309",
+    plugins=("chart-tools",),
+    modes=(
+        Mode(
+            id="single",
+            name="单图",
+            description="一句话或一份表 → 一张能交互的图 + 一句结论。",
+            prompt=(
+                "当前应用是「数据绘图 · 单图」。顺序固定：①chart_data_profile 看真实结构；"
+                "②用 chart_templates 取最接近的模板（时间→line-basic，分类→bar-basic/bar-horizontal，"
+                "≤6 类占比→pie-basic，两个数值→scatter；不要凭记忆写 option）；"
+                "③改 bind.path 和标题，存成 charts/<名字>.spec.json，先 chart_check 再 chart_render_html；"
+                "④present 生成的 html 和 spec。"
+                "数字一律由 bind 从数据文件绑定：spec 里不许写 dataset.source，也不许写 series.data 的"
+                "数字字面量；encode 里引用的列必须在 bind.columns 里。"
+                "只画一张图就够的时候不要拼仪表盘；图回答不了的问题用一句话说清。"
+            ),
+            skills=("chart-spec", "chart-gallery"),
+            capsules=(
+                Capsule("trend", "看趋势", "把这份数据画成趋势图，标出拐点和异常点。"),
+                Capsule("compare", "做对比", "按分类对比这几组数值，选最不容易误读的图型。"),
+                Capsule("relation", "看关系", "看看这两个指标有没有关系，用散点并说明相关不等于因果。"),
+                Capsule("share", "改成能发的图", "把这张图改成适合放进汇报/邮件的样式，字号和图注都清楚。"),
+            ),
+            examples=(
+                "把 data/ 里的销售表画成月度趋势图",
+                "各地区销售额做成对比图，最多 6 类",
+                "这两个指标的关系画出来，顺便告诉我相关性强不强",
+                "把这份 CSV 画成一张可以直接放进周报的图",
+            ),
+            placeholder="上传数据，或说清楚要对比/看趋势的字段",
+            icon="chart",
+        ),
+        Mode(
+            id="dashboard",
+            name="仪表盘",
+            description="一个数据集出 3–6 张图：一屏看清结论、构成和异常。",
+            prompt=(
+                "当前应用是「数据绘图 · 仪表盘」。一个 page 里放 3–6 张图（page.columns 2 或 3），"
+                "每张图只回答一个问题，标题写结论而不是字段名（如「华东贡献了六成增长」而不是「sales by region」）。"
+                "先 chart_data_profile，再定三件事：总量趋势、构成占比、异常/对比；同一页里不要出现两张"
+                "表达同一件事的图。每张图的 option 用 chart_templates 取对应模板，所有图共用一份 bind；"
+                "spec 里不写数据。写完先 chart_check，再用 chart_render_html 生成 HTML，最后 present html 和 spec。"
+                "生成后按「结论 → 支撑图 → 边界」在对话里给出一屏能读完的摘要。"
+            ),
+            skills=("chart-spec", "chart-gallery"),
+            capsules=(
+                Capsule("overview", "一页总览", "用这份数据做一个一页总览：趋势、构成、异常各一张。"),
+                Capsule("layout", "排布局", "把这几张图排成一屏，按重要性决定大小和顺序。"),
+                Capsule("kpi", "加关键指标", "在仪表盘顶部加 3 个关键指标，并说明口径。"),
+            ),
+            examples=(
+                "用这份销售数据做一个一页经营看板",
+                "把这份月度数据做成 4 张图的一屏总览",
+                "给我一个能放进周会的一页图",
+            ),
+            placeholder="上传数据，说明这一屏要回答什么问题",
+            icon="chart",
+        ),
+        Mode(
+            id="insight",
+            name="数据解读",
+            description="先看数据，再给图：三条发现、一个反例、以及不能下的结论。",
+            prompt=(
+                "当前应用是「数据绘图 · 数据解读」。先 chart_data_profile，再回答三件事："
+                "①数据里最明显的三个模式（每个都要有数字和出处列）；②一个反例或异常（缺失、离群、口径变化）；"
+                "③这些数据**不能**支持什么结论。图只用来支撑发现，最多三张，不要为了好看加图。"
+                "相关不等于因果，趋势不等于预测，样本量小要直接说 n。"
+                "图用 chart_templates 取模板、chart_render_html 生成；报告写成 output/<名字>.md，"
+                "最后 present 图和报告。"
+            ),
+            skills=("chart-spec",),
+            capsules=(
+                Capsule("findings", "三条发现", "先看数据，再给三条最值得说的发现，每条带数字。"),
+                Capsule("anomaly", "找异常", "这份数据里有没有异常值、缺失或口径不一致？会不会改变结论？"),
+                Capsule("caveat", "能说到什么程度", "这份数据能支持哪些结论、不能支持哪些？逐条说。"),
+            ),
+            examples=(
+                "这份数据说明了什么，给我三条发现",
+                "有没有异常值会影响结论",
+                "这些数据能不能支持「投放带来了增长」",
+            ),
+            placeholder="上传数据，说明你想弄清楚的业务问题",
+            icon="chart",
+        ),
+        Mode(
+            id="restyle",
+            name="图表改版",
+            description="把现有的图（截图或旧 HTML）改成更清楚、更克制、更适合汇报的版本。",
+            prompt=(
+                "当前应用是「数据绘图 · 图表改版」。先确认原图要表达什么、哪里在误导（断轴、双轴、"
+                "3D、饼图分类过多、缺少单位和 n），再决定改类型还是只改样式。"
+                "如果用户给的是截图，先把能用到的数字/类目落到工作区的数据文件，用 chart_data_profile "
+                "核对结构，再 bind；不要凭截图估算数字。"
+                "新图用 chart_templates 取模板，写成 charts/<名字>.spec.json，用 chart_render_html 生成，"
+                "不要手写 HTML。"
+                "改完列出「改了什么、为什么、原图哪里有问题」，不要只交一张新图。"
+            ),
+            skills=("chart-spec", "chart-gallery"),
+            capsules=(
+                Capsule("type", "换图型", "这张图的类型不合适，换成更不容易误读的，并说明理由。"),
+                Capsule("style", "调样式", "颜色、字号、网格、图注按汇报场景重做，不要花。"),
+                Capsule("mislead", "纠正误导", "找出这张图会让人误读的地方，逐条改掉。"),
+            ),
+            examples=(
+                "这张图哪里容易误读，帮我改掉",
+                "把这个截图里的图重画成能放进汇报的版本",
+                "这个双轴图看着有问题，换成更清楚的表达",
+            ),
+            placeholder="贴截图，或给出要改的 HTML/spec 路径",
+            icon="palette",
+        ),
+    ),
+)
+
+APPS: tuple[App, ...] = (
+    GENERAL,
+    CHART,
+    RESEARCH,
+    SLIDES,
+    DRUG,
+    STATS,
+    GRANT,
+    MARKET,
+    PATIENT,
+)
 _BY_ID = {app.id: app for app in APPS}
 
 

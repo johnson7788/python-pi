@@ -18,6 +18,32 @@ def test_catalog_has_defaults_and_capsules():
     assert all(mode["capsules"] for mode in general["modes"])
 
 
+def test_chart_app_is_builtin_and_ships_with_its_tools():
+    """数据绘图必须开箱可用：4 个模式、声明的插件、以及和工具链对齐的提示词。"""
+    catalog = apps.catalog_json()
+    chart = next(app for app in catalog["apps"] if app["id"] == "chart")
+    assert chart["builtin"] is True
+    assert chart["name"] == "数据绘图"
+    assert [mode["id"] for mode in chart["modes"]] == ["single", "dashboard", "insight", "restyle"]
+    assert all(mode["capsules"] for mode in chart["modes"])
+    assert {mode["icon"] for mode in chart["modes"]} == {"chart", "palette"}
+
+    assert apps.find_app("chart").plugins == ("chart-tools",)
+
+    # 每个模式的提示词都要把「先 profile、不手写数据、用工具生成 HTML」说清楚，
+    # 否则模型会退回到直接写 HTML/抄数字。
+    for mode in chart["modes"]:
+        assert "chart_data_profile" in mode["prompt"]
+        assert "chart_render_html" in mode["prompt"]
+        # 模板由工具给：提示词里不点名，模型就会凭记忆写 option。
+        assert "chart_templates" in mode["prompt"]
+
+    # 单图/仪表盘/改版需要模板库；数据解读不需要。
+    bindings = {mode["id"]: mode["skillBinding"] for mode in chart["modes"]}
+    assert bindings["single"] == ["chart-spec", "chart-gallery"]
+    assert bindings["insight"] == ["chart-spec"]
+
+
 def test_composition_selects_prompt_and_skill_binding():
     office = apps.composition_for("general", "office")
     review = apps.composition_for("research", "review")
@@ -83,6 +109,8 @@ def test_app_crud_over_http(tmp_path):
         listed = client.get("/api/apps").json()
         assert listed["canManage"] is True
         assert len(listed["apps"]) >= 8
+        chart = next(app for app in listed["apps"] if app["id"] == "chart")
+        assert chart["name"] == "数据绘图"
 
         created = client.post(
             "/api/apps",

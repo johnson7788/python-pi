@@ -31,6 +31,7 @@ from conftest import (
 from pi_coding_agent.extensions.types import ToolCallEventResult
 from pi_coding_agent.policy import extension as policy_extension
 from pi_coding_agent.policy.rules import (
+    DEFAULT_ALLOW_TOOLS,
     Decision,
     PolicyConfig,
     classify_command,
@@ -150,6 +151,55 @@ def test_an_unknown_tool_is_refused(config: PolicyConfig):
     verdict = classify_tool_call(config, "rm_rf_everything", {})
     assert verdict.decision is Decision.DENY
     assert "not available here" in verdict.reason
+
+
+def test_a_plugin_tool_runs_once_the_host_opens_it(workspace: Path):
+    """Admin-installed plugins register tools; the host has to put them in the allow set.
+
+    Deny-by-default applies to *new built-in* tools.  A plugin that was installed and
+    enabled for an app is a deliberate choice, and without this it is refused while the
+    plugin page happily reports it as loaded.
+    """
+    closed = PolicyConfig(workspace_root=str(workspace))
+    assert classify_tool_call(closed, "body_metrics", {}).decision is Decision.DENY
+
+    opened = PolicyConfig(
+        workspace_root=str(workspace),
+        allow_tools=DEFAULT_ALLOW_TOOLS | {"body_metrics"},
+    )
+    assert classify_tool_call(opened, "body_metrics", {}).decision is Decision.ALLOW
+
+
+def test_the_skill_catalog_is_readable_but_not_writable(workspace: Path, tmp_path: Path):
+    """The prompt advertises skills that live outside the workspace; they must open.
+
+    A team deployment symlinks ``<agent>/skills`` to the shared template, which is outside
+    every workspace, so a workspace-only read rule makes every skill unloadable.
+    """
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    skills = agent / "skills"
+    shared = tmp_path / "template" / "skills"
+    shared.mkdir(parents=True)
+    (shared / "demo").mkdir()
+    (shared / "demo" / "SKILL.md").write_text("---\nname: demo\n---\n", encoding="utf-8")
+    os.symlink(shared, skills)
+
+    config = PolicyConfig(workspace_root=str(workspace), read_roots=(str(skills),))
+
+    allowed = classify_tool_call(config, "read", {"path": str(skills / "demo" / "SKILL.md")})
+    assert allowed.decision is Decision.ALLOW, allowed
+
+    listed = classify_tool_call(config, "ls", {"path": str(skills)})
+    assert listed.decision is Decision.ALLOW, listed
+
+    # Writing into the catalog is still refused: it is shared by the whole team.
+    written = classify_tool_call(config, "write", {"path": str(skills / "demo" / "x.md")})
+    assert written.decision is Decision.DENY, written
+
+    # And another user's agent dir stays closed.
+    stranger = classify_tool_call(config, "read", {"path": str(tmp_path / "other" / "x")})
+    assert stranger.decision is Decision.DENY, stranger
 
 
 def test_summarize_call_shows_the_command_or_path(config: PolicyConfig):

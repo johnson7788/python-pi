@@ -1,0 +1,107 @@
+{
+  "id": "doughnut",
+  "name": "环形图（中心放总数）",
+  "family": "composition",
+  "use": "占比 + 中心放一个关键总数（KPI 感更强）",
+  "avoid": "中心数字和扇区不是同一口径时（会误导）",
+  "bind": {
+    "columns": [
+      "channel",
+      "share"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "channel",
+      "share"
+    ],
+    "rows": [
+      [
+        "自然搜索",
+        38
+      ],
+      [
+        "广告",
+        27
+      ],
+      [
+        "老客复购",
+        21
+      ],
+      [
+        "合作渠道",
+        14
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "tooltip": {
+      "trigger": "item",
+      "valueFormatter": "{c}%"
+    },
+    "legend": {
+      "bottom": 0
+    },
+    "graphic": [
+      {
+        "type": "text",
+        "left": "center",
+        "top": "40%",
+        "style": {
+          "text": "100%",
+          "fontSize": 22,
+          "fontWeight": 600,
+          "fill": "#111827",
+          "textAlign": "center"
+        }
+      },
+      {
+        "type": "text",
+        "left": "center",
+        "top": "48%",
+        "style": {
+          "text": "渠道构成",
+          "fontSize": 12,
+          "fill": "#6b7280",
+          "textAlign": "center"
+        }
+      }
+    ],
+    "series": [
+      {
+        "type": "pie",
+        "radius": [
+          "48%",
+          "70%"
+        ],
+        "center": [
+          "50%",
+          "46%"
+        ],
+        "encode": {
+          "itemName": "channel",
+          "value": "share"
+        },
+        "label": {
+          "formatter": "{b} {d}%"
+        },
+        "itemStyle": {
+          "borderColor": "transparent",
+          "borderWidth": 3
+        }
+      }
+    ]
+  },
+  "title": "渠道构成：自然搜索近四成",
+  "note": "中心数字要写口径（这里是占比合计 100%）",
+  "notes": {
+    "unit": "%",
+    "caveat": "按订单数计"
+  },
+  "pitfalls": [
+    "graphic 的坐标用 center/百分比，换容器宽度不会跑偏",
+    "中心数字不要放绝对值却配占比扇区"
+  ],
+  "schema": "pi.chart-template/1"
+}

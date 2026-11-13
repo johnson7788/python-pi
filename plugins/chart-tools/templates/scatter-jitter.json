@@ -1,0 +1,115 @@
+{
+  "id": "scatter-jitter",
+  "name": "抖动散点（蜂群）",
+  "family": "distribution",
+  "use": "分类 × 连续值，且同一取值大量重叠（评分、剂量）",
+  "avoid": "每组样本很少；需要看精确分布时（用箱线 + 散点）",
+  "bind": {
+    "columns": [
+      "group",
+      "score"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "group",
+      "score"
+    ],
+    "rows": [
+      [
+        "A组",
+        3
+      ],
+      [
+        "A组",
+        3
+      ],
+      [
+        "A组",
+        4
+      ],
+      [
+        "A组",
+        4
+      ],
+      [
+        "A组",
+        4
+      ],
+      [
+        "B组",
+        2
+      ],
+      [
+        "B组",
+        3
+      ],
+      [
+        "B组",
+        3
+      ],
+      [
+        "B组",
+        5
+      ],
+      [
+        "C组",
+        4
+      ],
+      [
+        "C组",
+        4
+      ],
+      [
+        "C组",
+        5
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "item"
+    },
+    "xAxis": {
+      "type": "category",
+      "name": "组别"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "评分",
+      "scale": true
+    },
+    "series": [
+      {
+        "type": "scatter",
+        "jitter": 12,
+        "symbolSize": 7,
+        "encode": {
+          "x": "group",
+          "y": "score"
+        },
+        "itemStyle": {
+          "opacity": 0.7
+        }
+      }
+    ]
+  },
+  "title": "A 组集中在 3–4 分，B 组更分散",
+  "note": "抖动宽度只影响可读性，不代表数据；点数 = n",
+  "notes": {
+    "unit": "分",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "jitter 需要 ECharts 6+；旧版会忽略",
+    "点太多（>500）改用箱线或密度图"
+  ],
+  "schema": "pi.chart-template/1"
+}

@@ -34,6 +34,7 @@ import re
 import shutil
 import time
 import tempfile
+import urllib.parse
 import base64
 import shutil
 import secrets
@@ -53,7 +54,7 @@ from pydantic import BaseModel
 from pi_coding_agent.bootstrap import BootstrapOptions, bootstrap, resolve_project_trust
 from pi_coding_agent.modes.jsonl import serialize_json_line
 from pi_coding_agent.modes.rpc_mode import RpcMode, model_to_json
-from pi_coding_agent.policy import POLICY_EXTENSION_PATH, PolicyConfig
+from pi_coding_agent.policy import DEFAULT_ALLOW_TOOLS, POLICY_EXTENSION_PATH, PolicyConfig
 from pi_coding_agent.resource_loader import ResourceLoader
 from pi_coding_agent.settings import SettingsManager
 from pi_coding_agent.session_manager import SessionManager, get_default_session_dir
@@ -61,6 +62,7 @@ from pi_coding_agent.session_manager import SessionManager, get_default_session_
 from . import apps as app_catalog
 from . import market as market_catalog
 from . import office as office_store
+from .docx_export import markdown_to_docx
 from . import xlsx_sidecar as xlsx_engine
 from . import plugins as plugin_catalog
 from . import schedules as schedule_catalog
@@ -1019,6 +1021,12 @@ class FeedbackRequest(BaseModel):
     comment: str = ""
 
 
+class ExportDocxRequest(BaseModel):
+    markdown: str
+    title: str = ""
+    subtitle: str = ""
+
+
 class AppUpsertRequest(BaseModel):
     name: str
     description: str = ""
@@ -1143,6 +1151,14 @@ def create_app(
         return PolicyConfig(
             workspace_root=worker.options.cwd,
             uid=worker.uid,
+            # Deny-by-default is about *new built-in* tools; an admin-installed plugin is a
+            # deliberate opening, so its tools join the allow set.  Without this every
+            # plugin tool is refused and the plugin looks silently broken.
+            allow_tools=frozenset(DEFAULT_ALLOW_TOOLS | _registered_tool_names(worker)),
+            # The skill catalog lives in the per-user agent dir (symlinked to the shared
+            # template), which is outside every workspace.  The prompt advertises those
+            # skills, so the read side has to reach them; writes stay workspace-only.
+            read_roots=(os.path.join(worker.options.agent_dir or "", "skills"),),
             # Every user's workspace and transcript lives under here, so an agent that can
             # read it can read a colleague's conversations.
             protected_roots=(server_config.data_root,),
@@ -1150,6 +1166,20 @@ def create_app(
             confirm_timeout=server_config.confirm_timeout_seconds,
             record=worker.record_tool_decision,
         )
+
+    def _registered_tool_names(worker: SessionWorker) -> frozenset[str]:
+        """Tool names the worker's extensions/plugins registered (best effort)."""
+        runner = getattr(getattr(worker, "state", None), "extension_runner", None)
+        if runner is None:
+            return frozenset()
+        try:
+            snapshot = runner.status()
+        except Exception:  # noqa: BLE001 - a broken runner must not break the session
+            return frozenset()
+        names: set[str] = set()
+        for entry in snapshot.get("extensions") or []:
+            names.update(str(name) for name in entry.get("tools") or [] if name)
+        return frozenset(names)
 
     def _usage_sink(entry: dict[str, Any]) -> None:
         if database is None:
@@ -1202,6 +1232,21 @@ def create_app(
             "error": reason,
         }
 
+    def _plugin_paths_for(uid: str, app_id: str) -> tuple[str, ...]:
+        """Plugins one worker should load: what the app declares + what the user enabled.
+
+        The app half matters because a declared plugin is the deployment's deliberate
+        choice: an app that needs a tool to do its job should not arrive half-working
+        because nobody clicked "enable".  Installation is still an administrator action.
+        """
+        names: set[str] = set()
+        found = app_catalog.find_app(app_id)
+        if found is not None:
+            names.update(found.plugins)
+        if database is not None:
+            names.update(database.enabled_plugins(uid, app_id))
+        return plugin_catalog.entry_paths(server_config.plugin_root, sorted(names))
+
     registry = SessionRegistry(
         options,
         server_config,
@@ -1238,15 +1283,9 @@ def create_app(
             if database is not None
             else None
         ),
-        plugin_paths_lookup=(
-            (
-                lambda uid, app_id: plugin_catalog.entry_paths(
-                    server_config.plugin_root, database.enabled_plugins(uid, app_id)
-                )
-            )
-            if database is not None
-            else None
-        ),
+        # Not gated on ``database``: a single-mode deployment has no enable table, but a
+        # builtin app that declares a plugin should still get it.
+        plugin_paths_lookup=_plugin_paths_for,
         composition_lookup=(lambda app_id, mode_id: app_composition(app_id, mode_id)),
         policy_factory=_policy_for if database is not None else None,
         on_audit=_audit_sink if database is not None else None,
@@ -2116,6 +2155,12 @@ def create_app(
     async def list_plugins(request: Request, app: str = Query("general")) -> dict[str, Any]:
         installed = plugin_catalog.scan(server_config.plugin_root)
         can_install = False
+        app_id, _mode_id = resolve_app_mode(app, None)
+        app_def = app_catalog.find_app(app_id)
+        # An app that declares a plugin gets it whether or not anyone clicked "enable", so
+        # report it as enabled here too — otherwise the page says "off" for a tool the
+        # model is already using.
+        required = set(app_def.plugins) if app_def is not None else set()
         if database is None:
             states: dict[str, bool] = {}
             can_manage = False
@@ -2123,18 +2168,18 @@ def create_app(
             user = auth.current_user(request)
             if user is None:
                 raise auth.reject_unauthenticated()
-            app_id, _mode_id = resolve_app_mode(app, None)
             states = database.plugin_states(user.uid, app_id)
             can_manage = True
             can_install = bool(user.is_admin)
         return {
-            "app": app,
+            "app": app_id,
             "canManage": can_manage,
             "canInstall": can_install,
             "plugins": [
                 {
                     **info.to_json(),
-                    "enabled": states.get(info.id, False),
+                    "enabled": states.get(info.id, False) or info.id in required,
+                    "required": info.id in required,
                 }
                 for info in installed
             ],
@@ -2154,6 +2199,12 @@ def create_app(
         app_id, _mode_id = resolve_app_mode(body.appId or app, None)
         if all(info.id != plugin_id for info in plugin_catalog.scan(server_config.plugin_root)):
             raise HTTPException(status_code=404, detail={"error": f"unknown plugin: {plugin_id}"})
+        app_def = app_catalog.find_app(app_id)
+        if not body.enabled and app_def is not None and plugin_id in app_def.plugins:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": f"the app declares plugin {plugin_id!r}; it cannot be switched off here"},
+            )
         db.set_plugin_enabled(user.uid, app_id, plugin_id, body.enabled)
         # The next request/worker for this app reloads the plugin set; running turns are
         # allowed to finish on the old set rather than mutating tools mid-turn.
@@ -3437,6 +3488,37 @@ def create_app(
         except (zipfile.BadZipFile, KeyError, ElementTree.ParseError) as error:
             raise HTTPException(status_code=422, detail={"error": f"not a readable xlsx: {error}"}) from None
         return {"path": path, "sheets": sheets}
+
+    @app.post("/api/export/docx")
+    async def export_docx(payload: ExportDocxRequest, request: Request) -> Response:
+        """把一条回答（Markdown）转成 Word，供"下载"按钮使用。
+
+        只做格式转换，不碰工作区：内容来自浏览器里已有的那条回答。
+        """
+        if database is not None and auth.current_user(request) is None:
+            raise auth.reject_unauthenticated()
+        text = payload.markdown or ""
+        if not text.strip():
+            raise HTTPException(status_code=422, detail={"error": "markdown is empty"})
+        if len(text) > 400_000:
+            raise HTTPException(status_code=413, detail={"error": "markdown is too large"})
+        data = markdown_to_docx(
+            text, title=payload.title or "回答", subtitle=payload.subtitle or ""
+        )
+        name = (payload.title or "answer").strip()[:60] or "answer"
+        # 注意 str.isalnum() 对中文也是 True，header 必须是 ASCII，所以额外要求 isascii()。
+        safe = "".join(
+            ch if ch.isascii() and (ch.isalnum() or ch in "-_ ") else "-" for ch in name
+        ).strip(" -") or "answer"
+        # HTTP 头只能是 latin-1：中文文件名走 RFC 5987 的 filename*，另给一个 ASCII 回退。
+        encoded = urllib.parse.quote(f"{name}.docx")
+        return Response(
+            content=data,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{safe}.docx\"; filename*=UTF-8''{encoded}"
+            },
+        )
 
     @app.get("/api/workspace/tree")
     async def workspace_tree(

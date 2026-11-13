@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 
 from .rules import (
+    DEFAULT_ALLOW_TOOLS,
     Decision,
     PolicyConfig,
     Verdict,
@@ -30,6 +31,7 @@ from .rules import (
 POLICY_EXTENSION_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extension.py")
 
 __all__ = [
+    "DEFAULT_ALLOW_TOOLS",
     "POLICY_EXTENSION_PATH",
     "Decision",
     "PolicyConfig",

@@ -1,0 +1,80 @@
+{
+  "id": "pie-basic",
+  "name": "饼图",
+  "family": "composition",
+  "use": "整体占比，类目 ≤6 且差异明显",
+  "avoid": "类目超过 6 个；需要比较相近的占比（改用条形）；有时间维度",
+  "bind": {
+    "columns": [
+      "channel",
+      "share"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "channel",
+      "share"
+    ],
+    "rows": [
+      [
+        "自然搜索",
+        38
+      ],
+      [
+        "广告",
+        27
+      ],
+      [
+        "老客复购",
+        21
+      ],
+      [
+        "合作渠道",
+        14
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "tooltip": {
+      "trigger": "item",
+      "valueFormatter": "{c}%"
+    },
+    "legend": {
+      "bottom": 0
+    },
+    "series": [
+      {
+        "type": "pie",
+        "radius": "62%",
+        "center": [
+          "50%",
+          "46%"
+        ],
+        "encode": {
+          "itemName": "channel",
+          "value": "share"
+        },
+        "label": {
+          "formatter": "{b} {c}%"
+        },
+        "itemStyle": {
+          "borderColor": "transparent",
+          "borderWidth": 2
+        }
+      }
+    ]
+  },
+  "title": "自然搜索贡献 38%",
+  "note": "饼图只适合「加总为 100%」的场景；同时给出绝对值",
+  "notes": {
+    "unit": "%",
+    "caveat": "按订单数计"
+  },
+  "pitfalls": [
+    "类目超过 6 个换条形图",
+    "不要用饼图比较相近的占比",
+    "3D 饼图一律不要——透视会让近处的扇区显得更大"
+  ],
+  "schema": "pi.chart-template/1"
+}

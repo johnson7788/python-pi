@@ -1,0 +1,116 @@
+{
+  "id": "line-area",
+  "name": "面积折线（渐变）",
+  "family": "trend",
+  "use": "单指标趋势，想强调体量而不是只有方向",
+  "avoid": "多指标叠加（会互相遮挡）；数值接近 0 附近来回波动",
+  "bind": {
+    "columns": [
+      "month",
+      "sales"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "month",
+      "sales"
+    ],
+    "rows": [
+      [
+        "1月",
+        124
+      ],
+      [
+        "2月",
+        138
+      ],
+      [
+        "3月",
+        156
+      ],
+      [
+        "4月",
+        168
+      ],
+      [
+        "5月",
+        185
+      ],
+      [
+        "6月",
+        199
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "line"
+      }
+    },
+    "xAxis": {
+      "type": "category",
+      "boundaryGap": false,
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "月份"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "销售额（万元）"
+    },
+    "series": [
+      {
+        "type": "line",
+        "encode": {
+          "x": "month",
+          "y": "sales"
+        },
+        "symbolSize": 5,
+        "lineStyle": {
+          "width": 2.5
+        },
+        "areaStyle": {
+          "opacity": 1,
+          "color": {
+            "type": "linear",
+            "x": 0,
+            "y": 0,
+            "x2": 0,
+            "y2": 1,
+            "colorStops": [
+              {
+                "offset": 0,
+                "color": "rgba(37,99,235,0.28)"
+              },
+              {
+                "offset": 1,
+                "color": "rgba(37,99,235,0.02)"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "title": "销售额全年上行",
+  "note": "面积强调体量；Y 轴从 0 起，否则面积比例会失真",
+  "notes": {
+    "unit": "万元",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "面积图 Y 轴不从 0 起，面积比例就没有意义",
+    "叠加多指标时用 area-stacked"
+  ],
+  "schema": "pi.chart-template/1"
+}

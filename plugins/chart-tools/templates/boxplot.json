@@ -1,0 +1,104 @@
+{
+  "id": "boxplot",
+  "name": "箱线图",
+  "family": "distribution",
+  "use": "分组分布对比：中位数、四分位、离群值",
+  "avoid": "每组样本 <5；读者只需要一个均值",
+  "bind": {
+    "columns": [
+      "group",
+      "min",
+      "q1",
+      "median",
+      "q3",
+      "max"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "group",
+      "min",
+      "q1",
+      "median",
+      "q3",
+      "max"
+    ],
+    "rows": [
+      [
+        "A组",
+        12,
+        20,
+        28,
+        36,
+        52
+      ],
+      [
+        "B组",
+        18,
+        24,
+        31,
+        40,
+        58
+      ],
+      [
+        "C组",
+        9,
+        16,
+        21,
+        27,
+        41
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "item"
+    },
+    "xAxis": {
+      "type": "category",
+      "name": "组别"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "指标值",
+      "scale": true
+    },
+    "series": [
+      {
+        "type": "boxplot",
+        "encode": {
+          "x": "group",
+          "y": [
+            "min",
+            "q1",
+            "median",
+            "q3",
+            "max"
+          ]
+        },
+        "boxWidth": [
+          8,
+          40
+        ]
+      }
+    ]
+  },
+  "title": "B 组中位数最高，但离散也更大",
+  "note": "箱体是 P25–P75，须线是 min–max；离群值要单独标注",
+  "notes": {
+    "unit": "分",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "五数（min/q1/median/q3/max）要先算好，顺序错图就错",
+    "箱线不显示样本量，n 写进图注"
+  ],
+  "schema": "pi.chart-template/1"
+}

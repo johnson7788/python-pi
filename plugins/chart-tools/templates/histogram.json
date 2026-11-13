@@ -1,0 +1,94 @@
+{
+  "id": "histogram",
+  "name": "直方图（分箱柱）",
+  "family": "distribution",
+  "use": "看一个数值列的分布形状、偏态、双峰、长尾",
+  "avoid": "只想看一个汇总值（用均值 + 箱线）；样本 <30（分布没意义）",
+  "bind": {
+    "columns": [
+      "bin",
+      "count"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "bin",
+      "count"
+    ],
+    "rows": [
+      [
+        "0–10",
+        4
+      ],
+      [
+        "10–20",
+        11
+      ],
+      [
+        "20–30",
+        23
+      ],
+      [
+        "30–40",
+        31
+      ],
+      [
+        "40–50",
+        18
+      ],
+      [
+        "50–60",
+        6
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "shadow"
+      }
+    },
+    "xAxis": {
+      "type": "category",
+      "name": "区间",
+      "axisLabel": {
+        "hideOverlap": true,
+        "interval": 0,
+        "rotate": 0
+      }
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "频数"
+    },
+    "series": [
+      {
+        "type": "bar",
+        "encode": {
+          "x": "bin",
+          "y": "count"
+        },
+        "barCategoryGap": "8%"
+      }
+    ]
+  },
+  "title": "集中在 30–40 区间，右侧长尾",
+  "note": "分箱宽度决定形状；标出 n 和分箱规则",
+  "notes": {
+    "unit": "例",
+    "caveat": "等宽分箱，箱宽 10"
+  },
+  "pitfalls": [
+    "分箱要在数据侧先算好（bin/count 两列）；箱宽不同不能直接比",
+    "别用 0 填补缺失再画分布"
+  ],
+  "schema": "pi.chart-template/1"
+}

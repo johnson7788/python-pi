@@ -1,0 +1,99 @@
+{
+  "id": "scatter",
+  "name": "散点图",
+  "family": "relation",
+  "use": "两个数值之间有没有关系（相关、聚集、离群）",
+  "avoid": "样本很少（<10）时看不出模式；两个变量都是时间序列（用双折线）",
+  "bind": {
+    "columns": [
+      "spend",
+      "orders"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "spend",
+      "orders"
+    ],
+    "rows": [
+      [
+        12,
+        30
+      ],
+      [
+        18,
+        44
+      ],
+      [
+        25,
+        52
+      ],
+      [
+        31,
+        70
+      ],
+      [
+        38,
+        74
+      ],
+      [
+        44,
+        92
+      ],
+      [
+        52,
+        96
+      ],
+      [
+        60,
+        118
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "item"
+    },
+    "xAxis": {
+      "type": "value",
+      "name": "投放（万元）",
+      "scale": true
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "订单（单）",
+      "scale": true
+    },
+    "series": [
+      {
+        "type": "scatter",
+        "encode": {
+          "x": "spend",
+          "y": "orders"
+        },
+        "symbolSize": 9,
+        "itemStyle": {
+          "opacity": 0.7
+        }
+      }
+    ]
+  },
+  "title": "投放与订单同向变化，但有离群点",
+  "note": "相关不等于因果；离群点要单独说明",
+  "notes": {
+    "unit": "万元 / 单",
+    "caveat": "按周汇总，n=8"
+  },
+  "pitfalls": [
+    "两个轴都可以截断，但要在图注写范围",
+    "点重叠时加透明度或 jitter"
+  ],
+  "schema": "pi.chart-template/1"
+}

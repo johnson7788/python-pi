@@ -1,0 +1,85 @@
+{
+  "id": "sankey",
+  "name": "桑基图（流向）",
+  "family": "composition",
+  "use": "流量在几个阶段之间怎么分流（投放 → 下单/流失）",
+  "avoid": "多路径循环；节点超过 15 个",
+  "bind": null,
+  "sample": null,
+  "dataNote": "结构性数据：nodes/links 直接写在 option 里；数值来自汇总，不要估",
+  "option": {
+    "tooltip": {
+      "trigger": "item",
+      "triggerOn": "mousemove"
+    },
+    "series": [
+      {
+        "type": "sankey",
+        "left": 16,
+        "right": 120,
+        "top": 16,
+        "bottom": 16,
+        "nodeGap": 12,
+        "nodeWidth": 14,
+        "emphasis": {
+          "focus": "adjacency"
+        },
+        "lineStyle": {
+          "curveness": 0.5,
+          "opacity": 0.35
+        },
+        "label": {
+          "position": "right",
+          "fontSize": 12
+        },
+        "data": [
+          {
+            "name": "投放"
+          },
+          {
+            "name": "自然"
+          },
+          {
+            "name": "下单"
+          },
+          {
+            "name": "流失"
+          }
+        ],
+        "links": [
+          {
+            "source": "投放",
+            "target": "下单",
+            "value": 320
+          },
+          {
+            "source": "投放",
+            "target": "流失",
+            "value": 180
+          },
+          {
+            "source": "自然",
+            "target": "下单",
+            "value": 210
+          },
+          {
+            "source": "自然",
+            "target": "流失",
+            "value": 70
+          }
+        ]
+      }
+    ]
+  },
+  "title": "投放带来 500 单，流失 180",
+  "note": "带宽是流量；节点总流入=总流出（不自洽说明口径有问题）",
+  "notes": {
+    "unit": "单",
+    "caveat": "同一用户只计首单"
+  },
+  "pitfalls": [
+    "links 的 source/target 必须出现在 data 里，否则静默丢弃",
+    "节点顺序影响布局，按业务阶段从左到右排"
+  ],
+  "schema": "pi.chart-template/1"
+}

@@ -1,0 +1,140 @@
+{
+  "id": "area-stacked",
+  "name": "堆叠面积图",
+  "family": "trend",
+  "use": "多成分的体量与构成随时间变化",
+  "avoid": "成分之间有负数；只想看单个成分的趋势",
+  "bind": {
+    "columns": [
+      "month",
+      "east",
+      "north",
+      "south"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "month",
+      "east",
+      "north",
+      "south"
+    ],
+    "rows": [
+      [
+        "1月",
+        80,
+        50,
+        40
+      ],
+      [
+        "2月",
+        88,
+        52,
+        44
+      ],
+      [
+        "3月",
+        96,
+        55,
+        48
+      ],
+      [
+        "4月",
+        104,
+        58,
+        50
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "grid": {
+      "left": 64,
+      "right": 28,
+      "top": 40,
+      "bottom": 56
+    },
+    "tooltip": {
+      "trigger": "axis",
+      "axisPointer": {
+        "type": "line"
+      }
+    },
+    "legend": {
+      "top": 0
+    },
+    "xAxis": {
+      "type": "category",
+      "boundaryGap": false,
+      "axisLabel": {
+        "hideOverlap": true
+      },
+      "name": "月份"
+    },
+    "yAxis": {
+      "type": "value",
+      "name": "销售额（万元）"
+    },
+    "series": [
+      {
+        "type": "line",
+        "name": "华东",
+        "stack": "total",
+        "symbol": "none",
+        "lineStyle": {
+          "width": 1
+        },
+        "areaStyle": {
+          "opacity": 0.55
+        },
+        "encode": {
+          "x": "month",
+          "y": "east"
+        }
+      },
+      {
+        "type": "line",
+        "name": "华北",
+        "stack": "total",
+        "symbol": "none",
+        "lineStyle": {
+          "width": 1
+        },
+        "areaStyle": {
+          "opacity": 0.55
+        },
+        "encode": {
+          "x": "month",
+          "y": "north"
+        }
+      },
+      {
+        "type": "line",
+        "name": "华南",
+        "stack": "total",
+        "symbol": "none",
+        "lineStyle": {
+          "width": 1
+        },
+        "areaStyle": {
+          "opacity": 0.55
+        },
+        "encode": {
+          "x": "month",
+          "y": "south"
+        }
+      }
+    ]
+  },
+  "title": "三大区合计体量稳步上升",
+  "note": "堆叠面积只能比总量和构成，不要比中间层的厚度",
+  "notes": {
+    "unit": "万元",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "堆叠顺序会影响谁更显眼，按业务重要性排",
+    "负数不能堆叠面积，先拆正负"
+  ],
+  "schema": "pi.chart-template/1"
+}

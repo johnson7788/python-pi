@@ -1,0 +1,115 @@
+{
+  "id": "polar-bar",
+  "name": "极坐标柱（南丁格尔）",
+  "family": "special",
+  "use": "类目多、想省横向空间，同时保留环形视觉",
+  "avoid": "需要精确比较（半径编码不线性）；类目超过 10 个",
+  "bind": {
+    "columns": [
+      "region",
+      "sales"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "region",
+      "sales"
+    ],
+    "rows": [
+      [
+        "华东",
+        320
+      ],
+      [
+        "华北",
+        180
+      ],
+      [
+        "华南",
+        240
+      ],
+      [
+        "西南",
+        120
+      ],
+      [
+        "东北",
+        90
+      ],
+      [
+        "西北",
+        70
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "tooltip": {
+      "trigger": "item"
+    },
+    "legend": {
+      "bottom": 0
+    },
+    "polar": {
+      "radius": [
+        "22%",
+        "70%"
+      ],
+      "center": [
+        "50%",
+        "46%"
+      ]
+    },
+    "angleAxis": {
+      "type": "category",
+      "axisLabel": {
+        "fontSize": 11
+      },
+      "axisLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      }
+    },
+    "radiusAxis": {
+      "type": "value",
+      "axisLabel": {
+        "show": false
+      },
+      "splitLine": {
+        "show": false
+      },
+      "axisTick": {
+        "show": false
+      },
+      "axisLine": {
+        "show": false
+      }
+    },
+    "series": [
+      {
+        "type": "bar",
+        "coordinateSystem": "polar",
+        "encode": {
+          "angle": "region",
+          "radius": "sales"
+        },
+        "itemStyle": {
+          "opacity": 0.85
+        }
+      }
+    ]
+  },
+  "title": "华东销售额最高",
+  "note": "极坐标里半径是数值，角度只是类目；环宽不代表数量",
+  "notes": {
+    "unit": "万元",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "polar 的柱状图要用 `encode.angle/radius`，用 x/y 会渲染成空白",
+    "类目超过 10 个角度会挤，改横向条形"
+  ],
+  "schema": "pi.chart-template/1"
+}

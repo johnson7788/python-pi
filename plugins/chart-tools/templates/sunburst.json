@@ -1,0 +1,75 @@
+{
+  "id": "sunburst",
+  "name": "旭日图",
+  "family": "composition",
+  "use": "两到三层级的构成，且想同时看到层级关系",
+  "avoid": "层级太深（>3）或叶子太多（>20）",
+  "bind": null,
+  "sample": null,
+  "dataNote": "结构性层级数据：data 里写 children；数值来自 profile 汇总，不要估",
+  "option": {
+    "tooltip": {
+      "formatter": "{b}: {c}"
+    },
+    "series": [
+      {
+        "type": "sunburst",
+        "radius": [
+          "12%",
+          "92%"
+        ],
+        "center": [
+          "50%",
+          "50%"
+        ],
+        "label": {
+          "rotate": "radial",
+          "minAngle": 8
+        },
+        "itemStyle": {
+          "borderColor": "transparent",
+          "borderWidth": 1
+        },
+        "data": [
+          {
+            "name": "线上",
+            "children": [
+              {
+                "name": "自营",
+                "value": 40
+              },
+              {
+                "name": "平台",
+                "value": 25
+              }
+            ]
+          },
+          {
+            "name": "线下",
+            "children": [
+              {
+                "name": "直营",
+                "value": 20
+              },
+              {
+                "name": "经销",
+                "value": 15
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "title": "线上自营 40%，是最大叶子",
+  "note": "越靠外越细；环的宽度是相对值",
+  "notes": {
+    "unit": "%",
+    "caveat": "按 GMV 计"
+  },
+  "pitfalls": [
+    "叶子标签在小角度时会重叠，`minAngle` 调大或去掉叶子标签",
+    "环宽不表示数量，角度/面积才表示"
+  ],
+  "schema": "pi.chart-template/1"
+}

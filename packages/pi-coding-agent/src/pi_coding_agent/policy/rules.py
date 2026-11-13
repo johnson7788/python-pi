@@ -33,6 +33,14 @@ from typing import Any, Callable, Mapping
 #: Tools whose argument set always contains a workspace path under ``path``.
 PATH_TOOLS = frozenset({"read", "write", "edit", "ls", "grep", "find", "glob"})
 
+#: Path tools that may only ever touch the workspace; the rest are read-only and may also
+#: read a declared :attr:`PolicyConfig.read_roots` entry.
+WRITE_TOOLS = frozenset({"write", "edit"})
+
+#: What may run without asking when a deployment does not widen the set.  Extensions a
+#: host loads deliberately add their own tool names to ``allow_tools``.
+DEFAULT_ALLOW_TOOLS = frozenset({"read", "write", "edit", "ls", "grep", "find"})
+
 #: Argument names that carry a path for those tools.  ``grep``/``find`` also take
 #: ``pattern``, which is a regex or glob and never a path, so it is not inspected.
 PATH_ARGUMENTS = ("path", "file", "filePath", "file_path", "dir", "directory")
@@ -129,11 +137,16 @@ class PolicyConfig:
     session_id: str = ""
     #: Tools that may run without asking.  A tool that is in neither set is refused, so a
     #: newly added built-in tool is closed until a deployment deliberately opens it.
-    allow_tools: frozenset[str] = field(
-        default_factory=lambda: frozenset({"read", "write", "edit", "ls", "grep", "find"})
-    )
+    #: A host that loads admin-installed extensions adds their tool names here — otherwise
+    #: every plugin tool is refused and the plugin looks silently broken.
+    allow_tools: frozenset[str] = field(default_factory=lambda: DEFAULT_ALLOW_TOOLS)
     #: Tools whose individual calls are classified (``bash``) or always confirmed.
     confirm_tools: frozenset[str] = field(default_factory=lambda: frozenset({"bash"}))
+    #: Places outside the workspace that **read-only** tools may inspect.  The skill catalog
+    #: is the case that matters: a team deployment symlinks ``<agent>/skills`` to the shared
+    #: template, which is outside every workspace, so without this the prompt advertises
+    #: skills the agent is then refused permission to open.  Writes stay workspace-only.
+    read_roots: tuple[str, ...] = ()
     #: Roots the agent must never touch: the deployment's own data directory (every user's
     #: workspace and transcript) and, if the operator wants, the install itself.  Without
     #: this, ``cat ../../agents/<other-uid>/sessions/*.jsonl`` is an ordinary-looking read.
@@ -150,6 +163,18 @@ class PolicyConfig:
 
 def _within(root: str, candidate: str) -> bool:
     return candidate == root or candidate.startswith(root + os.sep)
+
+
+def _within_read_roots(config: "PolicyConfig", raw_path: str) -> bool:
+    """Whether a path resolves inside one of the declared read-only roots."""
+    text = (raw_path or "").strip()
+    if not text or not config.read_roots:
+        return False
+    subject = text if os.path.isabs(text) else os.path.join(config.workspace_root, text)
+    if not os.path.exists(subject):
+        subject = os.path.dirname(subject) or subject
+    resolved = os.path.realpath(subject)
+    return any(_within(os.path.realpath(root), resolved) for root in config.read_roots if root)
 
 
 def escapes_workspace(workspace_root: str, raw_path: str) -> bool:
@@ -259,7 +284,13 @@ def classify_tool_call(
     if name in PATH_TOOLS:
         for key in PATH_ARGUMENTS:
             value = payload.get(key)
-            if isinstance(value, str) and escapes_workspace(config.workspace_root, value):
+            if not isinstance(value, str) or not value:
+                continue
+            if not escapes_workspace(config.workspace_root, value):
+                continue
+            # A declared read-only root (the skill catalog) is open to inspection, never to
+            # writing: the agent must be able to load a SKILL.md it was told about.
+            if name in WRITE_TOOLS or not _within_read_roots(config, value):
                 return Verdict(
                     Decision.DENY,
                     f"refused by policy: {key} {value!r} is outside your workspace",
@@ -294,9 +325,11 @@ def summarize_call(tool_name: str, args: Mapping[str, Any] | None, *, limit: int
 
 __all__ = [
     "CONFIRM_PATTERNS",
+    "DEFAULT_ALLOW_TOOLS",
     "DENY_PATTERNS",
     "PATH_ARGUMENTS",
     "PATH_TOOLS",
+    "WRITE_TOOLS",
     "Decision",
     "PolicyConfig",
     "Verdict",

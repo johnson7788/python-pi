@@ -1,0 +1,94 @@
+{
+  "id": "parallel",
+  "name": "平行坐标",
+  "family": "distribution",
+  "use": "多个指标的综合对比（3–6 维），看哪一组各项都不差",
+  "avoid": "指标超过 6 个；指标之间量纲差距极大（要先归一化）",
+  "bind": {
+    "columns": [
+      "name",
+      "cost",
+      "quality",
+      "speed"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "name",
+      "cost",
+      "quality",
+      "speed"
+    ],
+    "rows": [
+      [
+        "方案A",
+        3,
+        8,
+        6
+      ],
+      [
+        "方案B",
+        5,
+        6,
+        9
+      ],
+      [
+        "方案C",
+        2,
+        9,
+        4
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "tooltip": {
+      "trigger": "item"
+    },
+    "parallel": {
+      "left": 60,
+      "right": 60,
+      "top": 48,
+      "bottom": 40
+    },
+    "parallelAxis": [
+      {
+        "dim": 1,
+        "name": "成本"
+      },
+      {
+        "dim": 2,
+        "name": "质量"
+      },
+      {
+        "dim": 3,
+        "name": "速度"
+      }
+    ],
+    "series": [
+      {
+        "type": "parallel",
+        "lineStyle": {
+          "width": 2,
+          "opacity": 0.75
+        },
+        "emphasis": {
+          "lineStyle": {
+            "width": 3
+          }
+        }
+      }
+    ]
+  },
+  "title": "方案C 成本最低、质量最高，速度一般",
+  "note": "每条线是一个对象穿过各指标；交叉多说明指标间有取舍",
+  "notes": {
+    "unit": "分",
+    "caveat": "三项均已归一化到 0–10"
+  },
+  "pitfalls": [
+    "dim 从 1 开始（0 是名称列）",
+    "指标没有归一化会变成「只有一条轴在动」"
+  ],
+  "schema": "pi.chart-template/1"
+}
