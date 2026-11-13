@@ -3,7 +3,7 @@
 录制时间：2026-11-05
 录制方式：Playwright 驱动 1440×900 Chromium，mock 后端 + Vite；无声，关键步骤以屏幕顶部字幕说明。
 
-> 视频用于逐项检查交互；18 号使用真实 LiteLLM 模型，其余使用 mock 数据。真实后端已由完整测试套件覆盖（`666 passed`，含 Docker sandbox）。
+> 视频用于逐项检查交互；18 号使用真实模型网关，其余使用 mock 数据。真实后端已由完整测试套件覆盖（`666 passed`，含 Docker sandbox）。
 
 | # | 视频 | 内容 | 时长 |
 |---|---|---|---|
@@ -24,7 +24,7 @@
 | 15 | [15-app-create.mp4](15-app-create.mp4) | 新建应用 | 7s |
 | 16 | [16-schedule-run.mp4](16-schedule-run.mp4) | 立即运行、运行历史 | 7s |
 | 17 | [17-home-modes.mp4](17-home-modes.mp4) | 办公/开发/设计模式切换 | 4s |
-| 18 | [18-real-model.mp4](18-real-model.mp4) | **真实模型** LiteLLM / deepseek-v4-flash 的回复 | 9s |
+| 18 | [18-real-model.mp4](18-real-model.mp4) | **真实模型** deepseek-v4-flash 的回复 | 9s |
 | 19 | [19-collapse-sections.mp4](19-collapse-sections.mp4) | 点击“任务/空间”标题折叠/展开列表 | 8s |
 
 也可以打开 [index.html](index.html) 连续播放。
