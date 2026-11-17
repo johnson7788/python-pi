@@ -1,0 +1,108 @@
+{
+  "schema": "pi.chart/1",
+  "page": {
+    "title": "四地区同走一条季节线：春季冲高、盛夏回落，华东全年领先",
+    "subtitle": "2024-01 至 2025-12，共 24 个月；单位万元，四个地区同量纲同轴",
+    "columns": 1,
+    "theme": "auto"
+  },
+  "charts": [
+    {
+      "title": "四地区月度销售趋势（2024-01 至 2025-12）",
+      "option": {
+        "dataset": {},
+        "grid": {
+          "left": 64,
+          "right": 28,
+          "top": 56,
+          "bottom": 56
+        },
+        "tooltip": {
+          "trigger": "axis",
+          "axisPointer": {
+            "type": "line"
+          }
+        },
+        "legend": {
+          "top": 8
+        },
+        "xAxis": {
+          "type": "category",
+          "boundaryGap": false,
+          "axisLabel": {
+            "hideOverlap": true
+          },
+          "name": "月份"
+        },
+        "yAxis": {
+          "type": "value",
+          "name": "销售额（万元）",
+          "splitLine": {
+            "lineStyle": {
+              "type": "dashed"
+            }
+          }
+        },
+        "series": [
+          {
+            "type": "line",
+            "name": "华东",
+            "encode": {
+              "x": "月份",
+              "y": "华东"
+            },
+            "symbolSize": 5,
+            "smooth": false
+          },
+          {
+            "type": "line",
+            "name": "华南",
+            "encode": {
+              "x": "月份",
+              "y": "华南"
+            },
+            "symbolSize": 5,
+            "smooth": false
+          },
+          {
+            "type": "line",
+            "name": "华北",
+            "encode": {
+              "x": "月份",
+              "y": "华北"
+            },
+            "symbolSize": 5,
+            "smooth": false
+          },
+          {
+            "type": "line",
+            "name": "西部",
+            "encode": {
+              "x": "月份",
+              "y": "西部"
+            },
+            "symbolSize": 5,
+            "smooth": false
+          }
+        ]
+      },
+      "note": "四条线同量纲（万元）直接可比：排序稳定为华东 > 华南 > 华北 > 西部，全年 3–5 月为峰、6–8 月为谷。这张图看不出增速差异，需要增长率请另做同比图。"
+    }
+  ],
+  "bind": {
+    "path": "data/sales.xlsx",
+    "sheet": null,
+    "columns": [
+      "月份",
+      "华东",
+      "华南",
+      "华北",
+      "西部"
+    ]
+  },
+  "notes": {
+    "unit": "万元",
+    "source": "data/sales.xlsx（宽表，24 行 × 5 列）",
+    "caveat": "月份为文本型年月（2024-01 格式），横轴按原始行序排列；若原始表缺月或乱序，趋势会被拉错。华南 2024-09 与 2024-07 同为 99.3，为真实数值非重复记录。"
+  }
+}

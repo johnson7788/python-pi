@@ -153,6 +153,12 @@ def test_an_unknown_tool_is_refused(config: PolicyConfig):
     assert "not available here" in verdict.reason
 
 
+def test_present_is_available_to_team_workers(config: PolicyConfig):
+    """present only declares existing workspace files; it must not be policy-blind."""
+    verdict = classify_tool_call(config, "present", {"files": [{"path": "report.md"}]})
+    assert verdict.decision is Decision.ALLOW
+
+
 def test_a_plugin_tool_runs_once_the_host_opens_it(workspace: Path):
     """Admin-installed plugins register tools; the host has to put them in the allow set.
 

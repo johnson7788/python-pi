@@ -25,6 +25,25 @@ class Capsule:
 
 
 @dataclass(frozen=True)
+class Example:
+    """One home-screen example: a result preview plus the prompt behind it.
+
+    ``prompt`` is the only required field, so a plain string example from an
+    older catalog still works.  ``image`` is a URL (https or site-relative); the
+    UI shows it as the final artifact preview.
+    """
+
+    prompt: str
+    id: str = ""
+    title: str = ""
+    description: str = ""
+    image: str = ""
+    kind: str = ""
+    format: str = ""
+    tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Mode:
     id: str
     name: str
@@ -33,8 +52,9 @@ class Mode:
     #: ``None`` means every discovered skill; a tuple binds the mode to a subset.
     skills: tuple[str, ...] | None = None
     capsules: tuple[Capsule, ...] = field(default_factory=tuple)
-    #: Example prompts shown on the home screen; empty means "no examples".
-    examples: tuple[str, ...] = ()
+    #: Examples shown on the home screen.  ``str`` is accepted for catalogs
+    #: written before examples carried a preview image.
+    examples: tuple[Example | str, ...] = ()
     #: Composer placeholder for this mode.
     placeholder: str = ""
     #: Icon name from the web icon set (``spark``/``code``/``palette``/...).
@@ -168,29 +188,32 @@ RESEARCH = App(
 SLIDES = App(
     id="slides",
     name="演示文稿",
-    description="从大纲到逐页内容与讲稿。",
+    description="从主题或材料到可编辑的 .pptx。",
     accent="#b56b2a",
     modes=(
         Mode(
             id="deck",
             name="制作",
-            description="先结构，再页面，最后讲稿。",
+            description="先结构，再版式，最后出文件。",
             prompt=(
-                "当前应用是「演示文稿」。先确认受众、时长和核心结论，再给大纲；"
-                "每一页只表达一个观点，正文不超过要点式短句。"
+                "当前应用是「演示文稿」。按 slides-deck 技能的交付契约执行："
+                "先确认主题与受众，写 deck.json，用脚本渲染 .pptx，再把文件 present 给用户。"
+                "每一页只表达一个观点；不写坐标、不手改 pptx；用户要改时只改 spec 再重渲染。"
             ),
+            skills=("slides-deck",),
             capsules=(
-                Capsule("outline-10", "10 页大纲", "给这个主题做一份 10 页的演示大纲。"),
-                Capsule("story", "故事线", "把这份材料改造成有起承转合的汇报故事线。"),
-                Capsule("notes", "讲稿", "为这套幻灯片写逐页讲稿，控制在 15 分钟。"),
+                Capsule("make-deck", "整份 PPT", "帮我做一份 10 页的演示文稿，主题是："),
+                Capsule("outline-10", "10 页大纲", "给这个主题做一份 10 页的演示大纲，再落成 PPT。"),
+                Capsule("story", "故事线", "把这份材料改造成有起承转合的汇报故事线，并做成 PPT。"),
+                Capsule("revise", "改这一页", "这套 PPT 里第 3 页改一下：换版式、压短文案，其余页不动。"),
             ),
             examples=(
                 "给季度复盘做一份 10 页汇报",
-                "把这份文档改成 15 分钟的汇报故事线",
+                "把这份文档改成 15 分钟的汇报故事线，并导出 PPT",
                 "这套幻灯片每页只留一个观点，帮我改",
-                "给这页配一段讲稿",
+                "帮我做一份面向投资人的产品发布 PPT",
             ),
-            placeholder="输入主题、受众和时长",
+            placeholder="输入主题、受众和页数",
             icon="slides",
         ),
     ),
@@ -589,10 +612,46 @@ CHART = App(
                 Capsule("share", "改成能发的图", "把这张图改成适合放进汇报/邮件的样式，字号和图注都清楚。"),
             ),
             examples=(
-                "把 data/ 里的销售表画成月度趋势图",
-                "各地区销售额做成对比图，最多 6 类",
-                "这两个指标的关系画出来，顺便告诉我相关性强不强",
-                "把这份 CSV 画成一张可以直接放进周报的图",
+                Example(
+                    id="line-simple",
+                    title="月度趋势",
+                    description="把销售表画成月度折线，标出拐点、异常点和同比变化。",
+                    prompt="把 data/ 里的销售表画成月度趋势图，标出拐点和异常点。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf35735fae.png",
+                    kind="折线图",
+                    format="PNG / SVG",
+                    tags=("折线图", "趋势"),
+                ),
+                Example(
+                    id="line-smooth",
+                    title="平滑趋势",
+                    description="用平滑曲线看长期走势，减少月度波动带来的误读。",
+                    prompt="把这份月度数据画成平滑折线图，保留原始数据点，标出最高/最低月份。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf35bee960.png",
+                    kind="折线图",
+                    format="PNG / SVG",
+                    tags=("平滑", "趋势"),
+                ),
+                Example(
+                    id="confidence-band",
+                    title="带置信带的趋势",
+                    description="给均值加 95% 置信带，说明波动范围而不是只画一条线。",
+                    prompt="用这份分月数据画带 95% 置信带的趋势图，均值线加粗，置信带半透明，标注样本量。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf3605719a.png",
+                    kind="置信带",
+                    format="PNG / SVG",
+                    tags=("置信带", "统计"),
+                ),
+                Example(
+                    id="line-log",
+                    title="对数轴趋势",
+                    description="跨数量级的数据用对数轴，避免小值被压成一条直线。",
+                    prompt="把这份跨数量级的指标画成对数轴折线图，标出原始值和单位。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf3624cd08.png",
+                    kind="对数轴",
+                    format="PNG / SVG",
+                    tags=("对数轴", "长尾"),
+                ),
             ),
             placeholder="上传数据，或说清楚要对比/看趋势的字段",
             icon="chart",
@@ -616,9 +675,36 @@ CHART = App(
                 Capsule("kpi", "加关键指标", "在仪表盘顶部加 3 个关键指标，并说明口径。"),
             ),
             examples=(
-                "用这份销售数据做一个一页经营看板",
-                "把这份月度数据做成 4 张图的一屏总览",
-                "给我一个能放进周会的一页图",
+                Example(
+                    id="dashboard-area",
+                    title="一页构成看板",
+                    description="用堆叠面积图展示各渠道贡献，再配趋势和异常两张图。",
+                    prompt="用这份销售数据做一个一页经营看板：趋势、渠道构成、异常各一张。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf35e502fd.png",
+                    kind="面积图",
+                    format="PNG / SVG",
+                    tags=("堆叠面积", "构成"),
+                ),
+                Example(
+                    id="dashboard-step",
+                    title="阶梯变化看板",
+                    description="适合政策、价格或剂量切换的阶梯图，标出每次变化的时点。",
+                    prompt="把这份月度数据做成 4 张图的一屏总览，其中一张用阶梯折线表示规则切换。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf3648890b.png",
+                    kind="阶梯图",
+                    format="PNG / SVG",
+                    tags=("阶梯图", "规则切换"),
+                ),
+                Example(
+                    id="dashboard-simple",
+                    title="周会一页图",
+                    description="一屏看总量、构成和异常，标题直接写结论。",
+                    prompt="给我一个能放进周会的一页图，标题写结论，图注写口径和 n。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf35735fae.png",
+                    kind="折线图",
+                    format="PNG / SVG",
+                    tags=("周会", "一页图"),
+                ),
             ),
             placeholder="上传数据，说明这一屏要回答什么问题",
             icon="chart",
@@ -642,9 +728,36 @@ CHART = App(
                 Capsule("caveat", "能说到什么程度", "这份数据能支持哪些结论、不能支持哪些？逐条说。"),
             ),
             examples=(
-                "这份数据说明了什么，给我三条发现",
-                "有没有异常值会影响结论",
-                "这些数据能不能支持「投放带来了增长」",
+                Example(
+                    id="insight-findings",
+                    title="三条发现",
+                    description="先看数据再给图：三条带数字的发现 + 一个反例。",
+                    prompt="这份数据说明了什么，给我三条发现，每条带数字和出处列。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf35735fae.png",
+                    kind="折线图",
+                    format="PNG / SVG",
+                    tags=("发现", "数据解读"),
+                ),
+                Example(
+                    id="insight-band",
+                    title="异常与波动",
+                    description="用置信带看哪些月份真的偏离基线，而不是正常波动。",
+                    prompt="有没有异常值会影响结论？用带置信带的趋势图说明。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf3605719a.png",
+                    kind="置信带",
+                    format="PNG / SVG",
+                    tags=("异常", "置信带"),
+                ),
+                Example(
+                    id="insight-log",
+                    title="不能下的结论",
+                    description="用对数轴展示长尾，说明这份数据不能支持因果结论。",
+                    prompt="这些数据能不能支持「投放带来了增长」？先给三条发现，再说不能下什么结论。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf3624cd08.png",
+                    kind="对数轴",
+                    format="PNG / SVG",
+                    tags=("因果", "边界"),
+                ),
             ),
             placeholder="上传数据，说明你想弄清楚的业务问题",
             icon="chart",
@@ -669,9 +782,36 @@ CHART = App(
                 Capsule("mislead", "纠正误导", "找出这张图会让人误读的地方，逐条改掉。"),
             ),
             examples=(
-                "这张图哪里容易误读，帮我改掉",
-                "把这个截图里的图重画成能放进汇报的版本",
-                "这个双轴图看着有问题，换成更清楚的表达",
+                Example(
+                    id="restyle-type",
+                    title="换图表类型",
+                    description="把双轴或 3D 图改成单轴平滑折线，避免视觉误导。",
+                    prompt="这张图哪里容易误读，帮我改掉；换成更清楚的表达并说明理由。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf35bee960.png",
+                    kind="折线图",
+                    format="PNG / SVG",
+                    tags=("改版", "换图型"),
+                ),
+                Example(
+                    id="restyle-style",
+                    title="重做汇报样式",
+                    description="降低饱和度、统一字号、补单位和 n，适合放进汇报。",
+                    prompt="把这个截图里的图重画成能放进汇报的版本：颜色克制、字号统一、补单位和 n。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf35e502fd.png",
+                    kind="面积图",
+                    format="PNG / SVG",
+                    tags=("汇报", "样式"),
+                ),
+                Example(
+                    id="restyle-mislead",
+                    title="纠正误导",
+                    description="断轴、双轴、阶梯切换要用标注说清楚，不要让人误读。",
+                    prompt="这个双轴图看着有问题，换成更清楚的表达，并列出原图的问题。",
+                    image="https://free.picui.cn/free/2743/2026/11/16/6afaf3648890b.png",
+                    kind="阶梯图",
+                    format="PNG / SVG",
+                    tags=("误导", "双轴"),
+                ),
             ),
             placeholder="贴截图，或给出要改的 HTML/spec 路径",
             icon="palette",
@@ -719,6 +859,32 @@ def composition_for(app_id: str | None, mode_id: str | None) -> tuple[str, tuple
     return mode.prompt, mode.skills
 
 
+def example_json(item: Example | str) -> dict[str, Any]:
+    """Normalize one example for the API; legacy bare strings become text cards."""
+    if isinstance(item, str):
+        prompt = item.strip()
+        return {
+            "id": "",
+            "prompt": prompt,
+            "title": prompt[:60],
+            "description": "",
+            "image": "",
+            "kind": "",
+            "format": "",
+            "tags": [],
+        }
+    return {
+        "id": item.id,
+        "prompt": item.prompt,
+        "title": item.title or item.prompt[:60],
+        "description": item.description,
+        "image": item.image,
+        "kind": item.kind,
+        "format": item.format,
+        "tags": list(item.tags),
+    }
+
+
 def app_json(app: App) -> dict[str, Any]:
     return {
         "id": app.id,
@@ -732,7 +898,7 @@ def app_json(app: App) -> dict[str, Any]:
                 "description": mode.description,
                 "skillBinding": "all" if mode.skills is None else list(mode.skills),
                 "prompt": mode.prompt,
-                "examples": list(mode.examples),
+                "examples": [example_json(item) for item in mode.examples],
                 "placeholder": mode.placeholder,
                 "icon": mode.icon,
                 "capsules": [

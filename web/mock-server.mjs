@@ -123,6 +123,18 @@ const MOCK_APPS = [
       ]},
     ],
   },
+  {
+    id: 'chart', name: '数据绘图', description: '数据 → 图表：ECharts 交互图与仪表盘，可导出 PNG/CSV。', accent: '#b45309', builtin: true,
+    modes: [
+      { id: 'single', name: '单图', description: '一句话或一份表 → 一张能交互的图 + 一句结论。', skillBinding: ['chart-spec', 'chart-gallery'], prompt: '当前应用是「数据绘图 · 单图」。先 profile，再用模板生成图。', capsules: [
+        { id: 'trend', name: '看趋势', prompt: '把这份数据画成趋势图，标出拐点和异常点。' },
+        { id: 'compare', name: '做对比', prompt: '按分类对比这几组数值，选最不容易误读的图型。' },
+      ], examples: [
+        { id: 'line-simple', title: '月度趋势', description: '把销售表画成月度折线，标出拐点、异常点和同比变化。', prompt: '把 data/ 里的销售表画成月度趋势图，标出拐点和异常点。', image: 'https://free.picui.cn/free/2743/2026/11/16/6afaf35735fae.png', kind: 'line', format: 'PNG / SVG', tags: ['折线图', '趋势'] },
+        { id: 'confidence-band', title: '带置信带的趋势', description: '给均值加 95% 置信带，说明波动范围而不是只画一条线。', prompt: '用这份分月数据画带 95% 置信带的趋势图，均值线加粗，置信带半透明，标注样本量。', image: 'https://free.picui.cn/free/2743/2026/11/16/6afaf3605719a.png', kind: 'band', format: 'PNG / SVG', tags: ['置信带', '统计'] },
+      ]},
+    ],
+  },
 ]
 const MOCK_WORKSPACES = [
   { id: 'default', name: '默认工作空间', isDefault: true },

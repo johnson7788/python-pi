@@ -27,6 +27,13 @@ def test_chart_app_is_builtin_and_ships_with_its_tools():
     assert [mode["id"] for mode in chart["modes"]] == ["single", "dashboard", "insight", "restyle"]
     assert all(mode["capsules"] for mode in chart["modes"])
     assert {mode["icon"] for mode in chart["modes"]} == {"chart", "palette"}
+    for mode in chart["modes"]:
+        assert mode["examples"], mode["id"]
+        for example in mode["examples"]:
+            assert example["prompt"]
+            assert example["title"]
+            assert example["description"]
+            assert example["image"].startswith("https://")
 
     assert apps.find_app("chart").plugins == ("chart-tools",)
 
@@ -222,6 +229,86 @@ def test_only_admins_can_change_apps(tmp_path):
         assert client.delete("/api/apps/general").status_code == 403
 
 
+def test_builtin_image_examples_upgrade_legacy_strings(tmp_path):
+    import json
+
+    from pi_server.db import Database
+
+    db = Database(str(tmp_path / "pi.db"))
+    catalog = apps.catalog_json()["apps"]
+    db.seed_team_apps(catalog)
+
+    # Simulate a deployment created before examples carried preview images.
+    db._write(
+        "UPDATE team_app_modes SET examples_json = ? WHERE app_id = 'chart' AND id = 'single'",
+        (json.dumps(["旧提示词"]),),
+    )
+    db.seed_team_apps(catalog)
+
+    chart = next(item for item in db.list_team_apps() if item["id"] == "chart")
+    single = next(mode for mode in chart["modes"] if mode["id"] == "single")
+    assert single["examples"][0]["prompt"].startswith("把 data/")
+    assert single["examples"][0]["image"].startswith("https://")
+
+    # An administrator's object examples are not overwritten by later seeding.
+    custom = [{"prompt": "自定义", "title": "自定义", "image": "https://x/y.png"}]
+    db._write(
+        "UPDATE team_app_modes SET examples_json = ? WHERE app_id = 'chart' AND id = 'single'",
+        (json.dumps(custom),),
+    )
+    db.seed_team_apps(catalog)
+    again = next(
+        mode
+        for item in db.list_team_apps()
+        if item["id"] == "chart"
+        for mode in item["modes"]
+        if mode["id"] == "single"
+    )
+    assert again["examples"][0]["prompt"] == "自定义"
+    db.close()
+
+
+def test_app_accepts_example_objects_with_previews(tmp_path):
+    _, _, client = _team_client(tmp_path)
+    with client:
+        client.post("/api/auth/login", json={"username": "admin", "password": "pw123456"})
+        created = client.post(
+            "/api/apps",
+            json={
+                "name": "带图的示例",
+                "accent": "#123456",
+                "modes": [
+                    {
+                        "name": "图表",
+                        "prompt": "p",
+                        "skillBinding": "all",
+                        "examples": [
+                            {
+                                "prompt": "画一张月度趋势图",
+                                "title": "月度趋势",
+                                "description": "按月份画折线",
+                                "image": "https://example.com/trend.png",
+                                "kind": "line",
+                                "format": "PNG",
+                                "tags": ["折线图", "趋势"],
+                            },
+                            {
+                                "prompt": "这条没有图",
+                                "image": "javascript:alert(1)",
+                            },
+                        ],
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        examples = created.json()["modes"][0]["examples"]
+        assert examples[0]["title"] == "月度趋势"
+        assert examples[0]["image"] == "https://example.com/trend.png"
+        assert examples[0]["tags"] == ["折线图", "趋势"]
+        assert examples[1]["image"] == ""
+
+
 def test_app_duplicate_order_export_import(tmp_path):
     _, _, client = _team_client(tmp_path)
     with client:
@@ -250,7 +337,9 @@ def test_app_duplicate_order_export_import(tmp_path):
         assert copied.status_code == 201, copied.text
         assert copied.json()["id"] != app_id
         assert "副本" in copied.json()["name"]
-        assert copied.json()["modes"][0]["examples"] == ["例子一"]
+        examples = copied.json()["modes"][0]["examples"]
+        assert examples[0]["prompt"] == "例子一"
+        assert examples[0]["title"] == "例子一"
 
         ids = [item["id"] for item in client.get("/api/apps").json()["apps"]]
         reversed_ids = list(reversed(ids))

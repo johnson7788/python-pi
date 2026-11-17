@@ -36,7 +36,6 @@ import time
 import tempfile
 import urllib.parse
 import base64
-import shutil
 import secrets
 import uuid
 import zipfile
@@ -626,6 +625,11 @@ class SessionRegistry:
                     app_skills=app_skills,
                     app_id=app_id,
                     mode_id=mode_id,
+                    plugin_paths=(
+                        tuple(self._plugin_paths_lookup(uid, app_id))
+                        if self._plugin_paths_lookup is not None
+                        else ()
+                    ),
                 )
             return dataclasses.replace(
                 self.base_options,
@@ -634,6 +638,11 @@ class SessionRegistry:
                 app_skills=app_skills,
                 app_id=app_id,
                 mode_id=mode_id,
+                plugin_paths=(
+                    tuple(self._plugin_paths_lookup(uid, app_id))
+                    if self._plugin_paths_lookup is not None
+                    else ()
+                ),
             )
         workspace, agent = self.config.ensure_user_layout(uid)
         if self._workspace_path_lookup is not None:
@@ -2319,11 +2328,67 @@ def create_app(
                 binding = list(dict.fromkeys(str(item).strip() for item in binding if str(item).strip()))
 
             examples_raw = raw_mode.get("examples") or []
-            if not isinstance(examples_raw, list) or not all(isinstance(item, str) for item in examples_raw):
-                raise HTTPException(status_code=422, detail={"error": "examples must be a list of strings"})
+            if not isinstance(examples_raw, list):
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": "examples must be a list of strings or objects"},
+                )
             if len(examples_raw) > 6:
                 raise HTTPException(status_code=422, detail={"error": "at most 6 examples per mode"})
-            examples = [item.strip()[:120] for item in examples_raw if item.strip()]
+            examples: list[dict[str, Any]] = []
+            seen_examples: set[str] = set()
+            for example_index, raw_example in enumerate(examples_raw):
+                if isinstance(raw_example, str):
+                    prompt = raw_example.strip()[:1500]
+                    title = prompt[:80]
+                    description = ""
+                    image = ""
+                    kind = ""
+                    fmt = ""
+                    tags: list[str] = []
+                    example_id = ""
+                elif isinstance(raw_example, dict):
+                    prompt = str(raw_example.get("prompt") or "").strip()[:1500]
+                    title = str(raw_example.get("title") or prompt[:80]).strip()[:80]
+                    description = str(raw_example.get("description") or "")[:200]
+                    image = str(raw_example.get("image") or "").strip()
+                    if image and not re.match(r"^(https?://|/)", image):
+                        image = ""
+                    kind = str(raw_example.get("kind") or "")[:40]
+                    fmt = str(raw_example.get("format") or "")[:40]
+                    raw_tags = raw_example.get("tags") or []
+                    tags = (
+                        [str(tag)[:24] for tag in raw_tags if str(tag).strip()][:6]
+                        if isinstance(raw_tags, list)
+                        else []
+                    )
+                    example_id = _safe_id(
+                        raw_example.get("id"), f"example-{example_index + 1}"
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=422,
+                        detail={"error": "each example must be a string or an object"},
+                    )
+                if not prompt:
+                    continue
+                if example_id in seen_examples:
+                    example_id = f"example-{example_index + 1}"
+                while example_id in seen_examples:
+                    example_id = f"{example_id}-x"
+                seen_examples.add(example_id)
+                examples.append(
+                    {
+                        "id": example_id,
+                        "prompt": prompt,
+                        "title": title or prompt[:80],
+                        "description": description,
+                        "image": image,
+                        "kind": kind,
+                        "format": fmt,
+                        "tags": tags,
+                    }
+                )
 
             placeholder = str(raw_mode.get("placeholder") or "")[:80]
             icon = str(raw_mode.get("icon") or "").strip()

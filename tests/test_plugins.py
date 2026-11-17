@@ -82,3 +82,16 @@ def test_registry_adds_enabled_plugin_paths(tmp_path):
     )
     assert registry.options_for("alice", "default", "general", "office").plugin_paths == (entry,)
     assert registry.options_for("alice", "default", "research", "review").plugin_paths == ()
+
+
+def test_single_mode_registry_adds_app_declared_plugin_paths(tmp_path):
+    """A builtin app's declared plugins must load even without a team database."""
+    config = ServerConfig(data_root=str(tmp_path), auth_mode="single")
+    entry = str(EXAMPLE / "main.py")
+    registry = SessionRegistry(
+        BootstrapOptions(cwd=str(tmp_path)),
+        config,
+        plugin_paths_lookup=lambda _uid, app_id: [entry] if app_id == "chart" else [],
+    )
+    assert registry.options_for("local", "default", "chart", "single").plugin_paths == (entry,)
+    assert registry.options_for("local", "default", "general", "office").plugin_paths == ()

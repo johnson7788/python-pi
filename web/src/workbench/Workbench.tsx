@@ -63,13 +63,24 @@ interface AppCapsule {
   prompt: string
 }
 
+interface AppExample {
+  id?: string
+  prompt: string
+  title?: string
+  description?: string
+  image?: string
+  kind?: string
+  format?: string
+  tags?: string[]
+}
+
 interface AppModeRow {
   id: string
   name: string
   description: string
   skillBinding: 'all' | string[]
   prompt?: string
-  examples?: string[]
+  examples?: Array<string | AppExample>
   placeholder?: string
   icon?: string
   capsules: AppCapsule[]
@@ -1561,6 +1572,14 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
   )
 }
 
+function exampleRows(items: Array<string | AppExample> | undefined): AppExample[] {
+  return (items ?? []).map((item, index) =>
+    typeof item === 'string'
+      ? { id: `legacy-${index}`, prompt: item, title: item }
+      : item,
+  )
+}
+
 function HomeView({
   app,
   modeId,
@@ -1607,11 +1626,22 @@ function HomeView({
   const capsules = mode.capsules.length
     ? mode.capsules
     : (fallback?.quick ?? []).map((label) => ({ id: label, name: label, prompt: label }))
-  const examples = mode.examples?.length ? mode.examples : fallback?.examples ?? []
+  const examples = exampleRows(mode.examples?.length ? mode.examples : fallback?.examples ?? [])
+  const visualExamples = examples.filter((item) => item.image)
   const placeholder = mode.placeholder || fallback?.placeholder || '输入消息，或 / 调用技能'
   const cards = examples.slice(0, 4)
   const tiles: IconName[] = ['file', 'slides', 'sheet', 'clock']
   const tones = ['tile--blue', 'tile--orange', 'tile--green', 'tile--purple']
+  const [preview, setPreview] = useState<AppExample | null>(null)
+
+  useEffect(() => {
+    if (!preview) return
+    const close = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPreview(null)
+    }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [preview])
 
   return (
     <div className="wb-home">
@@ -1677,27 +1707,137 @@ function HomeView({
           onSelectModel={onSelectModel}
         />
 
-        {cards.length > 0 ? (
+        {visualExamples.length > 0 ? (
+          <section className="wb-example-section">
+            <div className="wb-example-head">
+              <b>示例结果</b>
+              <span>图片是最终产物预览；点击查看完整提示词</span>
+            </div>
+            <div className="wb-example-grid">
+              {visualExamples.map((example, index) => (
+                <article className="wb-example-card" key={example.id || `${index}-${example.prompt}`}>
+                  <button
+                    type="button"
+                    className="wb-example-preview"
+                    onClick={() => setPreview(example)}
+                    aria-label={`查看示例：${example.title || example.prompt}`}
+                  >
+                    <img
+                      src={example.image}
+                      alt={example.title || example.prompt}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                    />
+                    <span className="wb-example-badge">
+                      <Icon name="spark" size={11} />
+                      结果预览
+                    </span>
+                    {example.format ? <span className="wb-example-format">{example.format}</span> : null}
+                  </button>
+                  <div className="wb-example-body">
+                    <div className="wb-example-title-row">
+                      <h3>{example.title || example.prompt}</h3>
+                    </div>
+                    {example.description ? <p>{example.description}</p> : null}
+                    {example.tags?.length ? (
+                      <div className="wb-example-tags">
+                        {example.tags.map((tag) => (
+                          <span key={tag}>{tag}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="wb-example-use"
+                      onClick={() => onDraft(example.prompt)}
+                    >
+                      使用此示例
+                      <Icon name="chevronRight" size={13} />
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : cards.length > 0 ? (
           <div className="quick-grid">
             {cards.map((example, index) => (
               <button
-                key={example}
+                key={example.id || `${index}-${example.prompt}`}
                 type="button"
                 className="quick-card"
-                onClick={() => onDraft(example)}
+                onClick={() => onDraft(example.prompt)}
               >
                 <span className={`tile ${tones[index % tones.length]}`}>
                   <Icon name={tiles[index % tiles.length]} size={16} />
                 </span>
                 <span className="txt">
-                  <b>{example}</b>
-                  <small>{mode.name} · 示例提示</small>
+                  <b>{example.title || example.prompt}</b>
+                  <small>{example.description || `${mode.name} · 示例提示`}</small>
                 </span>
                 <span className="go">
                   <Icon name="chevronRight" size={14} />
                 </span>
               </button>
             ))}
+          </div>
+        ) : null}
+
+        {preview ? (
+          <div
+            className="wb-example-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="示例结果预览"
+            onClick={() => setPreview(null)}
+          >
+            <div className="wb-example-modal-card" onClick={(event) => event.stopPropagation()}>
+              <button
+                type="button"
+                className="wb-example-modal-close"
+                onClick={() => setPreview(null)}
+                aria-label="关闭"
+              >
+                ×
+              </button>
+              <div className="wb-example-modal-preview">
+                <img
+                  src={preview.image}
+                  alt={preview.title || preview.prompt}
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+              <div className="wb-example-modal-body">
+                <span className="wb-example-badge is-static">
+                  <Icon name="spark" size={11} />
+                  结果示例
+                </span>
+                <h3>{preview.title || preview.prompt}</h3>
+                {preview.description ? <p>{preview.description}</p> : null}
+                {preview.tags?.length ? (
+                  <div className="wb-example-tags">
+                    {preview.tags.map((tag) => (
+                      <span key={tag}>{tag}</span>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="wb-example-prompt">
+                  <span>完整提示词</span>
+                  <p>{preview.prompt}</p>
+                </div>
+                <button
+                  type="button"
+                  className="wb-example-primary"
+                  onClick={() => {
+                    onDraft(preview.prompt)
+                    setPreview(null)
+                  }}
+                >
+                  使用此示例
+                  <Icon name="chevronRight" size={14} />
+                </button>
+              </div>
+            </div>
           </div>
         ) : null}
 
@@ -4850,21 +4990,35 @@ function AppEditor({
                   ) : null}
 
                   <label className="wb-field">
-                    <span>示例问题（每行一条，最多 6 条）</span>
+                    <span>示例提示词（每行一条，最多 6 条）</span>
                     <textarea
                       rows={3}
-                      value={(mode.examples || []).join('\n')}
-                      onChange={(event) =>
-                        updateMode(modeIndex, {
-                          examples: event.target.value
-                            .split('\n')
-                            .map((item) => item.trim())
-                            .filter(Boolean)
-                            .slice(0, 6),
-                        })
-                      }
-                      placeholder="首页推荐给用户的示例问题"
+                      value={(mode.examples || [])
+                        .map((item) => (typeof item === 'string' ? item : item.prompt))
+                        .join('\n')}
+                      onChange={(event) => {
+                        const previous = mode.examples || []
+                        const examples = event.target.value
+                          .split('\n')
+                          .map((item) => item.trim())
+                          .filter(Boolean)
+                          .slice(0, 6)
+                          .map((prompt, index) => {
+                            const old = previous[index]
+                            if (old && typeof old === 'object') return { ...old, prompt }
+                            return {
+                              id: `example-${index + 1}`,
+                              prompt,
+                              title: prompt.slice(0, 60),
+                            }
+                          })
+                        updateMode(modeIndex, { examples })
+                      }}
+                      placeholder="首页推荐给用户的示例提示词"
                     />
+                    <small className="wb-field-hint">
+                      有图片的示例会以结果卡片展示；图片、标题、描述可通过应用导入 JSON 维护。
+                    </small>
                   </label>
 
                   <div className="wb-capsules-editor">

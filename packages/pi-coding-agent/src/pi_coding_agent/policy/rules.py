@@ -39,7 +39,7 @@ WRITE_TOOLS = frozenset({"write", "edit"})
 
 #: What may run without asking when a deployment does not widen the set.  Extensions a
 #: host loads deliberately add their own tool names to ``allow_tools``.
-DEFAULT_ALLOW_TOOLS = frozenset({"read", "write", "edit", "ls", "grep", "find"})
+DEFAULT_ALLOW_TOOLS = frozenset({"read", "write", "edit", "ls", "grep", "find", "present"})
 
 #: Argument names that carry a path for those tools.  ``grep``/``find`` also take
 #: ``pattern``, which is a regex or glob and never a path, so it is not inspected.

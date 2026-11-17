@@ -420,6 +420,55 @@ class DuplicateWorkspace(Exception):
     """Raised when two workspaces would share a name for one user."""
 
 
+def _example_rows(value: object) -> list[dict[str, object]]:
+    """Normalize legacy string examples and current object examples."""
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, object]] = []
+    for item in value:
+        if isinstance(item, str):
+            prompt = item.strip()
+            if not prompt:
+                continue
+            rows.append(
+                {
+                    "id": "",
+                    "prompt": prompt,
+                    "title": prompt[:60],
+                    "description": "",
+                    "image": "",
+                    "kind": "",
+                    "format": "",
+                    "tags": [],
+                }
+            )
+            continue
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("prompt") or "").strip()
+        if not prompt:
+            continue
+        raw_tags = item.get("tags")
+        tags = (
+            [str(tag)[:24] for tag in raw_tags if str(tag).strip()][:6]
+            if isinstance(raw_tags, list)
+            else []
+        )
+        rows.append(
+            {
+                "id": str(item.get("id") or ""),
+                "prompt": prompt,
+                "title": str(item.get("title") or prompt[:60]),
+                "description": str(item.get("description") or ""),
+                "image": str(item.get("image") or ""),
+                "kind": str(item.get("kind") or ""),
+                "format": str(item.get("format") or ""),
+                "tags": tags,
+            }
+        )
+    return rows
+
+
 class Database:
     """Every read and write the team server performs on its SQLite file."""
 
@@ -785,6 +834,54 @@ class Database:
         for app in apps:
             if str(app.get("id")) not in existing:
                 self.replace_team_app(app, builtin=True)
+            else:
+                self._refresh_builtin_examples(app)
+
+    def _refresh_builtin_examples(self, app: dict[str, Any]) -> None:
+        """Move a built-in app's legacy string examples to object examples.
+
+        The catalog gained optional preview images after the first deployments
+        stored ``examples_json`` as ``["prompt", ...]``.  Seeding deliberately
+        never overwrites an administrator's app, so this one-time upgrade is
+        narrow: only built-in apps, only when the stored examples are all
+        strings, and only when the catalog now has an image example.  Prompts,
+        capsules and every other admin edit are left untouched.
+        """
+        app_id = str(app.get("id") or "")
+        row = self._one("SELECT builtin FROM team_apps WHERE id = ?", (app_id,))
+        if row is None or not row["builtin"]:
+            return
+        for mode in app.get("modes") or []:
+            code_examples = mode.get("examples")
+            if not isinstance(code_examples, list):
+                continue
+            if not any(
+                isinstance(example, dict) and example.get("image")
+                for example in code_examples
+            ):
+                continue
+            stored = self._one(
+                "SELECT examples_json FROM team_app_modes WHERE app_id = ? AND id = ?",
+                (app_id, str(mode.get("id") or "")),
+            )
+            if stored is None:
+                continue
+            try:
+                current = json.loads(stored["examples_json"] or "[]")
+            except (TypeError, json.JSONDecodeError):
+                current = []
+            if isinstance(current, list) and current and not all(
+                isinstance(item, str) for item in current
+            ):
+                continue
+            self._write(
+                "UPDATE team_app_modes SET examples_json = ? WHERE app_id = ? AND id = ?",
+                (
+                    json.dumps(_example_rows(code_examples), ensure_ascii=False),
+                    app_id,
+                    str(mode.get("id") or ""),
+                ),
+            )
 
     def list_team_apps(self) -> list[dict[str, Any]]:
         app_rows = self._query("SELECT * FROM team_apps ORDER BY sort ASC, created_at ASC")
@@ -810,7 +907,7 @@ class Database:
                 "description": row["description"],
                 "prompt": row["prompt"],
                 "skillBinding": "all" if skills is None else skills,
-                "examples": [str(item) for item in examples] if isinstance(examples, list) else [],
+                "examples": _example_rows(examples),
                 "placeholder": row["placeholder"] or "",
                 "icon": row["icon"] or "",
                 "capsules": [],
@@ -887,7 +984,7 @@ class Database:
                 )
                 examples = mode.get("examples")
                 examples_json = (
-                    json.dumps([str(item) for item in examples], ensure_ascii=False)
+                    json.dumps(_example_rows(examples), ensure_ascii=False)
                     if isinstance(examples, list)
                     else None
                 )
