@@ -139,6 +139,22 @@ provider，避免和百炼的地址混用：
 MODEL=deepseek-official/deepseek-flash ./start.sh
 ```
 
+#### 联网搜索与来源（可选）
+
+DeepSeek 官方的 `deepseek-flash` 支持**服务端**联网（搜索与抓取都在服务端完成，本地不执行工具）。
+在模型条目里加一行 `compat` 即可开启：
+
+```jsonc
+"compat": { "serverTools": ["deepseek_web_search"] }
+```
+
+开启后，回答正文里会带引用角标（hover 显示来源标题与 URL），消息下方会出现可折叠的
+「联网来源」面板；数据来自响应的 `annotations` 与 `server_tool_calls`，只用于展示，不会回传给模型。
+
+两个实测约束：`deepseek_web_search` 与客户端工具（bash/read/...）**只能在思考模式下共存**，
+所以别在同一个模型上把思考关掉；续写（被截断的回答继续生成）对用过联网工具的回复无效，
+服务端会返回 400。
+
 #### 思考级别实测
 
 接线是通的——改级别会真的改变发往模型的 `reasoning_effort`（`off` 表示整个字段不发送）。

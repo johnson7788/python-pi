@@ -1,0 +1,96 @@
+{
+  "id": "scatter3D",
+  "name": "三维散点图",
+  "family": "special",
+  "use": "三个数值维的聚类/离群点观察，样本量中等",
+  "avoid": "只比较两个变量用二维散点；点太多时先抽样或聚合",
+  "bind": {
+    "columns": [
+      "x",
+      "y",
+      "z"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "x",
+      "y",
+      "z"
+    ],
+    "rows": [
+      [
+        1,
+        2,
+        3
+      ],
+      [
+        2,
+        3,
+        5
+      ],
+      [
+        3,
+        1,
+        4
+      ],
+      [
+        4,
+        4,
+        8
+      ],
+      [
+        5,
+        2,
+        6
+      ],
+      [
+        6,
+        5,
+        9
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "tooltip": {},
+    "xAxis3D": {
+      "type": "value",
+      "name": "X"
+    },
+    "yAxis3D": {
+      "type": "value",
+      "name": "Y"
+    },
+    "zAxis3D": {
+      "type": "value",
+      "name": "Z"
+    },
+    "grid3D": {
+      "boxWidth": 100,
+      "boxDepth": 80,
+      "boxHeight": 60
+    },
+    "series": [
+      {
+        "type": "scatter3D",
+        "encode": {
+          "x": "x",
+          "y": "y",
+          "z": "z"
+        },
+        "symbolSize": 8
+      }
+    ]
+  },
+  "title": "三维散点图",
+  "note": "三维距离不等于统计距离；相关不等于因果",
+  "notes": {
+    "unit": "",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "点太多会重叠，先聚合或抽样",
+    "三维视角会改变视觉密度，别用面积估数量"
+  ],
+  "schema": "pi.chart-template/1"
+}

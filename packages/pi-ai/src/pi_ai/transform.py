@@ -235,6 +235,8 @@ def transform_messages(messages: list[Message], model: Model) -> list[Message]:
                     error_message=message.error_message,
                     raw_stop_reason=message.raw_stop_reason,
                     end_turn=message.end_turn,
+                    annotations=message.annotations,
+                    server_tool_calls=message.server_tool_calls,
                 )
             )
         else:

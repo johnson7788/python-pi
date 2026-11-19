@@ -1,0 +1,67 @@
+{
+  "id": "graphGL",
+  "name": "WebGL 关系图",
+  "family": "relation",
+  "use": "大规模节点关系网络（几百到几千节点）的力导向布局",
+  "avoid": "小网络用普通 graph；需要精确层级用树图/桑基图",
+  "dataNote": "结构性数据：series.data 是节点，series.links 是边",
+  "option": {
+    "tooltip": {},
+    "series": [
+      {
+        "type": "graphGL",
+        "layout": "forceAtlas2",
+        "data": [
+          {
+            "name": "A",
+            "symbolSize": 22
+          },
+          {
+            "name": "B",
+            "symbolSize": 18
+          },
+          {
+            "name": "C",
+            "symbolSize": 16
+          },
+          {
+            "name": "D",
+            "symbolSize": 14
+          }
+        ],
+        "links": [
+          {
+            "source": "A",
+            "target": "B"
+          },
+          {
+            "source": "B",
+            "target": "C"
+          },
+          {
+            "source": "A",
+            "target": "D"
+          }
+        ],
+        "lineStyle": {
+          "width": 1,
+          "opacity": 0.6
+        },
+        "itemStyle": {
+          "opacity": 0.9
+        }
+      }
+    ]
+  },
+  "title": "WebGL 关系图",
+  "note": "力导向布局每次会略有不同；边的粗细不代表权重",
+  "notes": {
+    "unit": "",
+    "caveat": ""
+  },
+  "pitfalls": [
+    "布局有随机性，截图之间位置会变",
+    "节点太多时先按度过滤"
+  ],
+  "schema": "pi.chart-template/1"
+}

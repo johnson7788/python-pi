@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import type {
   AgentState,
   AssistantMessage,
+  BranchPoint,
   AssistantMessageEvent,
   ClientCommandInput,
   CommandInfo,
@@ -93,6 +94,7 @@ interface AgentStore {
   thinkingLevels: string[]
   commands: CommandInfo[]
   forkMessages: ForkMessageInfo[]
+  branchPoints: BranchPoint[]
   stats: SessionStats | null
   dialogs: ExtensionDialog[]
   toasts: Toast[]
@@ -119,6 +121,7 @@ const INITIAL_STORE: AgentStore = {
   thinkingLevels: [],
   commands: [],
   forkMessages: [],
+  branchPoints: [],
   stats: null,
   dialogs: [],
   toasts: [],
@@ -676,6 +679,10 @@ function reduceResponse(
       const messages = Array.isArray(data.messages) ? (data.messages as ForkMessageInfo[]) : []
       return { ...state, forkMessages: messages }
     }
+    case 'get_branch_points': {
+      const points = Array.isArray(data.points) ? (data.points as BranchPoint[]) : []
+      return { ...state, branchPoints: points }
+    }
     case 'set_model':
       // The reply is the model snapshot; using it avoids a state round-trip.
       return { ...state, state: { ...(state.state ?? {}), model: response.data as ModelInfo } }
@@ -866,6 +873,7 @@ export interface AgentApi {
   thinkingLevels: string[]
   commands: CommandInfo[]
   forkMessages: ForkMessageInfo[]
+  branchPoints: BranchPoint[]
   stats: SessionStats | null
   dialogs: ExtensionDialog[]
   toasts: Toast[]
@@ -882,7 +890,7 @@ export interface AgentApi {
   newSession: () => void
   switchSession: (sessionPath: string) => void
   cloneSession: () => void
-  fork: (entryId: string) => void
+  fork: (entryId: string, position?: 'before' | 'at') => void
   setModel: (model: ModelInfo) => void
   cycleModel: () => void
   setThinkingLevel: (level: string) => void
@@ -977,6 +985,7 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
     send({ type: 'get_available_models' })
     send({ type: 'get_available_thinking_levels' })
     send({ type: 'get_commands' })
+    send({ type: 'get_branch_points' })
   }, [send])
 
   const connect = useCallback(() => {
@@ -1024,6 +1033,14 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
         document.title = record.title
       }
       dispatchRef.current({ type: 'server_event', event: parsed as ServerEvent })
+
+      // Branch points are the session entry ids behind the messages we render,
+      // so they move whenever the transcript does. Refreshing here keeps the
+      // "branch from this answer" action available without polling.
+      if (record.type === 'message_end') {
+        const role = asRecord(asRecord(record).message).role
+        if (role === 'assistant' || role === 'user') send({ type: 'get_branch_points' })
+      }
     }
 
     socket.onclose = (event: CloseEvent) => {
@@ -1111,6 +1128,7 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
       thinkingLevels: store.thinkingLevels,
       commands: store.commands,
       forkMessages: store.forkMessages,
+      branchPoints: store.branchPoints,
       stats: store.stats,
       dialogs: store.dialogs,
       toasts: store.toasts,
@@ -1142,10 +1160,13 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
         send({ type: 'clone' })
         window.setTimeout(syncState, 400)
       },
-      fork: (entryId: string) => {
+      fork: (entryId: string, position: 'before' | 'at' = 'before') => {
         dispatchRef.current({ type: 'reset_session' })
-        send({ type: 'fork', entryId })
+        send({ type: 'fork', entryId, position })
+        // Forking swaps the live session for the branch, so the state and the
+        // session list both move.
         window.setTimeout(syncState, 400)
+        window.setTimeout(() => void loadSessions(), 400)
       },
       setModel: (model: ModelInfo) => {
         dispatchRef.current({ type: 'optimistic_model', model })

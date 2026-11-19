@@ -63,7 +63,7 @@
           "value": "sales"
         },
         "label": {
-          "formatter": "{b}\n{c}"
+          "formatter": "{b}\n{@sales}"
         }
       }
     ]

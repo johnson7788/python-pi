@@ -1,0 +1,113 @@
+{
+  "id": "world-map",
+  "name": "世界地图",
+  "family": "special",
+  "use": "世界各国数值分布/热力填色，例如各国销量、病例数、覆盖率",
+  "avoid": "只需要几个国家时用条形图；需要正式国界审图时不要用这份测试地图",
+  "bind": {
+    "columns": [
+      "country",
+      "value"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "country",
+      "value"
+    ],
+    "rows": [
+      [
+        "China",
+        85
+      ],
+      [
+        "United States",
+        70
+      ],
+      [
+        "Brazil",
+        45
+      ],
+      [
+        "India",
+        60
+      ],
+      [
+        "Germany",
+        50
+      ],
+      [
+        "Japan",
+        55
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "tooltip": {
+      "trigger": "item"
+    },
+    "visualMap": {
+      "min": 0,
+      "max": 100,
+      "left": 16,
+      "bottom": 16,
+      "text": [
+        "高",
+        "低"
+      ],
+      "calculable": true,
+      "inRange": {
+        "color": [
+          "#e0f3f8",
+          "#abd9e9",
+          "#74add1",
+          "#4575b4",
+          "#313695"
+        ]
+      }
+    },
+    "series": [
+      {
+        "type": "map",
+        "map": "world",
+        "roam": true,
+        "encode": {
+          "name": "country",
+          "value": "value"
+        },
+        "label": {
+          "show": false
+        },
+        "emphasis": {
+          "label": {
+            "show": true
+          },
+          "itemStyle": {
+            "areaColor": "#f59e0b"
+          }
+        },
+        "select": {
+          "label": {
+            "show": true
+          },
+          "itemStyle": {
+            "areaColor": "#fbbf24"
+          }
+        }
+      }
+    ]
+  },
+  "title": "世界地图",
+  "note": "颜色表示国家数值；国家名使用地图数据的英文 name（如 China / United States）",
+  "notes": {
+    "unit": "",
+    "source": "ECharts 4.9.0 map data（Apache-2.0）；内部测试用，非正式审图",
+    "caveat": "国家名不匹配会静默缺失；正式发布前要换标准地图"
+  },
+  "pitfalls": [
+    "国家名必须与 GeoJSON 的 name 一致（英文）",
+    "世界地图的国界表达需要单独做合规审查"
+  ],
+  "schema": "pi.chart-template/1"
+}

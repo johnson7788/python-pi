@@ -1,0 +1,72 @@
+{
+  "id": "surface",
+  "name": "三维曲面图",
+  "family": "special",
+  "use": "规则网格上的二维分布（x×y 对应一个 z），看峰谷和整体形状",
+  "avoid": "数据不是规则网格、或只需要看极值（用热力图/等高线）",
+  "dataNote": "结构性数据：x、y 是类目轴，series.data 是行×列的 z 矩阵",
+  "option": {
+    "tooltip": {},
+    "xAxis3D": {
+      "type": "category",
+      "data": [
+        "A",
+        "B",
+        "C"
+      ],
+      "name": "X"
+    },
+    "yAxis3D": {
+      "type": "category",
+      "data": [
+        "X",
+        "Y",
+        "Z"
+      ],
+      "name": "Y"
+    },
+    "zAxis3D": {
+      "type": "value",
+      "name": "Z"
+    },
+    "grid3D": {
+      "boxWidth": 100,
+      "boxDepth": 80,
+      "boxHeight": 60
+    },
+    "series": [
+      {
+        "type": "surface",
+        "data": [
+          [
+            5,
+            1,
+            2
+          ],
+          [
+            3,
+            8,
+            4
+          ],
+          [
+            6,
+            2,
+            9
+          ]
+        ],
+        "shading": "lambert"
+      }
+    ]
+  },
+  "title": "三维曲面图",
+  "note": "曲面来自规则网格；网格外的值不能外推",
+  "notes": {
+    "unit": "",
+    "caveat": "x/y 必须是完整网格"
+  },
+  "pitfalls": [
+    "x/y 必须构成完整网格，缺格会断裂",
+    "曲面会遮住背面，读值用 tooltip"
+  ],
+  "schema": "pi.chart-template/1"
+}

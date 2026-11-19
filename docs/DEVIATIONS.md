@@ -23,6 +23,15 @@
 | `transform_messages` 的 `normalizeToolCallId` 钩子 | 有 | 无（保持固定两参数签名），改由各适配器自行净化 id（Anthropic 64 字符集、OpenAI 管道/40 字符 + JS 兼容短哈希） |
 | faux provider 计费 | 上游 faux 是 stub，成本恒为 0 | 本移植版**会**按模型费率计算成本，便于离线集成测试 |
 | faux 的异步行为 | — | 同步实现，只观察"已经中止"的信号 |
+| 历史思考回传 | 同模型的历史轮次会带上 `thinking`/`reasoning_content` | **不回传**：历史轮次只在带工具调用时保留（工具结果必须与提出调用的推理配对），其余丢弃；只有「续写时的末尾 assistant」保留本轮思考与签名。可观察：请求体变小，模型看不到自己过去的推理 |
+| 续写（prefill） | 上游 `continue()` 拒绝 assistant 尾巴 | 支持：末尾 assistant 视为 prefill 发出（Chat Completions 加 `prefix: true` 并走 `/beta/chat/completions`）；空 prefill（无正文且无思考）直接丢弃 |
+| 服务端工具与来源展示 | 无 | DeepSeek 扩展：`compat.serverTools` 声明 `deepseek_web_search` / `deepseek_read_url` 后，响应里的 `annotations` / `server_tool_calls` 存进 `AssistantMessage` 并随消息下发到 UI。这些调用在服务端执行过，**不进入本地工具循环** |
+
+### 消息模型
+
+- `AssistantMessage` 新增两个可选字段 `annotations`（引用，带字符偏移）与 `server_tool_calls`（服务端搜索/抓取记录）。
+  它们只用于展示，回传时被忽略；会话文件里写为 `annotations` / `serverToolCalls`。
+  上游 pi 读到未知键会忽略，因此互通不受影响；反向（用中文档打开上游写出的会话）字段缺失即为"无引用"。
 
 ### 模型目录
 
@@ -147,13 +156,13 @@ Python 原生扩展协议已实现，**详细设计、事件表、合并语义�
 协议本身按上游实现（严格 LF JSONL、`id` 相关性、preflight 时机的 `prompt` 响应、
 `message_update` 只发增量但保留累计 `usage`、坏行返回 `parse` 错误而不终止会话）。
 
-**已支持 30 个命令**：`prompt` `steer` `follow_up` `abort` `clear_queue`
+**已支持 31 个命令**：`prompt` `steer` `follow_up` `abort` `clear_queue`
 `new_session` `switch_session` `fork` `clone` `get_state`
 `get_messages` `set_model` `cycle_model` `get_available_models` `set_thinking_level`
 `cycle_thinking_level` `get_available_thinking_levels` `set_steering_mode`
 `set_follow_up_mode` `compact` `set_auto_compaction` `set_auto_retry` `abort_retry`
 `get_session_stats` `get_entries` `get_tree` `get_last_assistant_text` `get_fork_messages`
-`set_session_name` `get_commands`。
+`get_branch_points` `set_session_name` `get_commands`。
 
 **未支持 3 个**，均返回 `success:false` 并说明原因（而不是静默挂起）：
 
@@ -166,6 +175,16 @@ Python 原生扩展协议已实现，**详细设计、事件表、合并语义�
 `agent_session_runtime.AgentSessionRuntime` 提供，语义对齐上游：替换会**重建** `AgentSession`
 （而不是原地修改），因此 `runtime.session` 在替换后是**另一个对象**，任何持有旧会话的绑定
 （事件订阅、UI）都必须重新挂载——RPC 模式内部通过 `set_rebind_session` 自动完成这件事。
+
+**两处协议扩展**（上游没有，纯增量，旧客户端不受影响）：
+
+| 扩展 | 说明 |
+|---|---|
+| `fork` 的 `position` | 缺省 `before`（上游语义：在用户提问之前分叉，返回该提问文本供预填）；`at` 保留该条目本身，用于「从这条回答分叉」。非法值返回 `success:false` |
+| `get_branch_points` | 返回当前路径上**每一条消息**的 `{entryId, role, timestamp, text}`。`get_fork_messages` 只给用户消息（上游的 `/fork` 选择器），而界面要支持「从某条回答分支」，需要 assistant 条目和「消息 → 条目 id」的对应关系 |
+
+两者都是为 web 工作台的「创建分支 / 在新对话中分支」服务的：分支即
+`SessionManager.create_branched_session`，新会话文件用 `parentSession` 指回原文件，原会话不受影响。
 
 其他差异：
 

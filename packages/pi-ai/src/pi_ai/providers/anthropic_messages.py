@@ -277,8 +277,32 @@ def _convert_block_content(content: list[TextContent | ImageContent]) -> str | l
     return blocks
 
 
+def _is_prefill_candidate(message: AssistantMessage) -> bool:
+    """Whether a trailing assistant message is a continuation prefix.
+
+    A pending tool call is not a prefix (the next turn must answer it), and an
+    empty prefix is rejected by the server, so a whitespace-only tail is dropped
+    instead of appended.
+    """
+    if any(isinstance(block, ToolCall) for block in message.content):
+        return False
+    for block in message.content:
+        if isinstance(block, TextContent) and block.text.strip():
+            return True
+        if isinstance(block, ThinkingContent) and block.thinking.strip():
+            return True
+    return False
+
+
 def _convert_messages(messages: list[Message]) -> list[dict[str, Any]]:
     params: list[dict[str, Any]] = []
+    # A transcript that ends with an assistant message is a continuation prefix:
+    # the server resumes from exactly that message.  Everything before it is
+    # history.
+    prefill_index: int | None = None
+    if messages and isinstance(messages[-1], AssistantMessage):
+        if _is_prefill_candidate(messages[-1]):
+            prefill_index = len(messages) - 1
     index = 0
     while index < len(messages):
         message = messages[index]
@@ -301,6 +325,13 @@ def _convert_messages(messages: list[Message]) -> list[dict[str, Any]]:
             continue
 
         if isinstance(message, AssistantMessage):
+            # History thinking is not replayed: the answer text is what later
+            # turns need, and unsigned history reasoning is rejected anyway.
+            # Two turns still carry it — the trailing prefill, because the
+            # server resumes from that message, and a tool-loop turn, because a
+            # tool result must be paired with the reasoning that asked for it.
+            has_tool_calls = any(isinstance(block, ToolCall) for block in message.content)
+            keep_thinking = index == prefill_index or has_tool_calls
             blocks = []
             for block in message.content:
                 if isinstance(block, TextContent):
@@ -308,6 +339,8 @@ def _convert_messages(messages: list[Message]) -> list[dict[str, Any]]:
                         continue
                     blocks.append({"type": "text", "text": block.text})
                 elif isinstance(block, ThinkingContent):
+                    if not keep_thinking:
+                        continue
                     signature = (block.thinking_signature or "").strip()
                     if block.redacted:
                         # Opaque payload must go back exactly as it arrived.
@@ -418,6 +451,8 @@ def _normalize_ids(messages: list[Message]) -> list[Message]:
                     error_message=message.error_message,
                     raw_stop_reason=message.raw_stop_reason,
                     end_turn=message.end_turn,
+                    annotations=message.annotations,
+                    server_tool_calls=message.server_tool_calls,
                 )
             normalized.append(message)
         elif isinstance(message, ToolResultMessage):

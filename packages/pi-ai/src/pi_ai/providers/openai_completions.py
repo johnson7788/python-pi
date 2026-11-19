@@ -192,6 +192,13 @@ def detect_compat(model: Model) -> dict[str, Any]:
         "requires_assistant_after_tool_result": False,
         "requires_tool_result_name": False,
         "thinking_as_text": False,
+        # DeepSeek does not consume past reasoning: replaying it is wasted tokens
+        # and `preserve_thinking` is ignored server-side.  Only the trailing
+        # prefill and tool-loop turns need it (see `_convert_assistant_message`).
+        "drop_history_reasoning": is_deepseek,
+        # Continuing a truncated reply requires `prefix: true` on the trailing
+        # assistant message, which DeepSeek only accepts on its beta endpoint.
+        "prefill_beta_path": "/beta/chat/completions" if is_deepseek else None,
     }
 
 
@@ -272,6 +279,25 @@ def _completions_url(base_url: str) -> str:
     return f"{base}/chat/completions"
 
 
+def _request_url(model: Model, params: dict[str, Any], compat: dict[str, Any]) -> str:
+    """Endpoint for one request: prefill turns move to the provider's beta path.
+
+    DeepSeek only accepts ``prefix: true`` (the continuation flag) on
+    ``/beta/chat/completions``; every other request stays on the stable path so
+    the beta surface is used only where it is required.
+    """
+    url = _completions_url(model.base_url)
+    beta_path = _compat_get(compat, "prefill_beta_path", None)
+    if not isinstance(beta_path, str) or not beta_path:
+        return url
+    messages = params.get("messages") or []
+    if not any(isinstance(message, dict) and message.get("prefix") for message in messages):
+        return url
+    if not url.endswith("/chat/completions"):
+        return url
+    return url[: -len("/chat/completions")] + beta_path
+
+
 def _assert_auth(model: Model, options: StreamOptions) -> None:
     headers = {key.lower() for key in (options.headers or {})}
     if options.api_key or "authorization" in headers:
@@ -322,6 +348,58 @@ def _parse_reasoning_details(signature: str | None) -> list[Any] | None:
     return details if isinstance(details, list) else None
 
 
+def _merge_annotations(
+    existing: list[dict[str, Any]] | None, incoming: list[Any]
+) -> list[dict[str, Any]]:
+    """Union citations by (url, range).
+
+    The same citation can be repeated across chunks when a provider re-sends the
+    cumulative list, so identity is the cited span rather than the array index.
+    """
+    merged = list(existing or [])
+    seen = {
+        (
+            (item.get("url_citation") or {}).get("url"),
+            (item.get("url_citation") or {}).get("start_index"),
+            (item.get("url_citation") or {}).get("end_index"),
+        )
+        for item in merged
+    }
+    for item in incoming:
+        if not isinstance(item, dict):
+            continue
+        citation = item.get("url_citation")
+        if not isinstance(citation, dict):
+            continue
+        key = (citation.get("url"), citation.get("start_index"), citation.get("end_index"))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
+def _merge_server_tool_calls(
+    existing: list[dict[str, Any]] | None, incoming: list[Any]
+) -> list[dict[str, Any]]:
+    """Merge server tool rounds by their ``index``; a re-sent round replaces it."""
+    merged = list(existing or [])
+    for item in incoming:
+        if not isinstance(item, dict):
+            continue
+        index = item.get("index")
+        replaced = False
+        if isinstance(index, int):
+            for position, current in enumerate(merged):
+                if current.get("index") == index:
+                    merged[position] = item
+                    replaced = True
+                    break
+        if not replaced:
+            merged.append(item)
+    return merged
+
+
 def _convert_user_message(message: UserMessage) -> dict[str, Any] | None:
     if isinstance(message.content, str):
         return {"role": "user", "content": message.content}
@@ -337,7 +415,7 @@ def _convert_user_message(message: UserMessage) -> dict[str, Any] | None:
 
 
 def _convert_assistant_message(
-    message: AssistantMessage, model: Model, compat: dict[str, Any]
+    message: AssistantMessage, model: Model, compat: dict[str, Any], *, is_prefill: bool = False
 ) -> dict[str, Any] | None:
     requires_after_tool_result = bool(_compat_get(compat, "requires_assistant_after_tool_result", False))
     assistant: dict[str, Any] = {
@@ -352,8 +430,22 @@ def _convert_assistant_message(
         if isinstance(block, TextContent) and block.text.strip()
     ]
     assistant_text = "".join(text_parts)
-    thinking_blocks = [b for b in message.content if isinstance(b, ThinkingContent)]
     tool_calls = [b for b in message.content if isinstance(b, ToolCall)]
+    # History reasoning is not replayed.  DeepSeek ignores it server-side
+    # (`preserve_thinking` is a no-op), so sending it back only burns input
+    # tokens.  Two turns still need it: the trailing prefill, because the server
+    # resumes from that exact message, and a tool-loop turn, because the
+    # reasoning is what produced the calls being returned.  Providers that do
+    # use history reasoning (encrypted OpenAI/OpenRouter payloads) opt out via
+    # `drop_history_reasoning: false`.
+    keep_thinking = (
+        is_prefill
+        or bool(tool_calls)
+        or not _compat_get(compat, "drop_history_reasoning", False)
+    )
+    thinking_blocks = (
+        [b for b in message.content if isinstance(b, ThinkingContent)] if keep_thinking else []
+    )
     non_empty_thinking = [b for b in thinking_blocks if b.thinking.strip()]
 
     preserved_details: list[Any] | None = None
@@ -406,7 +498,34 @@ def _convert_assistant_message(
     if not has_content and not assistant.get("tool_calls"):
         # Providers require "content or tool_calls, but not neither".
         return None
+    if is_prefill and _compat_get(compat, "prefill_beta_path", None):
+        # Continuation of a truncated reply: the server generates only the
+        # missing tail.  DeepSeek spells this `prefix: true` and only accepts it
+        # on its beta endpoint, so the flag is gated on that switch.
+        assistant["prefix"] = True
     return assistant
+
+
+def _is_prefill_candidate(message: AssistantMessage) -> bool:
+    """Whether a trailing assistant message is a continuation prefix.
+
+    A pending tool call is not a prefix (the next turn must answer it), and an
+    empty prefix is rejected by the server — which is why a whitespace-only or
+    thinking-less tail is dropped instead of being appended.
+    """
+    if any(isinstance(block, ToolCall) for block in message.content):
+        return False
+    if message.server_tool_calls:
+        # A reply that used server-side search cannot be continued — the
+        # provider answers 400 — so the tail is dropped and the question is
+        # answered again instead of failing the turn.
+        return False
+    for block in message.content:
+        if isinstance(block, TextContent) and block.text.strip():
+            return True
+        if isinstance(block, ThinkingContent) and block.thinking.strip():
+            return True
+    return False
 
 
 def _convert_tool_result(
@@ -472,6 +591,8 @@ def _normalize_ids(messages: list[Message], model: Model) -> list[Message]:
                     error_message=message.error_message,
                     raw_stop_reason=message.raw_stop_reason,
                     end_turn=message.end_turn,
+                    annotations=message.annotations,
+                    server_tool_calls=message.server_tool_calls,
                 )
             normalized.append(message)
         elif isinstance(message, ToolResultMessage):
@@ -508,6 +629,14 @@ def convert_messages(model: Model, context: Context, compat: dict[str, Any]) -> 
     messages = _normalize_ids(transform_messages(context.messages, model), model)
     params: list[dict[str, Any]] = []
 
+    # A transcript may end with an assistant message when the previous reply was
+    # truncated and is being continued.  Only that case becomes a wire prefill;
+    # an empty tail is dropped so the server never sees an empty prefix.
+    prefill_index: int | None = None
+    if messages and isinstance(messages[-1], AssistantMessage):
+        if _is_prefill_candidate(messages[-1]):
+            prefill_index = len(messages) - 1
+
     if context.system_prompt:
         # Reasoning models on the first-party API expect `developer`; everyone
         # else only understands `system`.
@@ -531,7 +660,9 @@ def convert_messages(model: Model, context: Context, compat: dict[str, Any]) -> 
             continue
 
         if isinstance(message, AssistantMessage):
-            converted = _convert_assistant_message(message, model, compat)
+            converted = _convert_assistant_message(
+                message, model, compat, is_prefill=index == prefill_index
+            )
             if converted is not None:
                 params.append(converted)
                 last_role = "assistant"
@@ -585,6 +716,28 @@ def _convert_tools(tools: list[Any]) -> list[dict[str, Any]]:
     ]
 
 
+#: Server-side tools this protocol accepts.  Declaring one makes the provider
+#: run it, so the request must not also expect a local `tool_calls` round.
+SERVER_TOOL_NAMES = ("deepseek_web_search", "deepseek_read_url")
+
+
+def _convert_server_tools(compat: dict[str, Any]) -> list[dict[str, Any]]:
+    """Declarations for provider-executed tools, from `compat.serverTools`.
+
+    Shape is `{"type": <name>, "name": <name>}`: unlike a client tool it has no
+    `function` wrapper and no schema.  Unknown names are dropped rather than
+    forwarded, so a typo cannot turn into a 422 from the provider.
+    """
+    configured = _compat_get(compat, "server_tools", None)
+    if not isinstance(configured, list):
+        return []
+    declarations: list[dict[str, Any]] = []
+    for name in configured:
+        if isinstance(name, str) and name in SERVER_TOOL_NAMES:
+            declarations.append({"type": name, "name": name})
+    return declarations
+
+
 def _resolve_reasoning_effort(model: Model, options: StreamOptions, compat: dict[str, Any]) -> str | None:
     """Map the abstract level onto ``reasoning_effort``.
 
@@ -634,6 +787,13 @@ def build_params(model: Model, context: Context, options: StreamOptions, compat:
     elif _has_tool_history(context.messages):
         # Anthropic-via-proxy endpoints reject a tool message without the field.
         params["tools"] = []
+
+    # Server-side search/fetch, opt-in per model (`compat.serverTools`).
+    # These run on the provider, not locally: nothing here enters the tool loop,
+    # and the answer comes back with `annotations` + `server_tool_calls` instead.
+    server_tools = _convert_server_tools(compat)
+    if server_tools:
+        params["tools"] = [*(params.get("tools") or []), *server_tools]
 
     tool_choice = (options.provider_options or {}).get("tool_choice")
     if tool_choice is not None:
@@ -779,7 +939,7 @@ class OpenAiCompletionsProvider:
             body = build_params(model, context, options, compat)
             client = self._client_factory(model, options)
             headers = _build_headers(model, options)
-            url = _completions_url(model.base_url)
+            url = _request_url(model, body, compat)
 
             async with client.stream("POST", url, json=body, headers=headers) as response:
                 if response.status_code >= 400:
@@ -965,6 +1125,18 @@ class OpenAiCompletionsProvider:
             if state.reasoning_details is None:
                 state.reasoning_details = []
             state.reasoning_details.extend(details)
+
+        # Server-side search/fetch activity.  These are display-only fields on
+        # the response: the calls already ran on the server, so nothing here is
+        # ever handed to the local tool loop.
+        annotations = delta.get("annotations")
+        if isinstance(annotations, list) and annotations:
+            output.annotations = _merge_annotations(output.annotations, annotations)
+        server_tool_calls = delta.get("server_tool_calls")
+        if isinstance(server_tool_calls, list) and server_tool_calls:
+            output.server_tool_calls = _merge_server_tool_calls(
+                output.server_tool_calls, server_tool_calls
+            )
 
     def _ensure_text_block(
         self,

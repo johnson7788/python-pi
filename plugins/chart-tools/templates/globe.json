@@ -1,0 +1,60 @@
+{
+  "id": "globe",
+  "name": "三维地球",
+  "family": "special",
+  "use": "经纬度点位在全球尺度上的分布，适合少量重点位置",
+  "avoid": "需要精确国界/行政区时用二维地图；点位很多时地球会拥挤",
+  "dataNote": "结构性数据：scatter3D 的 data 是 [经度, 纬度, 数值]",
+  "option": {
+    "tooltip": {},
+    "globe": {
+      "viewControl": {
+        "autoRotate": false,
+        "distance": 180
+      }
+    },
+    "series": [
+      {
+        "type": "scatter3D",
+        "coordinateSystem": "globe",
+        "data": [
+          [
+            116.4,
+            39.9,
+            10
+          ],
+          [
+            121.5,
+            31.2,
+            8
+          ],
+          [
+            -74,
+            40.7,
+            6
+          ],
+          [
+            2.35,
+            48.86,
+            5
+          ]
+        ],
+        "symbolSize": 9,
+        "itemStyle": {
+          "color": "#f59e0b"
+        }
+      }
+    ]
+  },
+  "title": "三维地球",
+  "note": "点位是经纬度示意；没有底图纹理，不代表行政边界",
+  "notes": {
+    "unit": "",
+    "caveat": "只表达位置，不表达面积"
+  },
+  "pitfalls": [
+    "没有底图纹理，不能当正式地图用",
+    "点位过多会重叠，先聚合"
+  ],
+  "schema": "pi.chart-template/1"
+}

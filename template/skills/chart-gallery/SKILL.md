@@ -1,11 +1,11 @@
 ---
 name: chart-gallery
-description: "ECharts 6 图表选型与模板索引：37 种图（柱/条/堆叠/瀑布/折线/面积/区间带/主题河流/饼环/玫瑰/双层环/矩形树/旭日/桑基/和弦/直方/箱线/蜂群/热力/日历/平行坐标/散点/气泡/双轴/关系图/矩阵/仪表盘/极坐标/K线）的适用与反模式，option 由 chart_templates 工具给出（都经过渲染测试）。当要选图型、或想确认某种图该怎么画时使用。"
+description: "ECharts 6 图表选型与模板索引：45 种图（柱/条/堆叠/瀑布/折线/面积/区间带/主题河流/饼环/玫瑰/双层环/矩形树/旭日/桑基/和弦/直方/箱线/蜂群/热力/日历/平行坐标/散点/气泡/双轴/关系图/矩阵/仪表盘/极坐标/K线、3D 柱/线/散点/曲面/地球/关系图、中国/世界 2D 地图）的适用与反模式，option 由 chart_templates 工具给出（都经过渲染测试）。当要选图型、或想确认某种图该怎么画时使用。"
 ---
 
 # 图表选型与模板
 
-**不要凭记忆写 option。** 37 个模板都在 `chart_templates` 工具里，每个都渲染过：
+**不要凭记忆写 option。** 45 个模板都在 `chart_templates` 工具里，每个都渲染过：
 
 ```
 chart_templates                                        # 列出全部（按族）
@@ -36,6 +36,8 @@ chart_templates id="bar-basic" path="data/sales.csv"   # 顺便校验列名
 | 多维综合打分 | `parallel`、`matrix` | 雷达（>3 个对象） |
 | 价格区间 | `candlestick` | 折线（丢掉高低点） |
 | 类目多又想省空间 | `polar-bar`、`bar-horizontal` | 玫瑰图（读不准） |
+| 三个数值维/空间分布 | `bar3D`、`line3D`、`scatter3D`、`surface`、`globe`、`graphGL` | 2D 能说清时用 3D |
+| 中国省级/世界各国数值 | `china-map`、`world-map` | 只比几个地区时用条形图 |
 
 ## 六个族的一句话
 
@@ -71,10 +73,28 @@ chart_templates id="bar-basic" path="data/sales.csv"   # 顺便校验列名
 - 雷达图放 4 个以上对象；热力图色阶用红绿；
 - 一张图里同时有"总量"和"占比"两种口径还不说明。
 
-## 不可用（当前环境）
+## 3D / GL（可用，但默认不用）
 
-- **3D / GL**（`bar3D`/`globe`/`surface`/`scatterGL`…）：需要 `echarts-gl`，内置包只有核心；
-- **custom 系列**：`renderItem` 是函数，JSON 存不了；
-- **地图**：`registerMap` 要在 JS 里注册 GeoJSON，中国地图另有审图号合规问题。
+6 个模板：`bar3D`、`line3D`、`scatter3D`、`surface`、`globe`、`graphGL`。
+`echarts-gl@2.1.0` 是独立静态资源，只在 spec 真的用到 GL 系列时加载，不会拖慢 2D 图。
 
-这三种情况**换二维表达**，并在对话里说清为什么换。
+- 需要浏览器 WebGL；无 GPU、远程桌面或离屏环境可能空白，先确认环境；
+- 3D 柱子/曲面会互相遮挡，精确值看 tooltip；能在 2D 说清就不要上 3D；
+- `globe` 没有行政边界底图，不能当正式地图用；`graphGL` 力导向布局有随机性。
+
+## 2D 地图（可用，但数据要合规）
+
+`china-map` 和 `world-map` 分别加载 `web/public/vendor/maps/china.js` / `world.js`
+（ECharts 4.9.0 map data，Apache-2.0），只在 spec 用到地图时加载，不占 HTML 480KB 预算。
+
+- 地区名/国家名必须与地图数据的 `properties.name` 完全一致；中国用中文省名，世界用英文国名
+  （`China` / `United States`），不匹配的地区会静默缺失；
+- 这份地图是**内部测试数据，不是正式审图版本**；对外发布前必须换成有审图号的标准地图，
+  并检查台湾、南海诸岛、十段线等表达；
+- 只有几个地区时用条形图，地图不是排序工具。
+
+## 仍不可用
+
+- **custom 系列**：`renderItem` 是函数，JSON 存不了。
+
+这种情况**换二维表达**，并在对话里说清为什么换。

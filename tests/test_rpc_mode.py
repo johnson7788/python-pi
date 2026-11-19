@@ -740,3 +740,67 @@ def test_every_event_projection_is_strictly_json_serializable():
         {"type": "text", "text": "wrote the file"},
         {"type": "image", "data": "aGk=", "mimeType": "image/png"},
     ]
+
+
+async def test_branch_points_match_the_rendered_messages(tmp_path):
+    session = _session(tmp_path, [FauxTurn(text="reply")])
+    try:
+        records = await _serve(
+            session,
+            [
+                {"id": "1", "type": "prompt", "message": "first"},
+                {"id": "2", "type": "get_branch_points"},
+            ],
+        )
+        points = _responses(records, "get_branch_points")[0]["data"]["points"]
+        # Every message on the path, in order: a client can branch from any of
+        # them, not just from a user message.
+        assert [point["role"] for point in points] == ["user", "assistant"]
+        assert all(point["entryId"] for point in points)
+        assert points[0]["text"] == "first"
+        # Timestamps let a client match an entry to the message it renders.
+        assert isinstance(points[1]["timestamp"], int)
+    finally:
+        session.dispose()
+
+
+async def test_fork_forwards_the_position_to_the_runtime(tmp_path):
+    calls: list[tuple[str, str]] = []
+
+    session = _session(tmp_path, [FauxTurn(text="x")])
+
+    class _Runtime:
+        # RpcMode binds to `runtime.session`; the fork hook itself is what this
+        # test observes.
+        def __init__(self) -> None:
+            self.session = session
+
+        def set_rebind_session(self, _hook) -> None:
+            pass
+
+        async def fork(self, entry_id: str, *, position: str = "before"):
+            calls.append((entry_id, position))
+            return {"cancelled": False, "text": ""}
+
+    raw = "".join(
+        serialize_json_line(command)
+        for command in (
+            {"id": "1", "type": "fork", "entryId": "entry-7", "position": "at"},
+            {"id": "2", "type": "fork", "entryId": "entry-8"},
+            {"id": "3", "type": "fork", "entryId": "entry-9", "position": "sideways"},
+            {"id": "4", "type": "fork"},
+        )
+    ).encode("utf-8")
+    output = io.StringIO()
+    try:
+        mode = RpcMode(session, runtime=_Runtime(), output=output)
+        assert await mode.run(io.BytesIO(raw)) == 0
+        assert calls == [("entry-7", "at"), ("entry-8", "before")]
+
+        records = [json.loads(line) for line in output.getvalue().splitlines() if line]
+        failures = [r for r in records if r.get("type") == "response" and not r.get("success")]
+        # An invalid position and a missing entry id are refused, not forwarded.
+        assert {failure["command"] for failure in failures} == {"fork"}
+        assert len(failures) == 2
+    finally:
+        session.dispose()

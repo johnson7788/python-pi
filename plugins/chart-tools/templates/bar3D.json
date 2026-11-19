@@ -1,0 +1,114 @@
+{
+  "id": "bar3D",
+  "name": "三维柱状图",
+  "family": "special",
+  "use": "两个类目维 + 一个数值维的三维比较，类别少、需要看空间分布时",
+  "avoid": "类别超过 5×5、只需要比大小（用分组柱）；3D 会遮挡后排柱子",
+  "bind": {
+    "columns": [
+      "x",
+      "y",
+      "z"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "x",
+      "y",
+      "z"
+    ],
+    "rows": [
+      [
+        "A",
+        "X",
+        5
+      ],
+      [
+        "A",
+        "Y",
+        1
+      ],
+      [
+        "B",
+        "X",
+        3
+      ],
+      [
+        "B",
+        "Y",
+        8
+      ],
+      [
+        "C",
+        "X",
+        6
+      ],
+      [
+        "C",
+        "Y",
+        2
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "tooltip": {},
+    "visualMap": {
+      "max": 20,
+      "inRange": {
+        "color": [
+          "#313695",
+          "#4575b4",
+          "#74add1",
+          "#abd9e9",
+          "#e0f3f8",
+          "#ffffbf",
+          "#fee090",
+          "#fdae61",
+          "#f46d43",
+          "#d73027",
+          "#a50026"
+        ]
+      }
+    },
+    "xAxis3D": {
+      "type": "category",
+      "name": "X"
+    },
+    "yAxis3D": {
+      "type": "category",
+      "name": "Y"
+    },
+    "zAxis3D": {
+      "type": "value",
+      "name": "Z"
+    },
+    "grid3D": {
+      "boxWidth": 100,
+      "boxDepth": 80,
+      "boxHeight": 60
+    },
+    "series": [
+      {
+        "type": "bar3D",
+        "encode": {
+          "x": "x",
+          "y": "y",
+          "z": "z"
+        },
+        "shading": "lambert"
+      }
+    ]
+  },
+  "title": "三维柱状图",
+  "note": "颜色表示 Z 值；3D 柱子会互相遮挡，读精确值请看 tooltip",
+  "notes": {
+    "unit": "",
+    "caveat": "类目不宜过多"
+  },
+  "pitfalls": [
+    "类别多时 3D 遮挡严重，改用分组柱",
+    "必须使用支持 WebGL 的浏览器"
+  ],
+  "schema": "pi.chart-template/1"
+}

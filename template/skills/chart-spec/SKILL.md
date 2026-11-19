@@ -21,7 +21,7 @@ chart_data_profile  →  chart_templates  →  改 spec  →  chart_check  →  
 ```
 
 - **先 profile**：列名、类型、缺失、基数、数值范围。不要凭表名猜字段，也不要把整张表读进上下文。
-- **再取模板**：`chart_templates id="<id>"` 给出完整 spec（37 种图，都渲染过）。只改 `bind.path`、
+- **再取模板**：`chart_templates id="<id>"` 给出完整 spec（45 种图，都渲染过）。只改 `bind.path`、
   标题和文案；**不要凭记忆写 option**——漏一个 `dataset: {}` 或 encode 写错列，图就是空白。
 - **spec 存成** `charts/<名字>.spec.json`；HTML 默认同名 `charts/<名字>.html`。
 - `chart_check` 报 error 必须改；只有 warning 可以渲染，但每条都要在 `note` 或 `notes.notes` 里交代。
@@ -73,13 +73,16 @@ chart_data_profile  →  chart_templates  →  改 spec  →  chart_check  →  
 | 增减拆解 | `waterfall` | 折线（没有累计语义） |
 | 目标达成 | `bar-bullet`、`gauge` | 双轴 |
 | 流程/层级 | `sankey`、`treemap`、`sunburst`、`chord` | 3D |
+| 中国省级/世界各国数值 | `china-map`、`world-map` | 只比几个地区时用条形图 |
 | 多维综合 | `parallel`、`matrix` | 雷达放 4 个以上对象 |
 
-完整 37 种见 `chart-gallery` 技能；option 一律用 `chart_templates` 取，不要手写。
+完整 45 种见 `chart-gallery` 技能；option 一律用 `chart_templates` 取，不要手写。
 
-**默认不做**：3D、GL、地图、custom 系列。3D/GL 需要 `echarts-gl`（内置包没有，画出来是空白）；
-custom 的 `renderItem` 是函数，JSON 存不了；地图要自备 GeoJSON，中国地图还涉及审图号。
-用户明确要时，先说清代价，再给二维替代方案。
+**默认优先 2D**：能在一张平面图里说清，就不要上 3D。需要三个数值维/空间分布时可用
+`bar3D/line3D/scatter3D/surface/globe/graphGL`，它们由 `echarts-gl@2.1.0` 提供；需要浏览器
+WebGL，无 GPU/离屏环境可能空白。中国/世界地图用 `china-map`/`world-map`，地区名必须与地图
+数据的 `properties.name` 一致；当前地图数据是内部测试版（ECharts 4.9.0，Apache-2.0），
+不是正式审图版本，对外发布前要换标准地图。custom 的 `renderItem` 仍是函数，不可用。
 
 ## 四、视觉规范
 
@@ -124,7 +127,7 @@ custom 的 `renderItem` 是函数，JSON 存不了；地图要自备 GeoJSON，�
 ## 七、失败处理
 
 - `chart_data_profile` 报不支持的格式：`.xls` 请用户另存 `.xlsx`/`.csv`；
-- `chart_check` 报 `custom`/`3D`/`GL`：换成内置类型，或明确告诉用户"这个图型当前不支持"；
+- `chart_check` 报 `custom`：换成内置类型；GL 报 `WebGL` 是环境警告，先确认浏览器支持；地图地区名不匹配会静默缺失；
 - HTML 超过 480KB：先 `aggregate` 聚合成类目级，再减列；不要靠 `limit` 硬截；
 - 数据里百分比带 `%`：绑定后是数字，轴/标签要补 `%`（profile 会提示）；
 - 缺失值：ECharts 用 `null` 断开，不要用 0 填补——0 是一条假数据。

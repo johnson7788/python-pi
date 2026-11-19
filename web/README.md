@@ -37,7 +37,12 @@ npm run typecheck      # tsc --noEmit (strict)
 npm run build          # typecheck + vite build -> dist/
 npm run preview        # serve dist/ (no API proxy: point VITE_WS_URL at the backend)
 npm run verify:mock    # headless smoke test of the mock server over /api/ws
+npm run verify:citations  # unit checks for the citation badge helpers
 ```
+
+`MOCK_CITATIONS=1 npm run mock` makes the scripted reply carry provider citations
+and a server-side search, which is the quickest way to see the answer badges,
+the hover card and the sources panel without calling a real model:
 
 ## Appearance
 
@@ -97,6 +102,7 @@ mock-server.mjs            protocol-faithful backend stand-in
 scripts/verify-mock.mjs    headless assertion over the WS endpoint
 scripts/verify-dom.mjs     jsdom mount check (single + team modes)
 scripts/verify-transcript.mjs  "message rendered twice" regression check
+scripts/verify-citations.mjs   citation offset/slicing unit checks
 ```
 
 ## How it fits together

@@ -1,0 +1,113 @@
+{
+  "id": "china-map",
+  "name": "中国地图",
+  "family": "special",
+  "use": "中国省级地区的数值分布/热力填色，例如各省销量、患者数、覆盖率",
+  "avoid": "需要精确边界/正式审图时不要用这份测试地图；地区数很少时用条形图更准",
+  "bind": {
+    "columns": [
+      "region",
+      "value"
+    ]
+  },
+  "sample": {
+    "columns": [
+      "region",
+      "value"
+    ],
+    "rows": [
+      [
+        "广东",
+        80
+      ],
+      [
+        "江苏",
+        55
+      ],
+      [
+        "北京",
+        70
+      ],
+      [
+        "浙江",
+        65
+      ],
+      [
+        "四川",
+        45
+      ],
+      [
+        "湖北",
+        50
+      ]
+    ]
+  },
+  "option": {
+    "dataset": {},
+    "tooltip": {
+      "trigger": "item"
+    },
+    "visualMap": {
+      "min": 0,
+      "max": 100,
+      "left": 16,
+      "bottom": 16,
+      "text": [
+        "高",
+        "低"
+      ],
+      "calculable": true,
+      "inRange": {
+        "color": [
+          "#e0f3f8",
+          "#abd9e9",
+          "#74add1",
+          "#4575b4",
+          "#313695"
+        ]
+      }
+    },
+    "series": [
+      {
+        "type": "map",
+        "map": "china",
+        "roam": true,
+        "encode": {
+          "name": "region",
+          "value": "value"
+        },
+        "label": {
+          "show": false
+        },
+        "emphasis": {
+          "label": {
+            "show": true
+          },
+          "itemStyle": {
+            "areaColor": "#f59e0b"
+          }
+        },
+        "select": {
+          "label": {
+            "show": true
+          },
+          "itemStyle": {
+            "areaColor": "#fbbf24"
+          }
+        }
+      }
+    ]
+  },
+  "title": "中国地图",
+  "note": "颜色表示地区数值；地区名必须与地图数据的 properties.name 完全一致",
+  "notes": {
+    "unit": "",
+    "source": "ECharts 4.9.0 map data（Apache-2.0）；内部测试用，非正式审图",
+    "caveat": "地区名不匹配会静默缺失，空白色块代表没有数据"
+  },
+  "pitfalls": [
+    "地区名必须与 GeoJSON 的 name 一致",
+    "不同地图数据的边界/审图版本不同，正式发布前要换标准地图"
+  ],
+  "schema": "pi.chart-template/1"
+}

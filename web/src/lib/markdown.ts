@@ -29,7 +29,9 @@ export function renderMarkdown(source: string): string {
   const raw = marked.parse(source) as string
   const clean = DOMPurify.sanitize(raw, {
     USE_PROFILES: { html: true },
-    ADD_ATTR: ['target', 'rel'],
+    // `data-cite-idx` is the hook hover handling uses to find a citation badge;
+    // nothing else about it is privileged, and the badge holds only a number.
+    ADD_ATTR: ['target', 'rel', 'data-cite-idx'],
   })
 
   if (cache.size >= CACHE_LIMIT) {

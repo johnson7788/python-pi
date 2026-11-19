@@ -47,3 +47,10 @@ office/apps/*/node_modules/
 # Generated deliverables from the old cwd workspace
 output/
 airead.md
+
+# Local acceptance corpus for the chart app (21 cases + screenshots, ~5 MB).
+# Regenerate with `tests/chart-tests/build.py`; kept out of history on purpose.
+chart-tests/
+
+# Competitor teardown notes (citexs) — research material, kept local.
+citexs-advanced/

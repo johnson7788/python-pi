@@ -11,13 +11,13 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 | 目录 / 文件 | 是什么 | 入库（文件数） |
 |---|---|---|
 | `packages/` | 4 个 Python 包：`pi-ai`（模型层）、`pi-agent-core`（agent 循环）、`pi-coding-agent`（工具/扩展/skills）、`pi-server`（HTTP+WS 服务、多租户、应用目录） | 是（88） |
-| `web/` | 浏览器前端（React + Vite）：`src/workbench/` 是主界面，另有 `pages/`、`components/`、`lib/` | 是（43） |
+| `web/` | 浏览器前端（React + Vite）：`src/workbench/` 是主界面，另有 `pages/`、`components/`、`lib/` | 是（49） |
 | `office/` | 三个编辑器（doc / slides / sheets）的前端工程 + Rust `xlsx-engine`；构建产物写到 `office-dist/` | 是（686） |
-| `plugins/` | 内置插件：`pubmed`、`clinical-calc`、`csv-tools`、`web-fetch`、`chart-tools` | 是（53） |
+| `plugins/` | 内置插件：`pubmed`、`clinical-calc`、`csv-tools`、`web-fetch`、`chart-tools` | 是（61） |
 | `template/` | team 模式的租户模板：`skills/` 软链给每个新用户 | 是（13） |
 | `tests/` | pytest：规则层单测 + 真起服务的端到端测试（`test_sandbox_end_to_end.py` 需要 Docker） | 是（54） |
 | `deploy/` | 部署：systemd unit、Dockerfile、sandbox provisioner、备份、压测、smoke | 是（13） |
-| `docs/` | 设计文档、差距分析、截图、mockup、本文档 | 是（176） |
+| `docs/` | 设计文档、差距分析、截图、mockup、本文档 | 是（181） |
 | `apps/` | 应用的**非代码交付物**（技能、安装脚本、示例答案）；应用定义在 `packages/pi-server/src/pi_server/apps.py` | 是（3） |
 | `plugin-kit/` | 插件开发者工具：`new` / `check` / `dev` / `pack`（`pikit.py`） | 是（8） |
 | `scripts/` | 构建脚本：office、xlsx-engine sidecar，以及生成本文档的 `gen_tree.py` | 是（3） |
@@ -32,11 +32,11 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 ├── .env  (317 B)
 ├── .env.example  (1,179 B)
 ├── .env.team  (435 B)
-├── .gitignore  (657 B)
+├── .gitignore  (918 B)
 ├── apps/
 │   ├── chart/
 │   │   ├── install.sh  (4,183 B)
-│   │   └── README.md  (7,917 B)
+│   │   └── README.md  (8,645 B)
 │   └── README.md  (2,781 B)
 ├── deploy/
 │   ├── backup.sh  (2,549 B)
@@ -63,6 +63,7 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 ├── docs/
 │   ├── APPS-REVIEW.md  (5,606 B)
 │   ├── ARCHITECTURE.md  (18,262 B)
+│   ├── branch-feature.png  (232,346 B)
 │   ├── chart-demo/
 │   │   ├── agent-session.png  (217,033 B)
 │   │   ├── chart.png  (134,218 B)
@@ -70,8 +71,11 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   │   ├── monthly-sales.spec.json  (2,816 B)
 │   │   ├── sales-data.xlsx  (6,598 B)
 │   │   └── session.jsonl  (20,019 B)
+│   ├── deepseek-citations-hover.png  (83,787 B)
+│   ├── deepseek-citations-sources.png  (56,200 B)
+│   ├── deepseek-citations.png  (98,604 B)
 │   ├── DEPLOY.md  (18,720 B)
-│   ├── DEVIATIONS.md  (12,078 B)
+│   ├── DEVIATIONS.md  (14,291 B)
 │   ├── diagrams/
 │   │   ├── 01-layers.mmd  (969 B)
 │   │   ├── 01-layers.png  (186,817 B)
@@ -166,7 +170,8 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   │   ├── 02-pi-agent.md  (66,284 B)
 │   │   ├── 03-coding-agent-core.md  (88,646 B)
 │   │   ├── 04-modes-extensions.md  (89,566 B)
-│   │   └── 05-surrounding-packages.md  (61,997 B)
+│   │   ├── 05-surrounding-packages.md  (61,997 B)
+│   │   └── 06-deepseek-chat-demo.md  (27,770 B)
 │   ├── screenshot-admin.png  (256,495 B)
 │   ├── screenshot-chat.png  (186,416 B)
 │   ├── screenshot-dark.png  (216,369 B)
@@ -1039,13 +1044,13 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   │           ├── models.py  (30,515 B)
 │   │           ├── providers/
 │   │           │   ├── __init__.py  (891 B)
-│   │           │   ├── anthropic_messages.py  (33,634 B)
+│   │           │   ├── anthropic_messages.py  (35,404 B)
 │   │           │   ├── faux.py  (9,464 B)
-│   │           │   └── openai_completions.py  (43,073 B)
+│   │           │   └── openai_completions.py  (50,761 B)
 │   │           ├── stream.py  (9,508 B)
 │   │           ├── tools.py  (8,960 B)
-│   │           ├── transform.py  (16,678 B)
-│   │           └── types.py  (13,913 B)
+│   │           ├── transform.py  (16,796 B)
+│   │           └── types.py  (14,689 B)
 │   ├── pi-coding-agent/
 │   │   ├── pyproject.toml  (438 B)
 │   │   └── src/
@@ -1072,7 +1077,7 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   │           │   ├── json_mode.py  (2,818 B)
 │   │           │   ├── jsonl.py  (4,125 B)
 │   │           │   ├── print_mode.py  (3,285 B)
-│   │           │   └── rpc_mode.py  (33,809 B)
+│   │           │   └── rpc_mode.py  (35,525 B)
 │   │           ├── plugins/
 │   │           │   └── __init__.py  (2,417 B)
 │   │           ├── policy/
@@ -1139,9 +1144,9 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 ├── plugins/
 │   ├── build.sh  (604 B)
 │   ├── chart-tools/
-│   │   ├── main.py  (59,941 B)
+│   │   ├── main.py  (66,806 B)
 │   │   ├── plugin.json  (650 B)
-│   │   ├── README.md  (3,453 B)
+│   │   ├── README.md  (4,265 B)
 │   │   └── templates/
 │   │       ├── area-band.json  (2,161 B)
 │   │       ├── area-stacked.json  (2,510 B)
@@ -1151,15 +1156,19 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   │       ├── bar-horizontal.json  (1,627 B)
 │   │       ├── bar-percent.json  (1,953 B)
 │   │       ├── bar-stacked.json  (1,858 B)
+│   │       ├── bar3D.json  (1,954 B)
 │   │       ├── boxplot.json  (1,751 B)
 │   │       ├── bubble.json  (1,783 B)
 │   │       ├── calendar-heatmap.json  (2,949 B)
 │   │       ├── candlestick.json  (2,079 B)
+│   │       ├── china-map.json  (2,260 B)
 │   │       ├── chord.json  (1,928 B)
 │   │       ├── combo-dual.json  (2,273 B)
 │   │       ├── doughnut.json  (2,099 B)
 │   │       ├── gauge.json  (1,746 B)
+│   │       ├── globe.json  (1,337 B)
 │   │       ├── graph.json  (2,548 B)
+│   │       ├── graphGL.json  (1,507 B)
 │   │       ├── heatmap.json  (2,221 B)
 │   │       ├── histogram.json  (1,724 B)
 │   │       ├── line-area.json  (2,161 B)
@@ -1167,19 +1176,23 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   │       ├── line-multi.json  (1,911 B)
 │   │       ├── line-step.json  (1,772 B)
 │   │       ├── line-target.json  (2,398 B)
+│   │       ├── line3D.json  (1,576 B)
 │   │       ├── matrix.json  (2,155 B)
 │   │       ├── parallel.json  (1,708 B)
-│   │       ├── pie-basic.json  (1,552 B)
-│   │       ├── pie-nested.json  (2,126 B)
-│   │       ├── pie-rose.json  (1,502 B)
+│   │       ├── pie-basic.json  (1,557 B)
+│   │       ├── pie-nested.json  (2,156 B)
+│   │       ├── pie-rose.json  (1,507 B)
 │   │       ├── polar-bar.json  (2,025 B)
 │   │       ├── sankey.json  (2,030 B)
 │   │       ├── scatter-jitter.json  (1,867 B)
 │   │       ├── scatter.json  (1,698 B)
+│   │       ├── scatter3D.json  (1,533 B)
 │   │       ├── sunburst.json  (1,749 B)
+│   │       ├── surface.json  (1,468 B)
 │   │       ├── theme-river.json  (1,885 B)
 │   │       ├── treemap.json  (2,045 B)
-│   │       └── waterfall.json  (2,472 B)
+│   │       ├── waterfall.json  (2,472 B)
+│   │       └── world-map.json  (2,249 B)
 │   ├── clinical-calc/
 │   │   ├── main.py  (18,113 B)
 │   │   ├── plugin.json  (570 B)
@@ -1197,7 +1210,7 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │       ├── plugin.json  (555 B)
 │       └── README.md  (1,315 B)
 ├── pyproject.toml  (845 B)
-├── README.md  (26,557 B)
+├── README.md  (27,376 B)
 ├── scripts/
 │   ├── build-office.sh  (290 B)
 │   ├── build-xlsx-sidecar.sh  (146 B)
@@ -1210,9 +1223,9 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   ├── README.md  (2,799 B)
 │   └── skills/
 │       ├── chart-gallery/
-│       │   └── SKILL.md  (4,918 B)
+│       │   └── SKILL.md  (6,214 B)
 │       ├── chart-spec/
-│       │   └── SKILL.md  (7,425 B)
+│       │   └── SKILL.md  (7,820 B)
 │       ├── plugin-creator/
 │       │   └── SKILL.md  (9,239 B)
 │       └── slides-deck/
@@ -1234,11 +1247,11 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   ├── conftest.py  (13,957 B)
 │   ├── test_agent_loop.py  (33,772 B)
 │   ├── test_agent_session.py  (30,968 B)
-│   ├── test_agent_session_runtime.py  (14,264 B)
+│   ├── test_agent_session_runtime.py  (15,406 B)
 │   ├── test_apps.py  (18,249 B)
 │   ├── test_artifacts.py  (2,700 B)
 │   ├── test_auth_models.py  (24,049 B)
-│   ├── test_chart_tools.py  (15,276 B)
+│   ├── test_chart_tools.py  (20,062 B)
 │   ├── test_cli.py  (4,908 B)
 │   ├── test_cli_end_to_end.py  (24,349 B)
 │   ├── test_deploy_artifacts.py  (20,312 B)
@@ -1259,11 +1272,11 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   ├── test_plugins.py  (3,695 B)
 │   ├── test_policy.py  (19,937 B)
 │   ├── test_pptx_preview.py  (2,541 B)
-│   ├── test_providers.py  (40,932 B)
+│   ├── test_providers.py  (55,389 B)
 │   ├── test_reasoning_effort.py  (2,574 B)
 │   ├── test_register.py  (1,638 B)
 │   ├── test_resources.py  (34,095 B)
-│   ├── test_rpc_mode.py  (27,238 B)
+│   ├── test_rpc_mode.py  (29,769 B)
 │   ├── test_sandbox_backend.py  (19,715 B)
 │   ├── test_sandbox_end_to_end.py  (12,672 B)
 │   ├── test_sandbox_provisioner.py  (19,304 B)
@@ -1290,9 +1303,9 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
     ├── .gitignore  (38 B)
     ├── dist/  (13 个文件，生成物，略)
     ├── index.html  (1,104 B)
-    ├── mock-server.mjs  (45,245 B)
+    ├── mock-server.mjs  (48,242 B)
     ├── package-lock.json  (79,797 B)
-    ├── package.json  (1,089 B)
+    ├── package.json  (1,177 B)
     ├── public/
     │   ├── apple-touch-icon.png  (3,030 B)
     │   ├── favicon-16.png  (517 B)
@@ -1304,16 +1317,22 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
     │   ├── manifest.webmanifest  (489 B)
     │   ├── pi-icon.png  (83,670 B)
     │   └── vendor/
+    │       ├── echarts-gl.min.js  (639,846 B)
     │       ├── echarts.min.js  (1,121,883 B)
-    │       └── README.md  (1,571 B)
-    ├── README.md  (8,383 B)
+    │       ├── maps/
+    │       │   ├── china.js  (61,376 B)
+    │       │   └── world.js  (1,010,367 B)
+    │       └── README.md  (3,057 B)
+    ├── README.md  (8,749 B)
     ├── scripts/
+    │   ├── verify-citations.mjs  (5,009 B)
     │   ├── verify-dom.mjs  (9,606 B)
     │   ├── verify-mock.mjs  (4,490 B)
     │   └── verify-transcript.mjs  (9,333 B)
     ├── src/
     │   ├── App.tsx  (1,822 B)
     │   ├── components/
+    │   │   ├── Citations.tsx  (4,669 B)
     │   │   ├── Dialog.tsx  (4,172 B)
     │   │   ├── Page.tsx  (2,734 B)
     │   │   ├── Prompt.tsx  (4,511 B)
@@ -1323,21 +1342,22 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
     │   │   └── tokens.css  (4,289 B)
     │   ├── lib/
     │   │   ├── api.ts  (4,406 B)
+    │   │   ├── citations.ts  (6,272 B)
     │   │   ├── endpoints.ts  (1,297 B)
     │   │   ├── images.ts  (3,777 B)
-    │   │   ├── markdown.ts  (1,815 B)
-    │   │   ├── protocol.ts  (16,767 B)
+    │   │   ├── markdown.ts  (1,992 B)
+    │   │   ├── protocol.ts  (18,687 B)
     │   │   ├── router.ts  (1,377 B)
-    │   │   ├── useAgent.ts  (43,845 B)
+    │   │   ├── useAgent.ts  (44,869 B)
     │   │   ├── useAuth.ts  (5,402 B)
     │   │   └── useTheme.ts  (2,225 B)
     │   ├── main.tsx  (516 B)
     │   ├── pages/
     │   │   └── Login.tsx  (8,190 B)
-    │   ├── styles.css  (14,877 B)
+    │   ├── styles.css  (18,025 B)
     │   └── workbench/
-    │       ├── workbench.css  (79,827 B)
-    │       └── Workbench.tsx  (217,848 B)
+    │       ├── workbench.css  (80,251 B)
+    │       └── Workbench.tsx  (221,917 B)
     ├── tsconfig.json  (586 B)
     └── vite.config.ts  (1,205 B)
 ```

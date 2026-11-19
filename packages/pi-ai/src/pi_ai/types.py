@@ -138,6 +138,14 @@ class AssistantMessage:
     error_message: str | None = None
     raw_stop_reason: str | None = None
     end_turn: bool | None = None
+    #: Provider-side citations for the answer text (Chat Completions
+    #: ``message.annotations``).  Opaque display data: kept verbatim so the web
+    #: layer can place badges by character offset, and never sent back.
+    annotations: list[dict[str, Any]] | None = None
+    #: Server-executed tool activity from the same response
+    #: (Chat Completions ``message.server_tool_calls``).  Read-only display data;
+    #: these calls happened on the server and must never be re-executed locally.
+    server_tool_calls: list[dict[str, Any]] | None = None
     role: Literal["assistant"] = field(default="assistant", init=False)
 
 
@@ -343,6 +351,8 @@ def message_to_json(message: Message) -> dict[str, Any]:
                 "errorMessage": message.error_message,
                 "rawStopReason": message.raw_stop_reason,
                 "endTurn": message.end_turn,
+                "annotations": message.annotations,
+                "serverToolCalls": message.server_tool_calls,
                 "timestamp": message.timestamp,
             }
         )
@@ -387,6 +397,8 @@ def message_from_json(data: dict[str, Any]) -> Message:
             error_message=data.get("errorMessage"),
             raw_stop_reason=data.get("rawStopReason"),
             end_turn=data.get("endTurn"),
+            annotations=data.get("annotations"),
+            server_tool_calls=data.get("serverToolCalls"),
             timestamp=data.get("timestamp", 0),
         )
     if role == "toolResult":

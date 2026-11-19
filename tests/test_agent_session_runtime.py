@@ -245,6 +245,36 @@ async def test_fork_at_an_entry_keeps_it(tmp_path):
     await runtime.dispose()
 
 
+async def test_fork_at_an_assistant_entry_keeps_the_answer(tmp_path):
+    """The DSH-style branch: keep the answer, then ask a different question."""
+    runtime = await _make_runtime(
+        tmp_path, [FauxTurn(text="reply one"), FauxTurn(text="reply two")]
+    )
+    session = runtime.session
+    await session.prompt("first question")
+    await session.prompt("second question")
+
+    assistants = [
+        entry
+        for entry in session.session_manager.get_path()
+        if getattr(entry, "type", None) == "message"
+        and getattr(getattr(entry, "message", None), "role", None) == "assistant"
+    ]
+    assert len(assistants) == 2
+
+    result = await runtime.fork(assistants[0].id, position="at")
+
+    assert result["cancelled"] is False
+    forked = runtime.session
+    assert forked is not session
+    # Everything up to and including the first answer survives; the second
+    # exchange does not.
+    assert [m.role for m in forked.messages] == ["user", "assistant"]
+    assert forked.messages[0].content[0].text == "first question"
+    assert forked.messages[1].content[0].text == "reply one"
+    await runtime.dispose()
+
+
 async def test_fork_before_the_first_entry_yields_an_empty_session(tmp_path):
     runtime = await _make_runtime(tmp_path, [FauxTurn(text="reply")])
     session = runtime.session

@@ -12,8 +12,11 @@ apps/chart/                 应用说明与安装（应用本身在内置目录�
 
 template/skills/chart-spec/       交付契约：数据纪律、选型、视觉规范、不说谎检查表
 template/skills/chart-gallery/    选型表 + 模板索引（option 在 chart_tools 的 templates/）
-plugins/chart-tools/              chart-tools：4 个工具 + 37 个模板，唯一的产图入口
+plugins/chart-tools/              chart-tools：4 个工具 + 45 个模板，唯一的产图入口
 web/public/vendor/echarts.min.js  产物 HTML 引用的图表引擎（6.1.0）
+web/public/vendor/echarts-gl.min.js  3D/GL 图才加载的扩展（2.1.0）
+web/public/vendor/maps/china.js      中国地图数据（echarts.registerMap）
+web/public/vendor/maps/world.js      世界地图数据（echarts.registerMap）
 ```
 
 技能和插件都放在各自**唯一的**规范位置，不在 `apps/` 下再存一份——两份会漂移。
@@ -42,9 +45,9 @@ web/public/vendor/echarts.min.js  产物 HTML 引用的图表引擎（6.1.0）
 
 | 工具 | 干什么 | 为什么不能交给模型 |
 |---|---|---|
-| `chart_templates` | 37 种图的完整 spec（都渲染过）；可按族筛选、可校验数据列名 | 手写 option 容易漏 `dataset`/encode 写错列，图就空白 |
+| `chart_templates` | 45 种图的完整 spec（都渲染过）；可按族筛选、可校验数据列名 | 手写 option 容易漏 `dataset`/encode 写错列，图就空白 |
 | `chart_data_profile` | 列类型、缺失、基数、数值范围；给选型建议 + 可改的 spec 骨架 | 整表进上下文费用高；结构判断要一致 |
-| `chart_check` | 校验 spec：schema、绑定列、encode 引用、custom/3D、手写数字、饼图分类、双轴 | 模型自检不可靠，且它不知道自己错了 |
+| `chart_check` | 校验 spec：schema、绑定列、encode 引用、custom、GL 环境警告、手写数字、饼图分类、双轴 | 模型自检不可靠，且它不知道自己错了 |
 | `chart_render_html` | 绑定真实数据 → 生成 HTML，写页脚溯源，校验 480KB 上限 | 数据绑定要确定；手写 HTML 等于执行任意脚本 |
 
 ## spec 的形状
@@ -104,16 +107,21 @@ web/public/vendor/echarts.min.js  产物 HTML 引用的图表引擎（6.1.0）
 | 真实模型跑通 | 一轮对话里依次调用 `chart_data_profile` → `chart_check` → `chart_render_html` → `present` |
 | 模板链路 | 换一轮「用模板画面积图」：`chart_templates` 取 `line-area` → 改 bind/标题 → `chart_check` 0 error → 产物面板可交互 |
 | 数据绑定 | 页脚 `data/sales.csv · 12 行 × 2 列 · sha256 8ccd…`；`__data` 与 CSV 逐行一致 |
-| 校验器 | 15 个单测（含沙箱策略、vendor 文件的不变量）：手写数据、custom/3D、越界列、6000 行不聚合、路径逃逸都会拦下 |
-| 模板库 | **37 个模板全部渲染过**（浏览器逐张检查画布有彩色像素、无 console error）；单测对每个模板跑 `check_spec` + `bind_data` + `render_html` |
+| 校验器 | 16 个单测（含沙箱策略、vendor 文件的不变量）：手写数据、custom、越界列、6000 行不聚合、路径逃逸都会拦下；GL 仅检查 WebGL 环境 |
+| 模板库 | **45 个模板全部渲染过**（浏览器逐张检查画布有彩色像素、无 console error）；单测对每个模板跑 `check_spec` + `bind_data` + `render_html` |
 | 技能加载 | `discover_skills_with_diagnostics` 两个技能均 ok；`pikit check` 0 警告 |
 
 ## 限制（这些是设计选择，不是待办）
 
-- **不做 3D/GL**：需要 `echarts-gl`，内置包只有核心，渲染是空白 → 校验器直接报错；
+- **3D/GL 可用，但默认不用**：6 个模板（`bar3D/line3D/scatter3D/surface/globe/graphGL`）由
+  `echarts-gl@2.1.0` 提供，只有 spec 用到 GL 系列时才加载；需要浏览器 WebGL，无 GPU/离屏环境
+  可能空白。3D 会遮挡、读数不准，能二维说清就不要用；
+- **2D 地图可用**：`china-map`/`world-map`，地图 JS 是 `web/public/vendor/maps/*.js`，只在
+  用到时加载；地图数据来自 ECharts 4.9.0（Apache-2.0），是内部测试数据，不是正式审图版本。
+  对外的中国/世界地图需要换有审图号的标准地图数据并做合规审查；
 - **不做 custom 系列**：`renderItem` 是函数，JSON 存不下 → 报错并建议等价二维表达；
-- **不做地图**：`registerMap` 需要在 JS 里注册 GeoJSON，中国地图另有审图号合规问题；
-- **页面 ≤480KB**：产物面板在 512KB 处截断预览，超了图就不渲染。超了先聚合/减列，
+- **页面 ≤480KB**：产物面板在 512KB 处截断预览，超了图就不渲染；GL 引擎是独立文件，
+  不占这个预算。超了先聚合/减列，
   不要靠 `bind.limit` 硬截（那会让图说谎）；
 - **导出 PNG 在浏览器里做**：不引入 Node/Chromium 服务端渲染。要给 Word/PPT 嵌图，
   目前是"打开产物 → 点 PNG → 插入"，不是自动的；

@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 
+import { CitedText, SourcesPanel } from '../components/Citations'
 import { DialogHost } from '../components/Dialog'
 import { PromptHost, askConfirm, askText } from '../components/Prompt'
 import { Toasts } from '../components/Toasts'
@@ -17,6 +18,7 @@ import { ToolCard } from '../components/ToolCard'
 import { api } from '../lib/api'
 import { toolResultText } from '../lib/useAgent'
 import { resolveApiBase } from '../lib/endpoints'
+import { sliceCitations } from '../lib/citations'
 import { renderMarkdown } from '../lib/markdown'
 import { asRecord, isImageBlock, isTextBlock, isThinkingBlock, isToolCallBlock } from '../lib/protocol'
 import { MAX_ATTACHMENTS, MAX_FILES, MAX_UPLOAD_BYTES, prepareImageFile } from '../lib/images'
@@ -29,6 +31,7 @@ import type {
   ImageBlock,
   Message,
   ModelInfo,
+  UrlCitation,
   Usage,
 } from '../lib/protocol'
 import { navigate } from '../lib/router'
@@ -267,6 +270,15 @@ const ICON_PATHS: Record<string, ReactNode> = {
       <circle cx="5.5" cy="12" r="1.2" fill="currentColor" stroke="none" />
       <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" />
       <circle cx="18.5" cy="12" r="1.2" fill="currentColor" stroke="none" />
+    </>
+  ),
+  // A fork: one dot branching off a line into a second head.
+  branch: (
+    <>
+      <circle cx="7" cy="5.5" r="2.2" />
+      <circle cx="7" cy="18.5" r="2.2" />
+      <circle cx="17" cy="8.5" r="2.2" />
+      <path d="M7 7.7v8.6M9.2 5.5H12a5 5 0 0 1 5 5v.8" />
     </>
   ),
   house: <path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-5h-4v5H5a1 1 0 0 1-1-1v-9.5Z" />,
@@ -1404,15 +1416,27 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
             </div>
             <div className="tb-actions">
               {view === 'chat' ? (
-                <button
-                  type="button"
-                  className={`wb-artifact-toggle${artifactsOpen ? ' is-active' : ''}`}
-                  onClick={() => setArtifactsOpen((value) => !value)}
-                  title="产物"
-                >
-                  <Icon name="book" size={15} />
-                  产物
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="wb-branch-session"
+                    onClick={() => agent.cloneSession()}
+                    disabled={agent.isStreaming || agent.transcript.length === 0}
+                    title="创建分支：把当前对话复制到新会话，之后的提问互不影响"
+                  >
+                    <Icon name="branch" size={15} />
+                    创建分支
+                  </button>
+                  <button
+                    type="button"
+                    className={`wb-artifact-toggle${artifactsOpen ? ' is-active' : ''}`}
+                    onClick={() => setArtifactsOpen((value) => !value)}
+                    title="产物"
+                  >
+                    <Icon name="book" size={15} />
+                    产物
+                  </button>
+                </>
               ) : null}
               <span className="tb-divider" />
               <button
@@ -3158,11 +3182,14 @@ function TurnAnswer({
   sessionFile,
   feedback,
   onFeedback,
+  onBranch,
 }: {
   turn: ChatTurn
   sessionFile?: string
   feedback: Record<number, number>
   onFeedback: (timestamp: number, rating: number) => void
+  /** Present when this answer exists in the session file, i.e. can be branched. */
+  onBranch?: () => void
 }) {
   // Hooks run before any early return so a turn that gains text mid-stream keeps
   // the same hook order as one that already has it.
@@ -3209,20 +3236,46 @@ function TurnAnswer({
     }
   }
   if (blocks.length === 0) return null
+  // Citation offsets count characters across the answer's text blocks, so each
+  // block carries the offset it starts at.
+  let textCursor = 0
+  const answerBlocks = blocks.map((block) => {
+    const start = textCursor
+    textCursor += block.text.length
+    return { block, start }
+  })
   return (
     <>
       <div className="wb-msg-content">
-        {blocks.map((block, index) => (
-          <div
-            className="wb-md"
-            key={index}
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(block.text) }}
-          />
-        ))}
+        {answerBlocks.map(({ block, start }, index) => {
+          const citations = sliceCitations(final?.annotations, start, block.text.length)
+          if (citations.length > 0) {
+            return <CitedText key={index} text={block.text} citations={citations} />
+          }
+          return (
+            <div
+              className="wb-md"
+              key={index}
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(block.text) }}
+            />
+          )
+        })}
+        <SourcesPanel rounds={final?.serverToolCalls} />
       </div>
       <div className="wb-msg-foot">
           {usage ? <span className="num">{usage}</span> : null}
           <div className="wb-msg-actions">
+            {onBranch ? (
+              <button
+                type="button"
+                className="wb-copy"
+                onClick={onBranch}
+                title="在新对话中分支"
+                aria-label="在新对话中分支"
+              >
+                <Icon name="branch" size={13} />
+              </button>
+            ) : null}
             <button
               type="button"
               className="wb-copy"
@@ -3344,6 +3397,26 @@ function WbTranscript({
   }, [agent.isStreaming])
   const turns = useMemo(() => buildTurns(visible, agent.isStreaming), [visible, agent.isStreaming])
 
+  // Branch points arrive as session entries; messages are matched back to them
+  // by role + timestamp, the same identity the feedback buttons use.
+  const branchEntryIds = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const point of agent.branchPoints) {
+      if (typeof point.timestamp !== 'number') continue
+      map.set(`${point.role}:${point.timestamp}`, point.entryId)
+    }
+    return map
+  }, [agent.branchPoints])
+
+  /** Branch *at* this answer: the new conversation keeps it, so the next prompt differs. */
+  const branchFrom = (turn: ChatTurn): (() => void) | undefined => {
+    const final = turn.final?.message
+    if (!final || final.role !== 'assistant' || typeof final.timestamp !== 'number') return undefined
+    const entryId = branchEntryIds.get(`assistant:${final.timestamp}`)
+    if (!entryId) return undefined
+    return () => agent.fork(entryId, 'at')
+  }
+
   return (
     <div
       className="wb-messages"
@@ -3394,6 +3467,7 @@ function WbTranscript({
                     sessionFile={sessionFile}
                     feedback={feedback}
                     onFeedback={onFeedback}
+                    onBranch={branchFrom(turn)}
                   />
                 </div>
               </div>
@@ -3459,6 +3533,15 @@ function WbMessage({
       if (mode === 'answer') return isTextBlock(block)
       return true
     })
+    // Citation offsets are relative to the concatenated answer text, so every
+    // text block needs to know where it starts before its spans can be sliced.
+    const textOffsets = new Map<ContentBlock, number>()
+    let textCursor = 0
+    for (const block of assistant.content) {
+      if (!isTextBlock(block)) continue
+      textOffsets.set(block, textCursor)
+      textCursor += block.text.length
+    }
     return (
       <div className={`wb-msg-ai${mode === 'answer' ? ' is-answer' : ''}`}>
         <span className="wb-msg-avatar" aria-hidden="true">
@@ -3479,8 +3562,18 @@ function WbMessage({
                 block={block}
                 toolExecutions={toolExecutions}
                 streaming={streaming}
+                citations={
+                  isTextBlock(block)
+                    ? sliceCitations(
+                        assistant.annotations,
+                        textOffsets.get(block) ?? 0,
+                        block.text.length,
+                      )
+                    : undefined
+                }
               />
             ))}
+            {mode !== 'process' ? <SourcesPanel rounds={assistant.serverToolCalls} /> : null}
             {blocks.length === 0 && streaming ? <span className="wb-caret" /> : null}
             {assistant.errorMessage ? <div className="wb-msg-error">{assistant.errorMessage}</div> : null}
           </div>
@@ -3552,13 +3645,19 @@ function WbBlock({
   block,
   toolExecutions,
   streaming,
+  citations,
 }: {
   block: ContentBlock
   toolExecutions: Record<string, ToolExecution>
   streaming?: boolean
+  citations?: UrlCitation[]
 }) {
   if (isTextBlock(block)) {
     if (!block.text.trim()) return null
+    // Only the answer text is cited; thinking and tool output never are.
+    if (citations && citations.length > 0) {
+      return <CitedText text={block.text} citations={citations} />
+    }
     return <div className="wb-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(block.text) }} />
   }
   if (isThinkingBlock(block)) {

@@ -115,6 +115,47 @@ export interface UserMessage {
   timestamp?: number
 }
 
+/**
+ * Server-side citation for one span of the answer text.
+ *
+ * Offsets count characters into the assistant's concatenated `text` blocks, so
+ * a badge can be placed without parsing the text.
+ */
+export interface UrlCitation {
+  type?: string
+  url_citation?: {
+    url?: string
+    title?: string | null
+    start_index?: number
+    end_index?: number
+  }
+}
+
+/** One hit behind a server-side search or page read. */
+export interface ServerToolSource {
+  type?: string
+  url?: string
+  title?: string | null
+  snippet?: string | null
+}
+
+/** One server-executed tool call. It already ran; nothing here is re-executed. */
+export interface ServerToolCall {
+  index?: number
+  type?: string
+  kind?: string
+  action?: { type?: string; queries?: string[]; url?: string; pattern?: string }
+  status?: string
+  sources?: ServerToolSource[]
+}
+
+/** One reasoning round that may contain several server tool calls. */
+export interface ServerToolRound {
+  index?: number
+  reasoning_content?: string
+  calls?: ServerToolCall[]
+}
+
 export interface AssistantMessage {
   role: 'assistant'
   content: ContentBlock[]
@@ -122,6 +163,10 @@ export interface AssistantMessage {
   usage?: Usage
   errorMessage?: string
   timestamp?: number
+  /** Provider-side citations, display-only. */
+  annotations?: UrlCitation[]
+  /** Server-side search/fetch activity, display-only. */
+  serverToolCalls?: ServerToolRound[]
 }
 
 /** Content of a tool result: the server wraps it as `{content, details, terminate}`. */
@@ -234,6 +279,11 @@ export interface SwitchSessionCommand extends CommandBase {
 export interface ForkCommand extends CommandBase {
   type: 'fork'
   entryId: string
+  /**
+   * `before` (default) re-asks a user message: the branch ends just before it.
+   * `at` keeps the entry, which is how a branch starts *from* an answer.
+   */
+  position?: 'before' | 'at'
 }
 
 export interface CloneCommand extends CommandBase {
@@ -254,6 +304,11 @@ export interface GetSessionStatsCommand extends CommandBase {
 
 export interface GetForkMessagesCommand extends CommandBase {
   type: 'get_fork_messages'
+}
+
+/** Every message on the current path, so a client can branch from any of them. */
+export interface GetBranchPointsCommand extends CommandBase {
+  type: 'get_branch_points'
 }
 
 export interface GetCommandsCommand extends CommandBase {
@@ -327,6 +382,7 @@ export type ClientCommand =
   | GetMessagesCommand
   | GetSessionStatsCommand
   | GetForkMessagesCommand
+  | GetBranchPointsCommand
   | GetCommandsCommand
   | GetAvailableModelsCommand
   | SetModelCommand
@@ -650,6 +706,21 @@ export interface ForkMessageInfo {
 
 export interface ForkMessagesResponse {
   messages: ForkMessageInfo[]
+}
+
+/**
+ * One branchable message. `timestamp` is what a client matches against the
+ * message it is rendering; `text` is a preview, truncated server-side.
+ */
+export interface BranchPoint {
+  entryId: string
+  role: string
+  timestamp?: number
+  text?: string
+}
+
+export interface BranchPointsResponse {
+  points: BranchPoint[]
 }
 
 /* -------------------------------------------------------------------------- */

@@ -131,7 +131,8 @@ def test_check_rejects_hardcoded_data_and_unavailable_series(tmp_path):
     spec["charts"][0]["option"]["series"] = [{"type": "bar3D", "encode": {"x": "month", "y": "sales"}}]
     (specs / "b.spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
     text = _call(api, "chart_check", {"path": "charts/b.spec.json"})
-    assert "echarts-gl" in text
+    assert "bar3D" in text and "WebGL" in text
+    assert "错误必须改" not in text
 
     spec = _spec()
     spec["charts"][0]["option"]["series"] = [{"type": "custom", "renderItem": "x"}]
@@ -294,6 +295,77 @@ def _encode_columns(option: dict) -> list[str]:
     return out
 
 
+def test_chart_vendor_assets_are_present():
+    """The artifact panel serves these files; missing assets make GL/map pages blank."""
+    root = PLUGIN.parents[2] / "web" / "public" / "vendor"
+    gl = root / "echarts-gl.min.js"
+    china = root / "maps" / "china.js"
+    world = root / "maps" / "world.js"
+    assert gl.is_file() and gl.stat().st_size > 500_000
+    assert china.is_file() and china.stat().st_size > 40_000
+    assert world.is_file() and world.stat().st_size > 900_000
+
+
+def test_map_templates_load_map_assets_and_validate_map_names(tmp_path):
+    module = _plugin_module()
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    charts = tmp_path / "charts"
+    charts.mkdir()
+
+    for tid, map_name in (("china-map", "china"), ("world-map", "world")):
+        item = next(t for t in module.load_templates() if t["id"] == tid)
+        sample = item["sample"]
+        (data_dir / f"{tid}.csv").write_text(
+            ",".join(sample["columns"]) + "\n"
+            + "\n".join(",".join(str(cell) for cell in row) for row in sample["rows"]) + "\n",
+            encoding="utf-8",
+        )
+        spec = module.template_spec(item, data_path=f"data/{tid}.csv")
+        errors, _warnings = module.check_spec(spec, base_dir=charts, api=_FakeApi(tmp_path))
+        assert errors == [], f"{tid}: {errors}"
+        bound = module.bind_data(spec, api=_FakeApi(tmp_path))
+        html = module.render_html(spec, bound=bound)
+        assert f'var mapNames = ["{map_name}"];' in html
+        assert "var needsGl = false;" in html
+
+    bad = _spec()
+    bad["charts"][0]["option"]["series"] = [{"type": "map", "map": "not-a-map", "encode": {"name": "month", "value": "sales"}}]
+    errors, _warnings = module.check_spec(bad, base_dir=charts, api=_FakeApi(tmp_path))
+    assert any("没有内置数据" in item for item in errors)
+
+
+def test_gl_series_loads_the_gl_engine_only_when_needed(tmp_path):
+    _write_csv(tmp_path)
+    api = _tools(tmp_path)
+    specs = tmp_path / "charts"
+    specs.mkdir()
+
+    gl_spec = _spec(
+        bind={"path": "data/sales.csv", "columns": ["month", "sales", "margin"]},
+    )
+    gl_spec["charts"][0]["option"] = {
+        "dataset": {},
+        "xAxis3D": {"type": "category"},
+        "yAxis3D": {"type": "category"},
+        "zAxis3D": {"type": "value"},
+        "grid3D": {},
+        "series": [{"type": "bar3D", "encode": {"x": "month", "y": "sales", "z": "margin"}}],
+    }
+    (specs / "gl.spec.json").write_text(json.dumps(gl_spec, ensure_ascii=False), encoding="utf-8")
+    text = _call(api, "chart_render_html", {"path": "charts/gl.spec.json"})
+    assert "charts/gl.html" in text
+    gl_html = (specs / "gl.html").read_text(encoding="utf-8")
+    assert "var needsGl = true;" in gl_html
+    assert "/vendor/echarts-gl.min.js" in gl_html
+
+    flat_spec = _spec()
+    (specs / "flat.spec.json").write_text(json.dumps(flat_spec, ensure_ascii=False), encoding="utf-8")
+    _call(api, "chart_render_html", {"path": "charts/flat.spec.json"})
+    flat_html = (specs / "flat.html").read_text(encoding="utf-8")
+    assert "var needsGl = false;" in flat_html
+
+
 def test_template_library_is_well_formed_and_large():
     module = _plugin_module()
     templates = module.load_templates()
@@ -315,6 +387,38 @@ def test_template_library_is_well_formed_and_large():
             assert all(len(row) == len(columns) for row in sample.get("rows") or []), item["id"]
             for name in _encode_columns(item["option"]):
                 assert name in columns, f"{item['id']} 的 encode 引用了未绑定列 {name}"
+
+
+def test_dataset_templates_use_column_formatters_not_row_values():
+    """ECharts 6: under `dataset` + `encode`, `{c}` is the whole row.
+
+    A pie label rendered "自然搜索,38%" instead of "38%" because the template used
+    `{b} {c}%`.  The fix is `{@<column>}`, so this guards every dataset-bound
+    template and every `{@column}` reference along with it.
+    """
+    module = _plugin_module()
+    offenders: list[str] = []
+    for item in module.load_templates():
+        option = item["option"]
+        if not isinstance(option.get("dataset"), dict):
+            continue
+        columns = set((item.get("bind") or {}).get("columns") or [])
+        for index, series in enumerate(option.get("series") or []):
+            if not isinstance(series, dict) or not isinstance(series.get("encode"), dict):
+                continue
+            for key in ("label", "upperLabel", "endLabel"):
+                block = series.get(key)
+                formatter = block.get("formatter") if isinstance(block, dict) else None
+                if not isinstance(formatter, str):
+                    continue
+                if "{c}" in formatter:
+                    offenders.append(f"{item['id']} series[{index}].{key} 用了 {{c}}：{formatter!r}")
+                for name in re.findall(r"\{@([^}]+)\}", formatter):
+                    if name not in columns:
+                        offenders.append(
+                            f"{item['id']} series[{index}].{key} 引用了未绑定列 @{name}"
+                        )
+    assert offenders == [], "dataset+encode 模板的标签请用 {@列名}：" + "；".join(offenders)
 
 
 def test_every_template_renders_with_its_sample(tmp_path, ):

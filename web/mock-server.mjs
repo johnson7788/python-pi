@@ -253,6 +253,53 @@ const ANSWER_TEXT =
   '4. 最后弹出一个需要你确认的对话框\n\n' +
   '> 对话框在下方，回答后本次回合才会结束。\n'
 
+/**
+ * Citation fixture (opt-in: `MOCK_CITATIONS=1`).
+ *
+ * Offsets are computed from the scripted answer so the badges land on real
+ * sentence boundaries, exactly like a provider's `annotations` would.
+ */
+const CITATION_FIXTURES =
+  process.env.MOCK_CITATIONS === '1'
+    ? (() => {
+        const firstEnd = ANSWER_TEXT.indexOf('\n\n')
+        const secondEnd = ANSWER_TEXT.indexOf('\n\n', firstEnd + 2)
+        const doc = { url: 'https://example.com/protocol', title: '协议冻结说明 - docs' }
+        const news = { url: 'https://example.org/replay', title: '流式协议回放记录' }
+        return {
+          annotations: [
+            {
+              type: 'url_citation',
+              url_citation: { ...doc, start_index: 0, end_index: firstEnd },
+            },
+            {
+              type: 'url_citation',
+              url_citation: { ...news, start_index: firstEnd, end_index: secondEnd },
+            },
+          ],
+          serverToolCalls: [
+            {
+              index: 0,
+              reasoning_content: '先确认协议细节。',
+              calls: [
+                {
+                  index: 0,
+                  type: 'deepseek_web_search',
+                  kind: 'deep_search',
+                  action: { type: 'search', queries: ['rpc 协议 回放', 'mock 会话'] },
+                  status: 'completed',
+                  sources: [
+                    { type: 'url', ...doc, snippet: '协议字段按上游冻结，客户端只消费增量。' },
+                    { type: 'url', ...news, snippet: '回放覆盖思考、正文、工具调用与对话框。' },
+                  ],
+                },
+              ],
+            },
+          ],
+        }
+      })()
+    : null
+
 /* --------------------------------- server --------------------------------- */
 
 /** Per-connection state; the real server keeps one session per socket. */
@@ -406,6 +453,7 @@ async function replay(socket, session) {
       : null
     const finalAssistant = {
       role: 'assistant',
+      ...(CITATION_FIXTURES ?? {}),
       content: [
         { type: 'thinking', thinking: THINKING_TEXT },
         { type: 'text', text: ANSWER_TEXT },
@@ -534,6 +582,19 @@ async function handleCommand(socket, session, command) {
         }),
       )
       return
+    case 'get_branch_points':
+      send(
+        socket,
+        ok(id, type, {
+          points: session.messages.map((message, index) => ({
+            entryId: `entry-${index + 1}`,
+            role: message.role,
+            timestamp: message.timestamp ?? null,
+            text: String(message.content ?? '').slice(0, 200),
+          })),
+        }),
+      )
+      return
     case 'get_fork_messages':
       send(
         socket,
@@ -592,12 +653,19 @@ async function handleCommand(socket, session, command) {
       send(socket, ok(id, type))
       return
     case 'new_session':
-    case 'clone':
       session.messages = []
       session.state.sessionId = `mock-session-${Math.floor(Math.random() * 9000 + 1000)}`
       session.state.sessionFile = `/tmp/pi-mock/session-${session.state.sessionId}.jsonl`
-      session.state.sessionName = type === 'clone' ? '克隆的会话' : null
+      session.state.sessionName = null
       session.state.messageCount = 0
+      send(socket, ok(id, type, { cancelled: false }))
+      return
+    case 'clone':
+      // A clone is "fork at the current leaf": same conversation, new session id.
+      session.state.sessionId = `mock-session-${Math.floor(Math.random() * 9000 + 1000)}`
+      session.state.sessionFile = `/tmp/pi-mock/clone-${Date.now()}.jsonl`
+      session.state.sessionName = '克隆的会话'
+      session.state.messageCount = session.messages.length
       send(socket, ok(id, type, { cancelled: false }))
       return
     case 'switch_session': {
@@ -614,11 +682,18 @@ async function handleCommand(socket, session, command) {
       send(socket, ok(id, type, { cancelled: false }))
       return
     }
-    case 'fork':
-      session.messages = []
+    case 'fork': {
+      // Entry ids are positional (`entry-N`); "at" keeps that message,
+      // "before" drops it — the same rule the real runtime applies.
+      const match = /^entry-(\d+)$/.exec(String(command.entryId ?? ''))
+      const index = match ? Number(match[1]) : session.messages.length
+      session.messages = session.messages.slice(0, command.position === 'at' ? index : index - 1)
       session.state.sessionFile = `/tmp/pi-mock/fork-${Date.now()}.jsonl`
-      send(socket, ok(id, type, { text: '（mock）已分叉', cancelled: false }))
+      session.state.sessionName = '分支的会话'
+      session.state.messageCount = session.messages.length
+      send(socket, ok(id, type, { text: '', cancelled: false }))
       return
+    }
     case 'abort':
       session.aborted = true
       send(socket, ok(id, type))

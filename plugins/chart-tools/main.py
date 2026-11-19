@@ -14,7 +14,7 @@
 2. **手写 HTML 等于执行任意脚本**。产物面板的 iframe 给了 ``allow-scripts``（不然图是白的），
    所以 HTML 必须来自固定模板：模型只能提供 option（纯 JSON），不能插脚本。
 3. **样例里的图有一半错在"看起来没毛病"**。校验器把断轴、双轴、饼图超分类、
-   3D/GL 缺依赖这些点拦在渲染之前，而不是等用户看图时发现。
+   custom/未加载的 GL 引擎这些点拦在渲染之前，而不是等用户看图时发现。
 
 spec 文件（``charts/<名字>.spec.json``）的形状见 ``_skeleton`` 的产出；页脚所需的
 ``__meta`` / ``__data`` 由工具在渲染时注入，不写回 spec。
@@ -62,7 +62,10 @@ _DATE_LIKE = re.compile(
     re.I,
 )
 
-#: 需要 echarts-gl 的系列：内置包只有核心，画出来是空白。
+#: 目前内置的两份 2D 地图数据；地图 JS 由 web/public/vendor/maps 提供。
+MAP_NAMES = frozenset({"china", "world"})
+
+#: 需要 echarts-gl 的系列。HTML 只在 spec 用到这些类型时加载 GL 引擎。
 GL_TYPES = {
     "bar3D", "line3D", "lines3D", "scatter3D", "surface", "map3D", "globe",
     "graphGL", "scatterGL", "linesGL", "flowGL", "pictorialBar3D",
@@ -638,10 +641,22 @@ def check_spec(spec: dict[str, Any], *, base_dir: Path, api: PluginAPI) -> tuple
                     "或让模板库提供现成的渲染器。"
                 )
             if kind in GL_TYPES:
-                errors.append(
-                    f"{label} 用了 {kind}：需要 echarts-gl（WebGL），内置包只有核心，画出来是空白。"
-                    "3D/GL 图请在单独的页面里做，或用二维表达替代。"
+                warnings.append(
+                    f"{label} 用了 {kind}：需要 WebGL；无 GPU、远程桌面或离屏环境可能显示空白"
                 )
+            if kind in ("map", "map3D"):
+                map_name = str(item.get("map") or "").strip()
+                if not map_name:
+                    errors.append(f"{label} 是地图但没有写 series.map（只支持 china/world）")
+                elif map_name not in MAP_NAMES:
+                    errors.append(
+                        f"{label} 的 map={map_name!r} 没有内置数据；只支持 china/world"
+                    )
+                else:
+                    warnings.append(
+                        f"{label} 是 {map_name} 地图：地区名必须与 {map_name}.js 里的 properties.name 完全一致，"
+                        "对不上的地区会静默缺失"
+                    )
             encode = item.get("encode")
             if isinstance(encode, dict) and bound_columns:
                 for axis, field in encode.items():
@@ -663,6 +678,11 @@ def check_spec(spec: dict[str, Any], *, base_dir: Path, api: PluginAPI) -> tuple
             if item.get("renderItem") and not isinstance(item.get("renderItem"), str):
                 errors.append(f"{label} 的 renderItem 只能是字符串 id（函数无法进 JSON）")
 
+        geo = option.get("geo")
+        if isinstance(geo, dict) and geo.get("map"):
+            map_name = str(geo.get("map") or "").strip()
+            if map_name not in MAP_NAMES:
+                errors.append(f"{label} 的 geo.map={map_name!r} 没有内置数据；只支持 china/world")
         if isinstance(option.get("yAxis"), list) and len(option["yAxis"]) > 1:
             warnings.append(f"{label} 用了双轴：必须在图注里说明两条轴各自的单位和为什么放在一起")
         if option.get("dataZoom"):
@@ -891,6 +911,21 @@ HTML_TEMPLATE = """<!doctype html>
     var series = option.series;
     if (series && series.length) {
       (Array.isArray(series) ? series : [series]).forEach(function (item) {
+        // ECharts 6 的 map series 不消费 dataset/encode；把绑定数据的 name/value
+        // 转成 series.data。数据仍来自 __data（文件），不是模型手写。
+        if (item && item.type === 'map' && data && data.length && !item.data) {
+          var enc = item.encode || {};
+          var header = data[0] || [];
+          var nameKey = enc.name || enc.itemName || header[0];
+          var valueKey = enc.value || header[1];
+          var ni = header.indexOf(nameKey);
+          var vi = header.indexOf(valueKey);
+          if (ni >= 0 && vi >= 0) {
+            item.data = data.slice(1).map(function (row) {
+              return { name: row[ni], value: row[vi] };
+            });
+          }
+        }
         var line = item && item.markLine;
         if (!line) return;
         var label = line.label || (line.label = {});
@@ -918,13 +953,47 @@ HTML_TEMPLATE = """<!doctype html>
       entry.instance.setOption(buildOption(entry.option), true);
     });
   }
+  var GL_SERIES = {bar3D:1,line3D:1,lines3D:1,scatter3D:1,surface:1,map3D:1,globe:1,graphGL:1,scatterGL:1,linesGL:1,flowGL:1,pictorialBar3D:1};
+  function isGlOption(option) {
+    if (!option) return false;
+    if (option.globe || option.grid3D || option.geo3D || option.mapbox3D || option.xAxis3D || option.yAxis3D || option.zAxis3D) return true;
+    var series = option.series;
+    return (Array.isArray(series) ? series : [series]).some(function (item) {
+      return item && GL_SERIES[item.type];
+    });
+  }
   function exportPng(entry, index) {
     if (!entry.instance) return;
-    var url = entry.instance.getDataURL({
-      type: 'png',
-      pixelRatio: 2,
-      backgroundColor: dark ? '#0b1220' : '#ffffff'
-    });
+    var url = '';
+    if (entry.isGl) {
+      // ECharts GL 的 WebGL 层不在 getDataURL 里；把 WebGL canvas 和 zrender canvas 合成。
+      var canvases = entry.el.querySelectorAll('canvas');
+      if (canvases.length) {
+        var ratio = 2;
+        var width = 0, height = 0;
+        Array.prototype.forEach.call(canvases, function (canvas) {
+          width = Math.max(width, canvas.width);
+          height = Math.max(height, canvas.height);
+        });
+        var out = document.createElement('canvas');
+        out.width = width * ratio;
+        out.height = height * ratio;
+        var ctx = out.getContext('2d');
+        ctx.fillStyle = dark ? '#0b1220' : '#ffffff';
+        ctx.fillRect(0, 0, out.width, out.height);
+        Array.prototype.forEach.call(canvases, function (canvas) {
+          ctx.drawImage(canvas, 0, 0, out.width, out.height);
+        });
+        url = out.toDataURL('image/png');
+      }
+    }
+    if (!url) {
+      url = entry.instance.getDataURL({
+        type: 'png',
+        pixelRatio: 2,
+        backgroundColor: dark ? '#0b1220' : '#ffffff'
+      });
+    }
     var link = document.createElement('a');
     link.href = url;
     link.download = safeName(entry.title || page.title || ('chart-' + (index + 1))) + '.png';
@@ -985,7 +1054,8 @@ HTML_TEMPLATE = """<!doctype html>
         figure.appendChild(caption);
       }
       grid.appendChild(figure);
-      var entry = { el: box, option: chart.option || {}, title: chart.title, instance: null };
+      var entry = { el: box, option: chart.option || {}, title: chart.title, instance: null, isGl: isGlOption(chart.option) };
+      if (entry.isGl) button.title = '导出这张 3D 图（合成 WebGL 层，2 倍像素）';
       button.addEventListener('click', function () { exportPng(entry, index); });
       entries.push(entry);
     });
@@ -1026,21 +1096,101 @@ HTML_TEMPLATE = """<!doctype html>
     document.getElementById('theme').textContent = dark ? '浅色' : '深色';
     render();
   }
-  if (window.echarts) { mount(); return; }
+  var needsGl = __NEEDS_GL__;
   // 产物面板里由服务提供 /vendor/echarts.min.js；文件被单独下载后用 CDN 兜底。
-  var fallback = document.createElement('script');
-  fallback.src = 'https://unpkg.com/echarts@6.1.0/dist/echarts.min.js';
-  fallback.onload = mount;
-  fallback.onerror = function () {
-    fail('图表引擎没加载：请在 pi 工作台的「产物」面板里打开这个文件（/vendor/echarts.min.js 由服务提供），'
-      + '或联网后重新打开。图表数据本身已经在文件里，不需要联网。');
-  };
-  document.head.appendChild(fallback);
+  function ensureCore(next) {
+    if (window.echarts) { next(); return; }
+    var fallback = document.createElement('script');
+    fallback.src = 'https://unpkg.com/echarts@6.1.0/dist/echarts.min.js';
+    fallback.onload = next;
+    fallback.onerror = function () {
+      fail('图表引擎没加载：请在 pi 工作台的「产物」面板里打开这个文件（/vendor/echarts.min.js 由服务提供），'
+        + '或联网后重新打开。图表数据本身已经在文件里，不需要联网。');
+    };
+    document.head.appendChild(fallback);
+  }
+  var mapNames = __MAP_NAMES__;
+  // 地图数据是独立 JS（echarts.registerMap），只在使用地图时加载。
+  function ensureMaps(next) {
+    if (!mapNames.length) { next(); return; }
+    var index = 0;
+    function one() {
+      if (index >= mapNames.length) { next(); return; }
+      var name = mapNames[index++];
+      var script = document.createElement('script');
+      script.src = '/vendor/maps/' + name + '.js';
+      script.onload = one;
+      script.onerror = function () {
+        fail('地图数据没加载：/vendor/maps/' + name + '.js 不可用。');
+      };
+      document.head.appendChild(script);
+    }
+    one();
+  }
+  // GL 只在使用 3D/WebGL 系列时加载，避免所有 2D 图多下载 640KB。
+  function ensureGl(next) {
+    if (!needsGl) { next(); return; }
+    var local = document.createElement('script');
+    local.src = '/vendor/echarts-gl.min.js';
+    local.onload = next;
+    local.onerror = function () {
+      var cdn = document.createElement('script');
+      cdn.src = 'https://cdn.bootcdn.net/ajax/libs/echarts-gl/2.1.0/echarts-gl.min.js';
+      cdn.integrity = 'sha384-miMz2EuXApQuK7YdGzLaMqyC3IN3eFbVjpGaWxV8VFz9SikD2YJKVDbHOjEwlPV5';
+      cdn.crossOrigin = 'anonymous';
+      cdn.onload = next;
+      cdn.onerror = function () {
+        fail('3D 图表引擎没加载：/vendor/echarts-gl.min.js 不可用，CDN 也不可达。');
+      };
+      document.head.appendChild(cdn);
+    };
+    document.head.appendChild(local);
+  }
+  ensureCore(function () { ensureMaps(function () { ensureGl(mount); }); });
 })();
 </script>
 </body>
 </html>
 """
+
+
+def _needs_gl(spec: dict[str, Any]) -> bool:
+    """Whether any chart in the spec uses an echarts-gl series or 3D component."""
+    for chart in spec.get("charts") or []:
+        if not isinstance(chart, dict):
+            continue
+        option = chart.get("option")
+        if not isinstance(option, dict):
+            continue
+        if any(key in option for key in ("globe", "grid3D", "geo3D", "mapbox3D", "xAxis3D", "yAxis3D", "zAxis3D")):
+            return True
+        series = option.get("series")
+        for item in series if isinstance(series, list) else []:
+            if isinstance(item, dict) and item.get("type") in GL_TYPES:
+                return True
+    return False
+
+
+def _map_names(spec: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for chart in spec.get("charts") or []:
+        if not isinstance(chart, dict):
+            continue
+        option = chart.get("option")
+        if not isinstance(option, dict):
+            continue
+        geo = option.get("geo")
+        if isinstance(geo, dict) and str(geo.get("map") or "").strip() in MAP_NAMES:
+            names.append(str(geo["map"]).strip())
+        series = option.get("series")
+        for item in series if isinstance(series, list) else []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in ("map", "map3D"):
+                name = str(item.get("map") or "").strip()
+                if name in MAP_NAMES:
+                    names.append(name)
+    return list(dict.fromkeys(names))
 
 
 def render_html(spec: dict[str, Any], *, bound: dict[str, Any]) -> str:
@@ -1066,7 +1216,11 @@ def render_html(spec: dict[str, Any], *, bound: dict[str, Any]) -> str:
     }
     payload["__data"] = [bound["columns"]] + bound["rows"] if bound.get("columns") else None
     blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-    return HTML_TEMPLATE.replace("__SPEC__", blob)
+    return (
+        HTML_TEMPLATE.replace("__SPEC__", blob)
+        .replace("__NEEDS_GL__", "true" if _needs_gl(spec) else "false")
+        .replace("__MAP_NAMES__", json.dumps(_map_names(spec), ensure_ascii=False))
+    )
 
 
 # -- 工具 -----------------------------------------------------------------------------
@@ -1155,10 +1309,10 @@ def setup(api: PluginAPI) -> None:  # noqa: C901 - tools, one closure each
     @api.register_tool(
         name="chart_templates",
         description=(
-            "取图表模板（37 种，全部经过渲染测试）：柱/分组柱/横向条形/堆叠/百分比/子弹/瀑布、"
+            "取图表模板（45 种，全部经过渲染测试）：柱/分组柱/横向条形/堆叠/百分比/子弹/瀑布、"
             "折线/多指标/面积/阶梯/堆叠面积/区间带/目标线/主题河流、饼/环/玫瑰/双层环/矩形树/"
             "旭日/桑基/和弦、直方/箱线/蜂群/热力/日历/平行坐标、散点/气泡/双轴/关系图/矩阵、"
-            "仪表盘/极坐标/K线。不传参列出全部；传 id 取完整 spec 骨架（改 bind.path 和 title 即可）。"
+            "仪表盘/极坐标/K线、3D 柱/线/散点/曲面/地球/关系图、中国/世界 2D 地图。不传参列出全部；传 id 取完整 spec 骨架（改 bind.path 和 title 即可）。"
             "不要凭记忆写 option，先取模板再改。"
         ),
         parameters={
@@ -1277,7 +1431,7 @@ def setup(api: PluginAPI) -> None:  # noqa: C901 - tools, one closure each
         name="chart_check",
         description=(
             "只校验 charts/<名字>.spec.json，不写文件。检查 schema、绑定列、encode 引用的列、"
-            "custom/3D 这类画不出来的系列、手写数字、饼图分类过多、双轴未说明等。"
+            "custom/地图这类画不出来的系列、未加载 GL 引擎的 3D、手写数字、饼图分类过多、双轴未说明等。"
             "改完 spec 先跑它，再 chart_render_html。"
         ),
         parameters={

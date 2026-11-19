@@ -70,6 +70,7 @@ SUPPORTED_COMMANDS = frozenset(
         "get_tree",
         "get_last_assistant_text",
         "get_fork_messages",
+        "get_branch_points",
         "set_session_name",
         "get_commands",
     }
@@ -521,8 +522,14 @@ class RpcMode:
         entry_id = command.get("entryId")
         if not isinstance(entry_id, str) or not entry_id:
             return failure(request_id, "fork", "fork requires 'entryId'")
+        # "before" re-asks a user message (upstream's /fork); "at" keeps the
+        # entry, which is how a client branches *from* an answer instead of
+        # before a question.
+        position = command.get("position", "before")
+        if position not in ("before", "at"):
+            return failure(request_id, "fork", "fork 'position' must be 'before' or 'at'")
         runtime = self._require_runtime()
-        result = await runtime.fork(entry_id)
+        result = await runtime.fork(entry_id, position=position)
         return success(
             request_id,
             "fork",
@@ -773,6 +780,33 @@ class RpcMode:
             if getattr(message, "role", None) == "user":
                 messages.append({"entryId": entry.id, "text": _text_of(message)})
         return success(request_id, "get_fork_messages", {"messages": messages})
+
+    async def _cmd_get_branch_points(self, command: dict[str, Any], request_id: str | None):
+        """Every message on the current path, with the entry id needed to fork there.
+
+        ``get_fork_messages`` is upstream's user-message picker (fork *before* a
+        question).  A client that offers "branch from this answer" also needs the
+        assistant entries and the ids behind messages it already renders, so this
+        command reports the whole path in order.  ``timestamp`` lets a client
+        match an entry to the message object it is displaying without exposing
+        session internals.
+        """
+        points: list[dict[str, Any]] = []
+        for entry in self.session.session_manager.get_path():
+            entry_id = getattr(entry, "id", None)
+            message = getattr(entry, "message", None)
+            role = getattr(message, "role", None)
+            if not entry_id or not role:
+                continue
+            points.append(
+                {
+                    "entryId": entry_id,
+                    "role": role,
+                    "timestamp": getattr(message, "timestamp", None),
+                    "text": _text_of(message)[:200],
+                }
+            )
+        return success(request_id, "get_branch_points", {"points": points})
 
     async def _cmd_set_session_name(self, command: dict[str, Any], request_id: str | None):
         name = command.get("name")

@@ -1115,3 +1115,376 @@ async def test_a_stalled_stream_can_still_be_aborted() -> None:
 
     assert result.stop_reason == "aborted"
     assert result.error_message == "user cancelled"
+
+
+# --------------------------------------------------------------------------------------
+# Reasoning replay: history is dropped, the continuation prefix keeps it
+# --------------------------------------------------------------------------------------
+
+
+def _deepseek_model() -> Model:
+    return make_model(
+        api="openai-completions",
+        provider="deepseek-official",
+        base_url="https://api.deepseek.com",
+        reasoning=True,
+    )
+
+
+async def test_openai_drops_history_reasoning_but_keeps_tool_loop_reasoning() -> None:
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, content=openai_sse(openai_text_chunks()), headers=SSE_HEADERS)
+
+    model = _deepseek_model()
+    provider = OpenAiCompletionsProvider(client_factory=client_factory(handler))
+    plain_reply = AssistantMessage(
+        content=[
+            ThinkingContent(thinking="past reasoning", thinking_signature="reasoning_content"),
+            TextContent(text="answer one"),
+        ],
+        api=model.api,
+        provider=model.provider,
+        model=model.id,
+        usage=Usage(),
+        stop_reason="stop",
+        timestamp=2,
+    )
+    tool_reply = AssistantMessage(
+        content=[
+            ThinkingContent(thinking="why I call the tool", thinking_signature="reasoning_content"),
+            ToolCall(id="call_1", name="read", arguments={"path": "a"}),
+        ],
+        api=model.api,
+        provider=model.provider,
+        model=model.id,
+        usage=Usage(),
+        stop_reason="toolUse",
+        timestamp=4,
+    )
+    context = Context(
+        messages=[
+            UserMessage(content="first", timestamp=1),
+            plain_reply,
+            UserMessage(content="second", timestamp=3),
+            tool_reply,
+            ToolResultMessage(tool_call_id="call_1", tool_name="read", content=[TextContent(text="ok")], is_error=False, timestamp=5),
+            UserMessage(content="third", timestamp=6),
+        ]
+    )
+
+    await provider.stream(model, context, StreamOptions(api_key="k")).result()
+
+    messages = captured[0]["messages"]
+    history_reply = next(m for m in messages if m["role"] == "assistant" and m.get("content") == "answer one")
+    # A plain history turn carries no reasoning text.  The field itself stays as
+    # an empty string because DeepSeek requires it on assistant turns.
+    assert history_reply.get("reasoning_content") == ""
+    assert "reasoning_details" not in history_reply
+    tool_turn = next(m for m in messages if m["role"] == "assistant" and m.get("tool_calls"))
+    # A tool-loop turn keeps it: the call and its reasoning are one unit.
+    assert tool_turn["reasoning_content"] == "why I call the tool"
+
+
+async def test_openai_prefill_keeps_thinking_and_uses_beta_endpoint() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        captured["url"] = str(request.url)
+        return httpx.Response(200, content=openai_sse(openai_text_chunks()), headers=SSE_HEADERS)
+
+    model = _deepseek_model()
+    provider = OpenAiCompletionsProvider(client_factory=client_factory(handler))
+    prefill = AssistantMessage(
+        content=[
+            ThinkingContent(thinking="this round's reasoning", thinking_signature="reasoning_content"),
+            TextContent(text="杭州是"),
+        ],
+        api=model.api,
+        provider=model.provider,
+        model=model.id,
+        usage=Usage(),
+        stop_reason="length",
+        timestamp=2,
+    )
+    context = Context(messages=[UserMessage(content="介绍杭州", timestamp=1), prefill])
+
+    await provider.stream(model, context, StreamOptions(api_key="k")).result()
+
+    body = captured["body"]
+    tail = body["messages"][-1]
+    assert tail["role"] == "assistant"
+    assert tail["content"] == "杭州是"
+    assert tail["reasoning_content"] == "this round's reasoning"
+    # Continuation needs the prefix flag, and DeepSeek only accepts it on beta.
+    assert tail["prefix"] is True
+    assert captured["url"] == "https://api.deepseek.com/beta/chat/completions"
+
+
+async def test_openai_empty_prefill_is_dropped_and_stays_on_stable_endpoint() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        captured["url"] = str(request.url)
+        return httpx.Response(200, content=openai_sse(openai_text_chunks()), headers=SSE_HEADERS)
+
+    model = _deepseek_model()
+    provider = OpenAiCompletionsProvider(client_factory=client_factory(handler))
+    empty_prefill = AssistantMessage(
+        content=[TextContent(text="   ")],
+        api=model.api,
+        provider=model.provider,
+        model=model.id,
+        usage=Usage(),
+        stop_reason="length",
+        timestamp=2,
+    )
+    context = Context(messages=[UserMessage(content="介绍杭州", timestamp=1), empty_prefill])
+
+    await provider.stream(model, context, StreamOptions(api_key="k")).result()
+
+    body = captured["body"]
+    # An empty prefix would be rejected by the server, so the tail is not sent.
+    assert all(message["role"] != "assistant" for message in body["messages"])
+    assert not any(message.get("prefix") for message in body["messages"])
+    assert captured["url"] == "https://api.deepseek.com/chat/completions"
+
+
+async def test_openai_captures_annotations_and_server_tool_calls() -> None:
+    citation = {
+        "type": "url_citation",
+        "url_citation": {
+            "url": "https://api-docs.deepseek.com/news",
+            "title": "DeepSeek Docs",
+            "start_index": 0,
+            "end_index": 6,
+        },
+    }
+    round_one = {
+        "index": 0,
+        "reasoning_content": "search first",
+        "calls": [
+            {
+                "index": 0,
+                "type": "deepseek_web_search",
+                "kind": "deep_search",
+                "action": {"type": "search", "queries": ["deepseek"]},
+                "status": "completed",
+                "sources": [{"type": "url", "url": "https://example.com", "title": "Example", "snippet": "snip"}],
+            }
+        ],
+    }
+    chunks = [
+        {"id": "cc_9", "model": "test-model", "choices": [{"index": 0, "delta": {"content": "answer"}}]},
+        {
+            "id": "cc_9",
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "content": "",
+                        "annotations": [citation],
+                        "server_tool_calls": [round_one],
+                    },
+                }
+            ],
+        },
+        # The same payload repeated must not duplicate anything.
+        {
+            "id": "cc_9",
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "content": "",
+                        "annotations": [citation],
+                        "server_tool_calls": [round_one],
+                    },
+                }
+            ],
+        },
+        {"id": "cc_9", "model": "test-model", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+    ]
+    model = _deepseek_model()
+    provider = OpenAiCompletionsProvider(
+        client_factory=client_factory(sse_response(openai_sse(chunks)))
+    )
+
+    message = await provider.stream(model, assistant_user_context(), StreamOptions(api_key="k")).result()
+
+    assert message.annotations == [citation]
+    assert message.server_tool_calls == [round_one]
+
+
+async def test_anthropic_drops_history_thinking_except_tool_loops_and_prefill() -> None:
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, content=anthropic_sse(anthropic_text_events()), headers=SSE_HEADERS)
+
+    model = make_model()
+    provider = AnthropicMessagesProvider(client_factory=client_factory(handler))
+
+    def reply(content: list[Any], stop_reason: str, timestamp: int) -> AssistantMessage:
+        return AssistantMessage(
+            content=content,
+            api=model.api,
+            provider=model.provider,
+            model=model.id,
+            usage=Usage(),
+            stop_reason=stop_reason,
+            timestamp=timestamp,
+        )
+
+    tool_reply = reply(
+        [
+            ThinkingContent(thinking="out loud", thinking_signature="sig-tool"),
+            ToolCall(id="call_1", name="read", arguments={}),
+        ],
+        "toolUse",
+        2,
+    )
+    history = Context(
+        messages=[
+            UserMessage(content="one", timestamp=1),
+            reply(
+                [
+                    ThinkingContent(thinking="old reasoning", thinking_signature="sig-old"),
+                    TextContent(text="answer one"),
+                ],
+                "stop",
+                2,
+            ),
+            UserMessage(content="two", timestamp=3),
+            tool_reply,
+            ToolResultMessage(tool_call_id="call_1", tool_name="read", content=[TextContent(text="ok")], is_error=False, timestamp=4),
+            UserMessage(content="three", timestamp=5),
+        ]
+    )
+    await provider.stream(model, history, StreamOptions(api_key="k")).result()
+
+    blocks = [block for m in captured[0]["messages"] for block in (m["content"] if isinstance(m["content"], list) else [])]
+    thinking_texts = [block.get("thinking") for block in blocks if block.get("type") == "thinking"]
+    # Plain history turn: dropped.  Tool-loop turn: kept (the result pairs with it).
+    assert thinking_texts == ["out loud"]
+
+    prefill = reply([ThinkingContent(thinking="mid", thinking_signature="sig-mid"), TextContent(text="杭州是")], "length", 2)
+    await provider.stream(
+        model, Context(messages=[UserMessage(content="go", timestamp=1), prefill]), StreamOptions(api_key="k")
+    ).result()
+    tail = captured[1]["messages"][-1]
+    assert tail["role"] == "assistant"
+    assert {"type": "thinking", "thinking": "mid", "signature": "sig-mid"} in tail["content"]
+    assert {"type": "text", "text": "杭州是"} in tail["content"]
+
+
+def test_assistant_message_json_roundtrips_annotations() -> None:
+    citation = {"type": "url_citation", "url_citation": {"url": "https://x.test", "title": "X", "start_index": 0, "end_index": 3}}
+    calls = [{"index": 0, "calls": []}]
+    message = AssistantMessage(
+        content=[TextContent(text="abc")],
+        api="openai-completions",
+        provider="deepseek-official",
+        model="deepseek-flash",
+        usage=Usage(),
+        stop_reason="stop",
+        timestamp=1,
+        annotations=[citation],
+        server_tool_calls=calls,
+    )
+
+    data = pi_ai.message_to_json(message)
+    assert data["annotations"] == [citation]
+    assert data["serverToolCalls"] == calls
+
+    restored = pi_ai.message_from_json(data)
+    assert restored.annotations == [citation]
+    assert restored.server_tool_calls == calls
+
+
+async def test_openai_declares_server_tools_from_compat() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, content=openai_sse(openai_text_chunks()), headers=SSE_HEADERS)
+
+    model = make_model(
+        api="openai-completions",
+        provider="deepseek-official",
+        base_url="https://api.deepseek.com",
+        reasoning=True,
+        compat={"serverTools": ["deepseek_web_search", "not_a_real_tool"]},
+    )
+    provider = OpenAiCompletionsProvider(client_factory=client_factory(handler))
+    context = Context(
+        messages=[UserMessage(content="hi", timestamp=1)],
+        tools=[pi_ai.Tool(name="read", description="Read a file")],
+    )
+
+    await provider.stream(model, context, StreamOptions(api_key="k")).result()
+
+    tools = captured["body"]["tools"]
+    # The client tool keeps its function wrapper; the server tool has no schema.
+    assert tools[0]["type"] == "function"
+    assert tools[1] == {"type": "deepseek_web_search", "name": "deepseek_web_search"}
+    # Unknown names are dropped rather than forwarded into a 422.
+    assert len(tools) == 2
+
+
+async def test_openai_omits_server_tools_when_unconfigured() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, content=openai_sse(openai_text_chunks()), headers=SSE_HEADERS)
+
+    model = make_model(api="openai-completions", provider="deepseek-official", base_url="https://api.deepseek.com")
+    provider = OpenAiCompletionsProvider(client_factory=client_factory(handler))
+
+    await provider.stream(model, assistant_user_context(), StreamOptions(api_key="k")).result()
+
+    assert "tools" not in captured["body"]
+
+
+async def test_openai_does_not_prefill_a_reply_that_used_server_tools() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        captured["url"] = str(request.url)
+        return httpx.Response(200, content=openai_sse(openai_text_chunks()), headers=SSE_HEADERS)
+
+    model = _deepseek_model()
+    provider = OpenAiCompletionsProvider(client_factory=client_factory(handler))
+    searched = AssistantMessage(
+        content=[TextContent(text="杭州是")],
+        api=model.api,
+        provider=model.provider,
+        model=model.id,
+        usage=Usage(),
+        stop_reason="length",
+        timestamp=2,
+        server_tool_calls=[{"index": 0, "calls": []}],
+    )
+
+    await provider.stream(
+        model,
+        Context(messages=[UserMessage(content="介绍杭州", timestamp=1), searched]),
+        StreamOptions(api_key="k"),
+    ).result()
+
+    body = captured["body"]
+    # Continuing would be a 400, so the tail goes out as ordinary history: the
+    # server answers the question again instead of resuming it.
+    assert body["messages"][-1]["role"] == "assistant"
+    assert body["messages"][-1]["content"] == "杭州是"
+    assert not any(message.get("prefix") for message in body["messages"])
+    assert captured["url"] == "https://api.deepseek.com/chat/completions"

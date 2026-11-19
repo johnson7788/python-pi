@@ -1,10 +1,10 @@
 # chart-tools
 
-把工作区的数据画成**可交付的 ECharts 6 HTML**。四个工具，外加 37 个渲染过的模板：
+把工作区的数据画成**可交付的 ECharts 6 HTML**。四个工具，外加 45 个渲染过的模板：
 
 | 工具 | 输入 | 输出 |
 |---|---|---|
-| `chart_templates` | 可选 id / family / 数据文件 | 37 种图的完整 spec；可按族列出、可校验列名 |
+| `chart_templates` | 可选 id / family / 数据文件 | 45 种图的完整 spec；可按族列出、可校验列名 |
 | `chart_data_profile` | 数据文件（CSV/TSV/XLSX/JSON） | 列类型/缺失/基数/范围 + 选型建议 + 可改的 spec 骨架 |
 | `chart_check` | spec 路径 | error/warning 列表，不写文件 |
 | `chart_render_html` | spec 路径 | `charts/<名字>.html`（交互图 + PNG/CSV 导出 + 页脚溯源） |
@@ -22,7 +22,7 @@
 （不给的话图是白的），所以 HTML 必须来自固定模板——模型只提供 option（纯 JSON），
 不能插脚本、不能写 `renderItem`。
 
-第三个是**"图型选错"比"画得丑"更伤**：校验器会拦 custom/3D/GL（当前环境画不出来）、
+第三个是**"图型选错"比"画得丑"更伤**：校验器会拦 custom、未加载 GL 引擎的 3D 系列、
 饼图超 6 类、双轴没说明、encode 引用了未绑定的列。
 
 ## spec
@@ -47,8 +47,13 @@
 - 支持 `.csv/.tsv/.xlsx/.json`；旧版 `.xls` 请另存（会明确报错）；
 - 单文件 ≤20MB、扫描 ≤20 万行、**绑定后 ≤5000 行**；超了要求 `bind.aggregate` 或明确 `bind.limit`；
 - 生成的 HTML **≤480KB**（产物面板在 512KB 处截断预览，超了图不渲染）；
-- 不做 3D/GL（需要 echarts-gl）、不做 custom 系列（`renderItem` 是函数）、不做地图
-  （`registerMap` 要在 JS 里注册 GeoJSON，中国地图另有审图号合规）；
+- 3D/GL 由 `echarts-gl@2.1.0` 提供：6 个模板 `bar3D/line3D/scatter3D/surface/globe/graphGL`；
+  需要浏览器支持 WebGL，无 GPU/离屏环境可能空白。GL 引擎是独立静态资源，不占 480KB HTML 预算；
+- 2D 地图提供 `china-map`/`world-map` 两个模板，地图数据是 `web/public/vendor/maps/*.js`
+  里的 `echarts.registerMap`，只在使用地图时加载；地区名必须与 GeoJSON 的 `properties.name` 一致；
+- 地图数据来自 ECharts 4.9.0（Apache-2.0），**不是正式审图版本**；对外的中国/世界地图需要
+  换成有审图号的标准地图数据并做合规审查；
+- 不做 custom 系列（`renderItem` 是函数）；
 - 导出 PNG 在浏览器里完成（`getDataURL`），没有服务端截图。
 
 ## 本地验证
@@ -71,4 +76,7 @@ python3 plugin-kit/pikit.py dev plugins/chart-tools --tool chart_data_profile \
 后重启即自动加载（不需要再点「启用」）。其他环境用插件页上传 zip。
 
 产物 HTML 依赖 `web/public/vendor/echarts.min.js`（见该目录 README）；没有它时页面会尝试
-从 unpkg 兜底，离线环境会显示一句明确的提示而不是白屏。
+从 unpkg 兜底，离线环境会显示一句明确的提示而不是白屏。3D/GL 模板额外依赖
+`web/public/vendor/echarts-gl.min.js`（2.1.0，约 625KB），只在 spec 用到 GL 系列时加载；
+本地没有时尝试 BootCDN 兜底。地图模板依赖 `web/public/vendor/maps/china.js` 和
+`world.js`（ECharts 4.9.0 map data，Apache-2.0），只在 spec 用到地图时加载。
