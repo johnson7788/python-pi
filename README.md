@@ -595,4 +595,4 @@ docs/research/                            上游逐层调研笔记
 
 ## 许可
 
-本项目为公司内部使用。上游 `pi` 为 MIT，本移植版沿用 MIT，见 [`LICENSE`](LICENSE)。
+本项目为移植版沿用 MIT，见 [`LICENSE`](LICENSE)。
