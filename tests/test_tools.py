@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from pi_ai import ImageContent
 
+from pi_coding_agent.user_questions import QuestionBroker
 from pi_coding_agent.tools.bash import build_shell_env
 from pi_coding_agent.tools import (
     BUILTIN_TOOL_NAMES,
@@ -737,13 +738,33 @@ def test_truncate_line_boundary() -> None:
 
 
 def test_builtin_tool_names_and_defaults(tmp_path: Path) -> None:
-    assert BUILTIN_TOOL_NAMES == ("read", "bash", "edit", "write", "present", "grep", "find", "ls")
-    assert DEFAULT_ACTIVE_TOOL_NAMES == ("read", "bash", "edit", "write", "present")
+    assert BUILTIN_TOOL_NAMES == (
+        "read",
+        "bash",
+        "edit",
+        "write",
+        "present",
+        "grep",
+        "find",
+        "ls",
+        "ask_user_question",
+    )
+    assert DEFAULT_ACTIVE_TOOL_NAMES == (
+        "read",
+        "bash",
+        "edit",
+        "write",
+        "present",
+        "ask_user_question",
+    )
 
+    # Without a human channel the question tool is absent, not broken.
     tools = create_builtin_tools(str(tmp_path))
     assert [tool.name for tool in tools] == ["read", "bash", "edit", "write", "present"]
 
-    everything = create_builtin_tools(str(tmp_path), BUILTIN_TOOL_NAMES)
+    everything = create_builtin_tools(
+        str(tmp_path), BUILTIN_TOOL_NAMES, question_broker=QuestionBroker()
+    )
     assert [tool.name for tool in everything] == list(BUILTIN_TOOL_NAMES)
 
     with pytest.raises(ValueError, match="Unknown built-in tool"):

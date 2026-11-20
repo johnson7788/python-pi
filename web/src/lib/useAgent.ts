@@ -13,6 +13,10 @@ import type {
   ImageAttachment,
   Message,
   ModelInfo,
+  PendingQuestion,
+  QuestionAnswer,
+  UserQuestionRequestEvent,
+  UserQuestionSettledEvent,
   ServerEvent,
   SessionInfo,
   SessionStats,
@@ -97,6 +101,10 @@ interface AgentStore {
   branchPoints: BranchPoint[]
   stats: SessionStats | null
   dialogs: ExtensionDialog[]
+  /** Questions that can still be answered, live or replayed from the transcript. */
+  questions: PendingQuestion[]
+  /** Which question the composer card is currently showing. */
+  activeQuestionId: string | null
   toasts: Toast[]
   errors: InlineError[]
   statusTexts: Record<string, string>
@@ -124,6 +132,8 @@ const INITIAL_STORE: AgentStore = {
   branchPoints: [],
   stats: null,
   dialogs: [],
+  questions: [],
+  activeQuestionId: null,
   toasts: [],
   errors: [],
   statusTexts: {},
@@ -152,6 +162,10 @@ type Action =
   | { type: 'workspace_changed' }
   | { type: 'optimistic_model'; model: ModelInfo }
   | { type: 'optimistic_thinking'; level: string }
+  | { type: 'questions_sync'; questions: PendingQuestion[] }
+  | { type: 'question_upsert'; question: PendingQuestion }
+  | { type: 'question_settled'; callId: string }
+  | { type: 'question_activate'; callId: string | null }
 
 /* -------------------------------------------------------------------------- */
 /* Small helpers                                                               */
@@ -388,6 +402,46 @@ function pushError(state: AgentStore, source: string, message: string): AgentSto
 /* Reducer                                                                     */
 /* -------------------------------------------------------------------------- */
 
+/** Replace the store's question list with the server's authoritative view. */
+function syncQuestions(state: AgentStore, incoming: PendingQuestion[]): AgentStore {
+  // The server derives this from the transcript, so it is complete: an `open`
+  // call is in the log before its tool runs, and a settled one is gone. Trusting
+  // it is what makes a reconnect drop a card whose answer was already delivered.
+  const questions = [...incoming].sort((a, b) =>
+    a.state === b.state ? 0 : a.state === 'open' ? -1 : 1,
+  )
+  const active =
+    state.activeQuestionId && questions.some((question) => question.callId === state.activeQuestionId)
+      ? state.activeQuestionId
+      : questions.find((question) => question.state === 'open')?.callId ?? null
+  return { ...state, questions, activeQuestionId: active }
+}
+
+/** Insert or replace one answerable question, newest live question first. */
+function upsertQuestion(state: AgentStore, question: PendingQuestion): AgentStore {
+  const others = state.questions.filter((item) => item.callId !== question.callId)
+  const questions = [question, ...others].sort((a, b) =>
+    a.state === b.state ? 0 : a.state === 'open' ? -1 : 1,
+  )
+  return {
+    ...state,
+    questions,
+    // Only an unanswered (live) question takes over the composer; a question
+    // that merely became answerable again must not steal focus.
+    activeQuestionId: state.activeQuestionId ?? (question.state === 'open' ? question.callId : null),
+  }
+}
+
+/** Drop a settled question and move the card to the next one. */
+function removeQuestion(state: AgentStore, callId: string): AgentStore {
+  const questions = state.questions.filter((question) => question.callId !== callId)
+  return {
+    ...state,
+    questions,
+    activeQuestionId: state.activeQuestionId === callId ? questions[0]?.callId ?? null : state.activeQuestionId,
+  }
+}
+
 function reduceServerEvent(state: AgentStore, event: ServerEvent): AgentStore {
   const loose = asRecord(event)
   switch (loose.type) {
@@ -618,6 +672,29 @@ function reduceServerEvent(state: AgentStore, event: ServerEvent): AgentStore {
       }
     }
 
+    case 'user_question_request': {
+      const request = event as UserQuestionRequestEvent
+      return upsertQuestion(state, {
+        callId: request.callId,
+        questions: request.questions,
+        state: 'open',
+        blocking: request.blocking,
+        ...(typeof request.timeoutMs === 'number' ? { remainingMs: request.timeoutMs } : {}),
+      })
+    }
+
+    case 'user_question_settled': {
+      const settled = event as UserQuestionSettledEvent
+      if (settled.outcome === 'pending') {
+        // A timeout releases the model but not the question: keep the card,
+        // drop the countdown, and let the user answer it later.
+        const current = state.questions.find((question) => question.callId === settled.callId)
+        if (!current) return state
+        return upsertQuestion(state, { ...current, state: 'continued', remainingMs: undefined })
+      }
+      return removeQuestion(state, settled.callId)
+    }
+
     case 'extension_ui_request':
       return reduceExtensionRequest(state, event as ExtensionUiRequest)
 
@@ -655,8 +732,19 @@ function reduceResponse(
   }
   const data = asRecord(response.data)
   switch (response.command) {
-    case 'get_state':
-      return { ...state, state: response.data as AgentState }
+    case 'answer_question': {
+      const result = asRecord(response.data)
+      const callId = typeof result.callId === 'string' ? result.callId : null
+      // Dismissing a timed question settles as `pending`: the model is released
+      // but the question stays answerable, so the card must not disappear.
+      if (result.outcome === 'pending') return state
+      return callId ? removeQuestion(state, callId) : state
+    }
+    case 'get_state': {
+      const data = response.data as AgentState
+      const questions = data.pendingQuestions ?? []
+      return syncQuestions({ ...state, state: data }, questions)
+    }
     case 'get_messages': {
       const messages = Array.isArray(data.messages) ? (data.messages as Message[]) : []
       return transcriptFromMessages(state, messages)
@@ -809,6 +897,14 @@ function reducer(state: AgentStore, action: Action): AgentStore {
       return { ...state, errors: state.errors.filter((error) => error.id !== action.id) }
     case 'dismiss_dialog':
       return { ...state, dialogs: state.dialogs.filter((dialog) => dialog.id !== action.id) }
+    case 'questions_sync':
+      return syncQuestions(state, action.questions)
+    case 'question_upsert':
+      return upsertQuestion(state, action.question)
+    case 'question_settled':
+      return removeQuestion(state, action.callId)
+    case 'question_activate':
+      return { ...state, activeQuestionId: action.callId }
     case 'local_error':
       return pushError(state, action.source, action.message)
     case 'workspace_changed':
@@ -827,6 +923,8 @@ function reducer(state: AgentStore, action: Action): AgentStore {
         toolExecutions: {},
         streamingKey: null,
         pendingUser: [],
+        questions: [],
+        activeQuestionId: null,
         stats: null,
       }
     case 'optimistic_model':
@@ -876,6 +974,9 @@ export interface AgentApi {
   branchPoints: BranchPoint[]
   stats: SessionStats | null
   dialogs: ExtensionDialog[]
+  /** Questions that can still be answered, newest live one first. */
+  questions: PendingQuestion[]
+  activeQuestionId: string | null
   toasts: Toast[]
   errors: InlineError[]
   statusTexts: Record<string, string>
@@ -898,6 +999,10 @@ export interface AgentApi {
   setAutoCompaction: (enabled: boolean) => void
   setSessionName: (name: string) => void
   respondDialog: (id: string, response: Omit<ExtensionUiResponse, 'type' | 'id'>) => void
+  activateQuestion: (callId: string | null) => void
+  claimQuestion: (callId: string) => void
+  questionTimeout: (callId: string) => void
+  answerQuestion: (callId: string, answers: QuestionAnswer[], cancelled?: boolean) => void
   dismissToast: (id: string) => void
   dismissError: (id: string) => void
   consumeEditorText: () => void
@@ -1131,6 +1236,8 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
       branchPoints: store.branchPoints,
       stats: store.stats,
       dialogs: store.dialogs,
+      questions: store.questions,
+      activeQuestionId: store.activeQuestionId,
       toasts: store.toasts,
       errors: store.errors,
       statusTexts: store.statusTexts,
@@ -1182,6 +1289,17 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
         send(customInstructions ? { type: 'compact', customInstructions } : { type: 'compact' }),
       setAutoCompaction: (enabled: boolean) => send({ type: 'set_auto_compaction', enabled }),
       setSessionName: (name: string) => send({ type: 'set_session_name', name }),
+      activateQuestion: (callId: string | null) =>
+        dispatchRef.current({ type: 'question_activate', callId }),
+      claimQuestion: (callId: string) => send({ type: 'claim_question', callId }),
+      questionTimeout: (callId: string) => send({ type: 'question_timeout', callId }),
+      answerQuestion: (callId: string, answers: QuestionAnswer[], cancelled = false) => {
+        // The card collapses from the server's own settled event (or the answer
+        // response for a late reply).  Removing it optimistically would hide a
+        // question that a dismissed timed wait keeps answerable.
+        if (cancelled) dispatchRef.current({ type: 'question_activate', callId: null })
+        send({ type: 'answer_question', callId, answers, ...(cancelled ? { cancelled: true } : {}) })
+      },
       respondDialog: (id: string, response: Omit<ExtensionUiResponse, 'type' | 'id'>) => {
         const socket = socketRef.current
         // A dialog answer must go out even while the agent is streaming: the agent

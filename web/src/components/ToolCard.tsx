@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { prettyJson } from '../lib/markdown'
 import { isImageBlock } from '../lib/protocol'
 import type { ToolExecution } from '../lib/useAgent'
 import { toolResultText } from '../lib/useAgent'
+import { QuestionAnswers } from './QuestionCard'
 
 interface ToolCardProps {
   toolCallId: string
@@ -62,6 +63,19 @@ export function ToolCard({
 
   const effectiveStatus = isError ? 'error' : status
 
+  if (toolName === 'ask_user_question') {
+    return (
+      <QuestionToolCard
+        toolCallId={toolCallId}
+        args={args}
+        argumentsRaw={argumentsRaw}
+        status={effectiveStatus}
+        isError={isError}
+        resultText={resultText}
+      />
+    )
+  }
+
   return (
     <div className={`tool-card tool-card--${effectiveStatus}`} data-tool-call-id={toolCallId}>
       <div className="tool-card__head">
@@ -114,6 +128,80 @@ export function ToolCard({
       ) : effectiveStatus === 'running' ? (
         <div className="tool-card__section tool-card__hint">等待输出…</div>
       ) : null}
+    </div>
+  )
+}
+
+
+function asQuestions(args: unknown): { id: string; question: string; header?: string }[] {
+  const loose = (args ?? {}) as { questions?: unknown }
+  if (!Array.isArray(loose.questions)) return []
+  const questions: { id: string; question: string; header?: string }[] = []
+  for (const item of loose.questions) {
+    const value = item as { id?: unknown; question?: unknown; header?: unknown }
+    if (typeof value.id !== 'string' || typeof value.question !== 'string') continue
+    questions.push({
+      id: value.id,
+      question: value.question,
+      ...(typeof value.header === 'string' ? { header: value.header } : {}),
+    })
+  }
+  return questions
+}
+
+/** Answer rows instead of raw JSON: the transcript should read like a conversation. */
+function QuestionToolCard({
+  toolCallId,
+  args,
+  argumentsRaw,
+  status,
+  isError,
+  resultText,
+}: {
+  toolCallId: string
+  args?: unknown
+  argumentsRaw?: string
+  status: ToolExecution['status']
+  isError: boolean
+  resultText: string
+}) {
+  const questions = useMemo(() => {
+    if (args !== undefined) return asQuestions(args)
+    if (!argumentsRaw) return []
+    try {
+      return asQuestions(JSON.parse(argumentsRaw))
+    } catch {
+      return []
+    }
+  }, [args, argumentsRaw])
+
+  const parsed = useMemo(() => {
+    if (!resultText) return null
+    try {
+      return JSON.parse(resultText) as { answers?: unknown; pending?: unknown }
+    } catch {
+      return null
+    }
+  }, [resultText])
+
+  const answers = Array.isArray(parsed?.answers)
+    ? (parsed!.answers as { id: string; selected: string[]; custom?: string }[])
+    : []
+  const pending = parsed?.pending === true
+
+  return (
+    <div className={`tool-card tool-card--${status}`} data-tool-call-id={toolCallId}>
+      <div className="tool-card__head">
+        <span className="tool-card__glyph" aria-hidden="true">
+          {status === 'running' ? <span className="spinner" /> : isError ? '✗' : '?'}
+        </span>
+        <span className="tool-card__name">提问</span>
+        <span className="tool-card__status">
+          {isError ? '未能提问' : status === 'running' ? '等待回答' : pending ? '已超时，仍可回答' : '已回答'}
+        </span>
+      </div>
+      {questions.length > 0 ? <QuestionAnswers questions={questions} answers={answers} /> : null}
+      {isError && resultText ? <div className="tool-card__section tool-card__hint">{resultText}</div> : null}
     </div>
   )
 }

@@ -39,7 +39,14 @@ WRITE_TOOLS = frozenset({"write", "edit"})
 
 #: What may run without asking when a deployment does not widen the set.  Extensions a
 #: host loads deliberately add their own tool names to ``allow_tools``.
-DEFAULT_ALLOW_TOOLS = frozenset({"read", "write", "edit", "ls", "grep", "find", "present"})
+#:
+#: ``ask_user_question`` belongs here unconditionally: it only waits for a human answer,
+#: cannot touch files or the network, and denying it silently removes the model's only
+#: way to confirm a requirement.  It is also never a confirmation — asking the user to
+#: approve "asking the user" is the kind of dialog that makes people click through.
+DEFAULT_ALLOW_TOOLS = frozenset(
+    {"read", "write", "edit", "ls", "grep", "find", "present", "ask_user_question"}
+)
 
 #: Argument names that carry a path for those tools.  ``grep``/``find`` also take
 #: ``pattern``, which is a regex or glob and never a path, so it is not inspected.

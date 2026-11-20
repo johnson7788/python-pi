@@ -288,6 +288,10 @@ class SessionWorker:
                 app_id=self.app_id,
                 mode_id=self.mode_id,
             )
+            # A browser tab is the only possible answerer here. Before the first
+            # tab exists the count is zero, so a scheduled run that tries to ask
+            # fails fast instead of parking a turn nobody can see.
+            self._controller.set_client_count(lambda: self.hub.client_count)
             # The policy goes in after ``RpcMode`` has bound the host, because binding is
             # what supplies the UI context a confirmation dialog needs.
             if self._policy_factory is not None and state.extension_runner is not None:
@@ -488,6 +492,9 @@ class SessionWorker:
             "autoCompactionEnabled": session.auto_compaction_enabled,
             "messageCount": len(session.messages),
             "pendingMessageCount": session.pending_message_count,
+            # Questions that can still be answered: derived from the transcript, so
+            # a reconnecting tab restores them without any extra bookkeeping.
+            "pendingQuestions": session.question_broker.pending_view(),
             "cwd": self.state.cwd,
         }
         if snapshot["session_name"]:
@@ -3685,6 +3692,9 @@ def create_app(
         connection.sender = asyncio.create_task(_pump(connection))
         try:
             await worker.ensure_started()
+            # The question broker refuses to ask when no tab can see the card; this
+            # counter is what makes that check live instead of optimistic.
+            worker.controller.set_client_count(lambda: worker.hub.client_count)
             connection.send(
                 {
                     "type": "ready",
@@ -3715,6 +3725,9 @@ def create_app(
             if connection.sender is not None:
                 connection.sender.cancel()
             worker.hub.remove(connection)
+            # A closed tab must not keep a question's countdown paused; the host
+            # clock takes the wait back so the turn can still finish.
+            worker.controller.release_question_claims()
 
     _mount_spa(app)
     return app

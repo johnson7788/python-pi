@@ -12,6 +12,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 
 import { CitedText, SourcesPanel } from '../components/Citations'
 import { DialogHost } from '../components/Dialog'
+import { QuestionAnswers, QuestionBanner, QuestionCard } from '../components/QuestionCard'
 import { PromptHost, askConfirm, askText } from '../components/Prompt'
 import { Toasts } from '../components/Toasts'
 import { ToolCard } from '../components/ToolCard'
@@ -1949,6 +1950,15 @@ function ChatView({
     }
   }
 
+  // A live question owns the composer: the agent is parked on it, so hiding it
+  // behind a badge would stall the turn without telling the user why.
+  const openQuestion = agent.questions.find((question) => question.state === 'open') ?? null
+  const shownQuestion =
+    openQuestion ??
+    agent.questions.find((question) => question.callId === agent.activeQuestionId) ??
+    null
+  const tuckedQuestions = agent.questions.filter((question) => question.callId !== shownQuestion?.callId)
+
   return (
     <div className="wb-chat">
       <div className="wb-chat-body">
@@ -1964,30 +1974,47 @@ function ChatView({
             onOpenPresented={onOpenArtifact}
           />
           <div className="wb-chat-composer">
-            <WbComposer
-              value={draft}
-              onChange={onDraft}
-              onSend={onSend}
-              onAbort={agent.abort}
-              streaming={agent.isStreaming}
-              disabled={disabled}
-              placeholder="继续追问，或 / 调用技能"
-              workspaceName={workspaceName}
-              images={images}
-              onAddImages={onAddImages}
-              onRemoveImage={onRemoveImage}
-              files={files}
-              onAddFiles={onAddFiles}
-              onRemoveFile={onRemoveFile}
-              models={models}
-              currentModel={currentModel}
-              onSelectModel={onSelectModel}
-              chat
-            />
-            <div className="composer-hint">
-              <span>Enter 发送 · Shift + Enter 换行</span>
-              {agent.isStreaming ? <span>正在生成，可随时中断</span> : null}
-            </div>
+            {shownQuestion ? (
+              <QuestionCard
+                key={shownQuestion.callId}
+                question={shownQuestion}
+                sessionId={agent.state?.sessionId ?? sessionFile}
+                onAnswer={agent.answerQuestion}
+                onClaim={agent.claimQuestion}
+                onTimeout={agent.questionTimeout}
+                onCollapse={() => agent.activateQuestion(null)}
+              />
+            ) : (
+              <>
+                {tuckedQuestions.length > 0 ? (
+                  <QuestionBanner questions={tuckedQuestions} onOpen={agent.activateQuestion} />
+                ) : null}
+                <WbComposer
+                  value={draft}
+                  onChange={onDraft}
+                  onSend={onSend}
+                  onAbort={agent.abort}
+                  streaming={agent.isStreaming}
+                  disabled={disabled}
+                  placeholder="继续追问，或 / 调用技能"
+                  workspaceName={workspaceName}
+                  images={images}
+                  onAddImages={onAddImages}
+                  onRemoveImage={onRemoveImage}
+                  files={files}
+                  onAddFiles={onAddFiles}
+                  onRemoveFile={onRemoveFile}
+                  models={models}
+                  currentModel={currentModel}
+                  onSelectModel={onSelectModel}
+                  chat
+                />
+                <div className="composer-hint">
+                  <span>Enter 发送 · Shift + Enter 换行</span>
+                  {agent.isStreaming ? <span>正在生成，可随时中断</span> : null}
+                </div>
+              </>
+            )}
           </div>
         </div>
         {artifactsOpen ? (
@@ -3628,6 +3655,24 @@ function WbMessage({
       typeof custom.content === 'string'
         ? custom.content
         : (custom.content ?? []).filter(isTextBlock).map((part) => part.text).join('\n')
+    // A late answer to a timed-out question is conversation, not a system notice.
+    if (custom.customType === 'user-question-reply') {
+      const details = asRecord(custom.details)
+      const questions = Array.isArray(details.questions)
+        ? (details.questions as { id: string; question: string; header?: string }[])
+        : []
+      const answers = Array.isArray(details.answers)
+        ? (details.answers as { id: string; selected: string[]; custom?: string }[])
+        : []
+      return (
+        <div className="wb-msg-tool">
+          <div className="question-reply-block">
+            <div className="question-reply-block__title">已回答之前的提问</div>
+            <QuestionAnswers questions={questions} answers={answers} />
+          </div>
+        </div>
+      )
+    }
     return (
       <div className="wb-msg-notice">
         <b>{custom.customType === 'subagent' ? '子 agent' : '系统记录'}</b>

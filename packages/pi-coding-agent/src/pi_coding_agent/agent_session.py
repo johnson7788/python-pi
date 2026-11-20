@@ -77,6 +77,7 @@ from .settings import SettingsManager
 from .skills import expand_skill_command
 from .system_prompt import build_system_prompt, get_system_prompt_options
 from .tools import DEFAULT_ACTIVE_TOOL_NAMES, create_builtin_tools
+from .user_questions import QuestionBroker
 
 #: Upstream default thinking level; clamped to the model's supported set.
 DEFAULT_THINKING_LEVEL = "medium"
@@ -418,6 +419,7 @@ class AgentSession:
         scrub_shell_env: bool = False,
         sandbox_backend: Any = None,
         extra_system_prompt: str = "",
+        question_broker: QuestionBroker | None = None,
     ) -> None:
         self._model = model
         self._cwd = cwd
@@ -428,6 +430,11 @@ class AgentSession:
         self._stream_fn = stream_fn
         self._extension_runner = extension_runner
         self._extra_system_prompt = extra_system_prompt
+        #: The human channel behind ``ask_user_question``.  Created here so the tool
+        #: exists from the first turn; a mode with a browser attaches its emitter
+        #: later, and a delegated session carries a broker that refuses to ask.
+        self._question_broker = question_broker or QuestionBroker()
+        self._question_broker.attach(session=lambda: self)
         self._active_tool_names = (
             list(active_tool_names) if active_tool_names is not None else list(DEFAULT_ACTIVE_TOOL_NAMES)
         )
@@ -439,8 +446,13 @@ class AgentSession:
                 self._active_tool_names,
                 scrub_secrets=scrub_shell_env,
                 backend=sandbox_backend,
+                question_broker=self._question_broker,
             )
         )
+        # ``ask_user_question`` disappears when no human channel exists; drop its
+        # name too so ``get_active_tools`` never reports a tool that is not there.
+        available = {tool.name for tool in self._tools}
+        self._active_tool_names = [name for name in self._active_tool_names if name in available]
         # Extension tools are merged in and enabled by default: an extension
         # registers a tool because it wants it usable.
         if extension_runner is not None:
@@ -511,6 +523,11 @@ class AgentSession:
     @property
     def cwd(self) -> str:
         return self._cwd
+
+    @property
+    def question_broker(self) -> QuestionBroker:
+        """The human channel behind ``ask_user_question``."""
+        return self._question_broker
 
     @property
     def session_manager(self) -> SessionManager:
@@ -705,6 +722,9 @@ class AgentSession:
         self._disposed = True
         if self._is_agent_run_active:
             self._agent.abort()
+        # A parked question would otherwise wait for an answer that can never
+        # arrive, and its client card would outlive the session.
+        self._question_broker.close()
         for callback in list(self._dispose_callbacks):
             try:
                 callback()

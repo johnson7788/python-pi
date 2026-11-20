@@ -30,6 +30,7 @@ from typing import Any, BinaryIO, TextIO
 from pi_ai import Model, get_supported_thinking_levels
 
 from ..agent_session import AgentSession
+from ..user_questions import UserQuestionError
 from ..images import ImageInputError, normalize_images
 from ..resource_loader import ResourceLoader
 from ..session_manager import entry_to_json
@@ -73,6 +74,9 @@ SUPPORTED_COMMANDS = frozenset(
         "get_branch_points",
         "set_session_name",
         "get_commands",
+        "answer_question",
+        "claim_question",
+        "question_timeout",
     }
 )
 
@@ -95,6 +99,14 @@ def success(request_id: str | None, command: str, data: Any = _UNSET) -> dict[st
         payload["id"] = request_id
     if data is not _UNSET:
         payload["data"] = data
+    return payload
+
+
+def _coded_failure(request_id: str | None, command: str, error: Exception) -> dict[str, Any]:
+    """A failure that also carries the stable code the model/UI can branch on."""
+
+    payload = failure(request_id, command, str(error))
+    payload["code"] = getattr(error, "code", None)
     return payload
 
 
@@ -240,6 +252,9 @@ class RpcMode:
         self._unsubscribe: Any = None
         self._unsubscribe_errors: Any = None
         self._ui: Any = None
+        #: Live tab count for this worker, installed by the Web server.  The
+        #: question broker needs it to refuse a question nobody could see.
+        self._client_count: Any = None
 
         if extension_runner is not None:
             # A transport with a real user on the other end is the only place where
@@ -255,6 +270,7 @@ class RpcMode:
             self._unsubscribe_errors = extension_runner.on_error(self._on_extension_error)
 
         self._bind_session()
+        self._attach_questions()
         if runtime is not None:
             # Replacement swaps the session object; re-attach or events stop flowing.
             runtime.set_rebind_session(self._rebind_session)
@@ -277,6 +293,49 @@ class RpcMode:
     def _bind_session(self) -> None:
         self._unsubscribe = self.session.subscribe(self._on_session_event)
 
+    def _attach_questions(self) -> None:
+        """Point the session's question broker at this transport.
+
+        The broker is created with the session, so a late answer still reaches the
+        transcript in a mode with no UI; here it learns where to *ask*.
+        """
+        broker = getattr(self.session, "question_broker", None)
+        if broker is None:
+            return
+        kwargs: dict[str, Any] = {"emit": self._emit}
+        if self._client_count is not None:
+            kwargs["client_count"] = self._client_count
+        broker.attach(**kwargs)
+        holder = getattr(self, "_question_broker_owner", None)
+        if holder is not self.session:
+            self._question_broker_owner = self.session
+            self.session.add_dispose_callback(lambda: self._release_questions())
+
+    def _release_questions(self) -> None:
+        broker = getattr(self.session, "question_broker", None)
+        if broker is not None:
+            broker.detach()
+
+    def set_client_count(self, counter: Any) -> None:
+        """Install the live-tab counter used by ``ask_user_question``."""
+
+        self._client_count = counter
+        self._attach_questions()
+
+    def release_question_claims(self) -> None:
+        """The last tab is gone: give the waits back to the host clock.
+
+        Called after a connection leaves the hub.  While another tab is still
+        open its claim must stand, or a question that tab is showing would time
+        out underneath it.
+        """
+
+        if self._client_count is not None and self._client_count() > 0:
+            return
+        broker = getattr(self.session, "question_broker", None)
+        if broker is not None:
+            broker.release_all_claims()
+
     def _detach_session(self) -> None:
         """Stop forwarding the current session's events (it may outlive its turn)."""
         if self._unsubscribe is not None:
@@ -286,6 +345,8 @@ class RpcMode:
     async def _rebind_session(self, session: AgentSession) -> None:
         self._detach_session()
         self._unsubscribe = session.subscribe(self._on_session_event)
+        self._question_broker_owner = None
+        self._attach_questions()
 
     def _emit(self, payload: Any) -> None:
         if self._emit_override is not None:
@@ -557,10 +618,46 @@ class RpcMode:
             "autoCompactionEnabled": self.session.auto_compaction_enabled,
             "messageCount": len(self.session.messages),
             "pendingMessageCount": self.session.pending_message_count,
+            # Reconnect replay: every question that can still be answered, derived
+            # from the transcript so a reload never loses one.
+            "pendingQuestions": self.session.question_broker.pending_view(),
         }
         if snapshot["session_name"]:
             data["sessionName"] = snapshot["session_name"]
         return success(request_id, "get_state", data)
+
+    async def _cmd_answer_question(self, command: dict[str, Any], request_id: str | None):
+        call_id = command.get("callId")
+        if not isinstance(call_id, str) or not call_id:
+            return failure(request_id, "answer_question", "answer_question requires a string 'callId'")
+        broker = self.session.question_broker
+        try:
+            result = await broker.answer(
+                call_id,
+                command.get("answers"),
+                cancelled=bool(command.get("cancelled")),
+            )
+        except UserQuestionError as error:
+            return _coded_failure(request_id, "answer_question", error)
+        return success(request_id, "answer_question", {"callId": call_id, **result})
+
+    async def _cmd_claim_question(self, command: dict[str, Any], request_id: str | None):
+        call_id = command.get("callId")
+        if not isinstance(call_id, str) or not call_id:
+            return failure(request_id, "claim_question", "claim_question requires a string 'callId'")
+        remaining = self.session.question_broker.claim(call_id)
+        if remaining is None:
+            return failure(request_id, "claim_question", "that question is no longer waiting")
+        return success(request_id, "claim_question", {"remainingMs": remaining})
+
+    async def _cmd_question_timeout(self, command: dict[str, Any], request_id: str | None):
+        call_id = command.get("callId")
+        if not isinstance(call_id, str) or not call_id:
+            return failure(request_id, "question_timeout", "question_timeout requires a string 'callId'")
+        ended = self.session.question_broker.timeout(call_id)
+        if not ended:
+            return failure(request_id, "question_timeout", "that question is no longer waiting")
+        return success(request_id, "question_timeout")
 
     async def _cmd_get_messages(self, command: dict[str, Any], request_id: str | None):
         from .json_event import message_to_json

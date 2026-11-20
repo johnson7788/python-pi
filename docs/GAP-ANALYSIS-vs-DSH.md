@@ -69,7 +69,7 @@ B 的清单见 `packages/pi-coding-agent/src/pi_coding_agent/tools/__init__.py`�
 | 搜索发现 | `glob` `grep`（打包 ripgrep 二进制） | `grep` `find` `ls`，**默认关闭**，纯 Python 遍历 | 🟠 大仓库慢一个量级；默认只开 4 个工具意味着模型连搜索都没有 |
 | 进程执行 | `bash` `pwsh` + 持久 PTY `bash`/`pwsh` + `terminal_*`（6 个） | `bash`（一次性，schema 仅 `command`/`timeout`） | 🔴 无后台执行、无交互式终端、无长驻 shell |
 | 作业控制 | `job_list` `job_output` `job_kill` | 无 | 🔴 长命令只能阻塞等，Web 上会拖死请求 |
-| 人机交互 | `ask_user_question` `present` `propose_action` | 无（只有扩展弹窗，模型无法主动问） | 🔴 模型不能确认需求、不能交付文件卡片 |
+| 人机交互 | `ask_user_question` `present` `propose_action` | `ask_user_question` + `present`（见 [`USER-QUESTIONS.md`](USER-QUESTIONS.md)） | 🟢 提问已可用（超时/跳过/迟到回答/子 agent 禁问）；仍无 `propose_action` |
 | 计划/任务 | `todo_write` `exit_plan_mode` `create_goal` `get_goal` `update_goal` | 无 | 🔴 长任务不可见、不可控 |
 | 日程 | `schedule_create` `schedule_edit` `schedule_list` `schedule_view` | 无 | 🟡 团队"定时汇报/巡检"做不了 |
 | 外部知识 | `web_search` `web_fetch`（provider seam） | 无（只能 bash+curl） | 🔴 无联网能力，knowledge 类任务全靠人工 |
@@ -301,7 +301,7 @@ B 的**流式会话核心是完整的**：Markdown+DOMPurify、thinking 折叠�
 | 0 | 修模型目录坏链接：过滤或补齐未注册 api 的 12 个模型 | 0.5–1 d | 选中即报错，最低成本、最高信任收益 |
 | 1 | `todo_write` + 前端 checklist 渲染 | 2–3 d | 长任务可见、零权限风险，用户感知最强 |
 | 2 | 后台作业：`bash run_in_background` + `job_list/output/kill` | 4–5 d | 长命令不再拖死 Web 请求；也是后续 subagent 的基础 |
-| 3 | `ask_user_question` | 1–2 d | 复用现成 dialog 通道，模型终于能确认需求 |
+| 3 | ~~`ask_user_question`~~ ✅ 已完成 | 1–2 d | 见 [`USER-QUESTIONS.md`](USER-QUESTIONS.md)：卡片接管输入区、超时 pending、迟到回答、子 agent 禁问 |
 | 4 | 输出溢出 + `grep`/`find` 默认开启（可选接 ripgrep） | 3 d | 大输出不再丢；搜索默认可用 |
 | 5 | 自动标题 + 侧栏搜索/重命名入口 | 3 d | 会话一多就不可用，现成 RPC 能力只差 UI |
 | 6 | 图片附件：上传/粘贴 + `Message` 渲染 + `read_image` | 4 d | Web 用户最直观的"缺一块" |

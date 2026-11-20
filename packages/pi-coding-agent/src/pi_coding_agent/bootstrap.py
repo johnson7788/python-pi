@@ -21,6 +21,7 @@ from typing import Any, Callable, Mapping, Sequence
 from pi_ai import AuthStorage, FileCredentialStore, Model, ModelRegistry
 
 from .agent_session import AgentSession
+from .user_questions import QuestionBroker
 from .resource_loader import ResourceLoader
 from .session_manager import SessionManager
 from .settings import ProjectTrustStore, SettingsManager
@@ -435,6 +436,10 @@ async def bootstrap(
             scrub_shell_env=options.scrub_shell_env,
             sandbox_backend=options.sandbox_backend,
             extra_system_prompt=options.app_prompt,
+            # A child has no human attached to it: asking would block a turn that
+            # nobody is watching.  The tool is left out, and a stray call fails
+            # with DELEGATED_CALLER so the child returns the decision instead.
+            question_broker=QuestionBroker(delegated=True),
         )
 
     subagent_manager.set_child_factory(child_session_factory)

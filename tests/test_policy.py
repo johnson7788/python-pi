@@ -159,6 +159,18 @@ def test_present_is_available_to_team_workers(config: PolicyConfig):
     assert verdict.decision is Decision.ALLOW
 
 
+def test_asking_the_user_is_always_available(config: PolicyConfig):
+    """Asking a human touches nothing: neither a deny list nor a confirmation.
+
+    A team worker's allow set is ``DEFAULT_ALLOW_TOOLS | plugin tools``, so a builtin that
+    is missing there is refused at runtime — which is exactly how ``ask_user_question``
+    first shipped: the model reported "refused by policy" and fell back to prose.
+    """
+    verdict = classify_tool_call(config, "ask_user_question", {"questions": [{"id": "a", "question": "q"}]})
+    assert verdict.decision is Decision.ALLOW
+    assert "ask_user_question" in DEFAULT_ALLOW_TOOLS
+
+
 def test_a_plugin_tool_runs_once_the_host_opens_it(workspace: Path):
     """Admin-installed plugins register tools; the host has to put them in the allow set.
 
