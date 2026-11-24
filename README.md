@@ -1,4 +1,34 @@
-# pi-agent
+<p align="center">
+  <img src="web/public/favicon.svg" alt="pi-agent" width="80" height="80" />
+</p>
+
+<h1 align="center">pi-agent</h1>
+
+<p align="center">
+  <em>pi 的 Python 移植版 —— 可嵌入的 Python agent 框架</em>
+</p>
+
+<p align="center">
+  与 <a href="https://pi.dev/docs/latest">pi</a> 的会话文件互通，内置浏览器工作台：<br/>
+  应用/模式、会话、对话流、产物面板与在线 Office 编辑
+</p>
+
+<p align="center">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-blue?style=for-the-badge" />
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" />
+  <img alt="React" src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black" />
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white" />
+</p>
+
+<p align="center">
+  <img alt="uv" src="https://img.shields.io/badge/uv-workspace-DE3D42?style=flat-square" />
+  <img alt="Protocol" src="https://img.shields.io/badge/Protocol-RPC_over_WebSocket-000000?style=flat-square" />
+  <img alt="Tests" src="https://img.shields.io/badge/tests-offline_pytest-25C2A0?style=flat-square&logo=pytest&logoColor=white" />
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" /></a>
+  <img alt="Status" src="https://img.shields.io/badge/status-Active-success?style=flat-square" />
+</p>
+
+---
 
 [`pi`](https://pi.dev/docs/latest) 是一个极简终端 coding agent harness（TypeScript，11 包，约 18 万行）。
 本仓库是它的 **Python 移植版**，目标是提供一个可嵌入的 Python agent 框架，并且**与 pi 的会话文件互通**。
@@ -588,11 +618,12 @@ docs/research/                            上游逐层调研笔记
    会话存储有手工构造的 v3 JSONL 黄金文件，验证读取、上下文重建与再序列化。
 3. **真实线格式**：provider 适配器的请求体与 SSE 解析由 MockTransport 断言到字段级。
 
-### 已知限制
-
-本仓库开发环境中没有任何 provider 的真实 API key，因此**没有对真实服务做过在线验证**。
-首次接入时请先用一个小 prompt 验证所选 provider 的适配器。
-
 ## 许可
 
 本项目为移植版沿用 MIT，见 [`LICENSE`](LICENSE)。
+
+## 联系方式
+
+有问题、建议或想一起聊聊？欢迎加微信：
+
+![微信二维码](https://free.picui.cn/free/2743/2026/11/15/6af96ce4d89d7.png)
