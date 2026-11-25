@@ -1,9 +1,9 @@
 {
-  "name": "python-pi-web",
+  "name": "saas-workbuddy-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Web UI for the python-pi coding agent (Vite + React 18 + TypeScript).",
+  "description": "Web UI for saas-workbuddy (Vite + React 18 + TypeScript).",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

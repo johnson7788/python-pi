@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="web/public/favicon.svg" alt="pi-agent" width="80" height="80" />
+  <img src="web/public/favicon.svg" alt="saas-workbuddy" width="80" height="80" />
 </p>
 
-<h1 align="center">pi-agent</h1>
+<h1 align="center">saas-workbuddy</h1>
 
 <p align="center">
-  <em>pi 的 Python 移植版 —— 可嵌入的 Python agent 框架</em>
+  <em>可嵌入的 Python agent 框架</em>
 </p>
 
 <p align="center">
-  与 <a href="https://pi.dev/docs/latest">pi</a> 的会话文件互通，内置浏览器工作台：<br/>
+  内置浏览器工作台：<br/>
   应用/模式、会话、对话流、产物面板与在线 Office 编辑
 </p>
 
@@ -30,18 +30,15 @@
 
 ---
 
-[`pi`](https://pi.dev/docs/latest) 是一个极简终端 coding agent harness（TypeScript，11 包，约 18 万行）。
-本仓库是它的 **Python 移植版**，目标是提供一个可嵌入的 Python agent 框架，并且**与 pi 的会话文件互通**。
-
-同时提供一个浏览器工作台：应用/模式、会话、对话流、产物面板和在线 Office 编辑。
+本仓库是一个可嵌入的 Python agent 框架，并提供浏览器工作台。
 
 文档导航：
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 架构设计与移植方案 |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 架构设计与实现 |
 | [`docs/diagrams/`](docs/diagrams/) | 分层、请求链路、会话树、租户隔离四张架构图 |
-| [`docs/research/`](docs/research/) | 上游逐层调研笔记（pi-ai / pi-agent / coding-agent core / modes & extensions / surrounding packages） |
+| [`docs/research/`](docs/research/) | 调研笔记 |
 
 ## 目录
 
@@ -196,7 +193,7 @@ DeepSeek 官方的 `deepseek-flash` 支持**服务端**联网（搜索与抓取�
 | reasoning_tokens | 190 | 204 | 208 | 188 | **111** | **140** |
 
 非单调——`xhigh`/`max` 反而更少。所以**在这个网关上不要指望用档位控制思考量**。
-想要真正的"不思考"，得换模型（百炼上的 Qwen 系列用 `enable_thinking` 开关，本移植版还没实现
+想要真正的"不思考"，得换模型（百炼上的 Qwen 系列用 `enable_thinking` 开关，本项目还没实现
 这个兼容位）；想要真正可调的思考预算，得换 provider（如 Anthropic 的 thinking budget）。
 
 不用 `start.sh` 时，把 key 导出到环境里即可：
@@ -219,7 +216,7 @@ pi-py --mode rpc                         # rpc：在 stdin/stdout 上服务 JSON
 pi-py --model deepseek-official/deepseek-flash --image shot.png "这张图里是什么？"
 ```
 
-`--mode rpc` 与 pi 同构，可以被 IDE 或其他进程当作 pi 的替换件驱动：
+`--mode rpc` 提供同构的命令协议，可被 IDE 或其他进程当作替换件驱动：
 
 ```bash
 echo '{"id":"1","type":"get_state"}' | pi-py --mode rpc
@@ -331,9 +328,9 @@ def guard(event, ctx):
         return ToolCallEventResult(block=True, reason="refusing to run rm -rf")
 ```
 
-发现位置与 pi 一致（项目 `.pi/extensions/` → 全局 `<agent_dir>/extensions/`，也支持
+发现位置（项目 `.pi/extensions/` → 全局 `<agent_dir>/extensions/`，也支持
 `-e/--extension` 与 pip entry point）。**项目本地扩展只在项目被信任后加载**——这是唯一的门控；
-和 pi 一样，**没有沙箱**，扩展以你的完整权限运行。
+**没有沙箱**，扩展以你的完整权限运行。
 
 完整设计、事件表与合并语义见 [`docs/EXTENSIONS.md`](docs/EXTENSIONS.md)。
 
@@ -383,10 +380,10 @@ def setup(api: PluginAPI) -> None:
 | `~/.agents/skills/` | 与本机其他 agent 工具共享 |
 | `~/.pi/agent/skills/` | 用户级，跟着你走 |
 | `.agents/skills/`（cwd 及祖先目录） | 跨工具的项目级 |
-| `.pi/skills/`（需项目受信任） | pi 自己的项目级 |
+| `.pi/skills/`（需项目受信任） | 本框架的项目级 |
 | `<agent_dir>/skills/` | 部署配置目录；团队模式从模板播种 |
 
-校验是**失败即跳过**（上游 pi 只警告）：`name` 必须匹配 `^[a-z0-9-]+$` 且 ≤64 字符；
+校验是**失败即跳过**（参考实现只警告）：`name` 必须匹配 `^[a-z0-9-]+$` 且 ≤64 字符；
 `description` 必须是 YAML **字符串**、1–1024 字符。写成 `description: [TODO: ...]` 会被 YAML
 解析成数组，整个技能不出现在提示词里，也没有明显报错。
 
@@ -460,9 +457,8 @@ MarketItem(
 <sub>以上截图取自本机运行的真实实例（团队模式），不是设计稿。</sub>
 
 **它没有另造一套 API**：浏览器说的就是 `--mode rpc` 那套命令协议，只是把传输从 stdio 换成
-WebSocket。所以任何为 pi 的 RPC 模式写的客户端，改一下地址就能用；反过来，这里验证过的协议行为
-对 stdio 同样成立。**pi 本身没有浏览器 UI**（它只有终端 TUI + RPC/JSON 模式），这层是本移植版
-新增的——见 [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md)。
+WebSocket。任何为这套 RPC 协议写的客户端，改一下地址就能用；反过来，这里验证过的协议行为
+对 stdio 同样成立。浏览器 UI 这层是本项目新增的——见 [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md)。
 
 同一用户在同一工作区、应用和模式下共享一个活动会话：多个标签页看到并操作**同一个对话**；
 不同用户、工作区或应用之间互相隔离。`/api/state` 等 REST 端点因此能报告当前用户的活动状态。
@@ -540,28 +536,27 @@ python deploy/loadtest.py --url http://127.0.0.1:8787 -u admin --password-stdin 
 
 ### 包与当前状态
 
-已实现并可测试（`packages/` 下四个包，对应上游的 npm 包边界）：
+已实现并可测试（`packages/` 下四个包）：
 
-| 包 | 对应上游 | 内容 |
-|---|---|---|
-| `pi-ai` | `@earendil-works/pi-ai` | 消息/内容块/Usage/Model 类型与 JSON 互转、12 种流式事件的 `EventStream`、provider 注册表、Anthropic 与 OpenAI 兼容适配器、faux 测试 provider、工具参数校验、凭据存储、模型目录、成本计算 |
-| `pi-agent-core` | `@earendil-works/pi-agent-core` | agent 循环（含 steering / follow-up / 工具批 / 中止语义）、`Agent` 类（状态归约、队列、生命周期） |
-| `pi-coding-agent` | `@earendil-works/pi-coding-agent` | JSONL v3 会话树、内置工具（read/write/edit/bash/grep/find/ls）、系统提示词组装、skills、资源发现、settings、`AgentSession` 编排、print/json/rpc 三种模式、扩展协议、会话替换、**后台 subagent（spawn/fork）** |
-| `pi-server` | *（无对应上游包）* | 浏览器 UI 的服务端：把同一套命令协议架在 WebSocket 上，并托管 React 单页应用 |
+| 包 | 内容 |
+|---|---|
+| `pi-ai` | 消息/内容块/Usage/Model 类型与 JSON 互转、12 种流式事件的 `EventStream`、provider 注册表、Anthropic 与 OpenAI 兼容适配器、faux 测试 provider、工具参数校验、凭据存储、模型目录、成本计算 |
+| `pi-agent-core` | agent 循环（含 steering / follow-up / 工具批 / 中止语义）、`Agent` 类（状态归约、队列、生命周期） |
+| `pi-coding-agent` | JSONL v3 会话树、内置工具（read/write/edit/bash/grep/find/ls）、系统提示词组装、skills、资源发现、settings、`AgentSession` 编排、print/json/rpc 三种模式、扩展协议、会话替换、**后台 subagent（spawn/fork）** |
+| `pi-server` | 浏览器 UI 的服务端：把同一套命令协议架在 WebSocket 上，并托管 React 单页应用 |
 
 **明确不在 v0.1**：终端 TUI、跨语言（TypeScript）扩展兼容、CBOR 协议栈、SQLite 会话后端、
 telemetry、evals。理由见架构文档第 3 节。
 
-### 与 pi 互通
+### 会话文件格式
 
-会话文件就是 pi 的格式：`<agent_dir>/sessions/--<cwd>--/<ts>_<id>.jsonl`，JSONL，version 3，
-`id`/`parentId` 构成树（原地分支）。Python 版能读 pi 写的会话，也能写出 pi 能读的会话，
-并会把 v1/v2 文件在写回时迁移到 v3。消息的 JSON 字段名（`stopReason`、`toolCallId`、`cacheRead` …）
-逐一对齐。
+会话以 JSONL v3 存储：`<agent_dir>/sessions/--<cwd>--/<ts>_<id>.jsonl`，`id`/`parentId` 构成树
+（原地分支）。能读写该格式的会话，并会把 v1/v2 文件在写回时迁移到 v3。消息的 JSON 字段名
+（`stopReason`、`toolCallId`、`cacheRead` …）与参考实现逐一对齐。
 
 ### 刻意保真的语义
 
-移植时**没有**"Python 化"这些行为，因为它们是可观察契约的一部分：
+实现时**没有**"Python 化"这些行为，因为它们是可观察契约的一部分：
 
 - `partial` 是所有流式事件共享的同一个可变对象；
 - `EventStream` 是 push 队列，完成事件本身仍会投递给迭代方；
@@ -576,7 +571,7 @@ telemetry、evals。理由见架构文档第 3 节。
 
 ### 依赖极简
 
-运行时只依赖 `httpx`（传输）与 `pyyaml`（frontmatter）。上游用到的 `typebox`、`diff`、
+运行时只依赖 `httpx`（传输）与 `pyyaml`（frontmatter）。参考实现用到的 `typebox`、`diff`、
 `ignore`、`partial-json`、`chalk`、`proper-lockfile` 等在 Python 侧分别用内联实现、
 `difflib`、自写的 ignore 匹配、`json` 容错解析与标准库替代。
 
@@ -595,7 +590,7 @@ packages/pi-coding-agent/src/pi_coding_agent/
 packages/pi-server/src/pi_server/         浏览器 UI 服务端；市场目录在 market.py
 template/skills/                          默认技能，启动时软链进每个租户的 agent 目录
 tests/                                    按模块划分的测试
-docs/research/                            上游逐层调研笔记
+docs/research/                            调研笔记
 ```
 
 ## 已知取舍与限制
@@ -603,7 +598,7 @@ docs/research/                            上游逐层调研笔记
 ### 工程取舍
 
 - `grep` / `find` 是纯 Python 实现（不依赖 `ripgrep` / `fd`），`.gitignore` 支持为简化版；
-- `edit` 不做上游的模糊匹配兜底之外的全部启发式；
+- `edit` 不做参考实现的模糊匹配兜底之外的全部启发式；
 - `read` 的图片输入不做缩放处理；
 - 模型目录是可再生数据包 `pi_ai/data/models.json`，只收录了少量主流模型；
 - 不实现跨语言的 TS 扩展兼容（同进程的 renderer / `AbortSignal` / 参数原地修改语义无法跨边界存活）。
@@ -612,18 +607,26 @@ docs/research/                            上游逐层调研笔记
 
 本仓库的验证依赖三根支柱：
 
-1. **上游对齐**：从上游源码逐段移植并保留语义，关键行为（事件顺序、截断提示文本、成本公式、
+1. **参考实现对齐**：从参考实现源码逐段移植并保留语义，关键行为（事件顺序、截断提示文本、成本公式、
    会话文件形状）逐字对齐而不是"大致相同"。
-2. **黄金用例**：例如 agent 循环的 12 事件序列直接取自上游测试的断言；
+2. **黄金用例**：例如 agent 循环的 12 事件序列直接取自参考实现测试的断言；
    会话存储有手工构造的 v3 JSONL 黄金文件，验证读取、上下文重建与再序列化。
 3. **真实线格式**：provider 适配器的请求体与 SSE 解析由 MockTransport 断言到字段级。
 
 ## 许可
 
-本项目为移植版沿用 MIT，见 [`LICENSE`](LICENSE)。
+本项目沿用 MIT 许可，见 [`LICENSE`](LICENSE)。
 
 ## 联系方式
 
 有问题、建议或想一起聊聊？欢迎加微信：
 
 ![微信二维码](https://free.picui.cn/free/2743/2026/11/15/6af96ce4d89d7.png)
+
+## 致谢
+
+本项目在设计与实现上参考并借鉴了以下项目，特此致谢：
+
+- [pi](https://pi.dev/docs/latest) —— 会话文件格式、RPC 命令协议与分层结构
+- **WorkBuddy** —— 应用 / 工作模式与浏览器工作台的交互形态
+- **DeepSeek Harness（DSH）** —— 插件运行时与团队部署的若干设计

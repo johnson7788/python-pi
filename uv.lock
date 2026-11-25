@@ -8,7 +8,7 @@ members = [
     "pi-ai",
     "pi-coding-agent",
     "pi-server",
-    "python-pi",
+    "saas-workbuddy",
 ]
 
 [[package]]
@@ -738,7 +738,7 @@ wheels = [
 ]
 
 [[package]]
-name = "python-pi"
+name = "saas-workbuddy"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [

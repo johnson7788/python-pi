@@ -1,5 +1,5 @@
 [project]
-name = "python-pi"
+name = "saas-workbuddy"
 version = "0.0.0"
 description = "Python port of the pi coding-agent harness (uv workspace root)"
 requires-python = ">=3.11"
