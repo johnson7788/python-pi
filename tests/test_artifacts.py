@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 from pi_coding_agent.bootstrap import BootstrapOptions

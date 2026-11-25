@@ -13,7 +13,6 @@ The interesting assertions are not "the protocol has five methods".  They are:
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -21,7 +20,6 @@ import httpx
 import pytest
 
 from pi_coding_agent.sandbox import (
-    CONTAINER_WORKSPACE,
     ExecResult,
     LocalBackend,
     ProvisionerBackend,

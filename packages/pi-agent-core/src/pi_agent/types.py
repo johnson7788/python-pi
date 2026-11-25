@@ -14,7 +14,6 @@ from typing import Any, Awaitable, Callable, Literal, Union
 
 from pi_ai import (
     AbortSignal,
-    AssistantMessage,
     Context,
     EventStream,
     ImageContent,
@@ -24,6 +23,8 @@ from pi_ai import (
     ToolResultMessage,
     Usage,
 )
+
+from .guards import TurnGuards
 
 #: A conversation message as seen by the agent loop.  Structurally any object
 #: carrying ``role`` and the role-specific fields (see ``pi_ai.types``).
@@ -169,6 +170,9 @@ class AgentLoopConfig:
     prepare_next_turn: Callable[[PrepareNextTurnContext], Awaitable[AgentLoopTurnUpdate | None]] | None = None
     should_stop_after_turn: Callable[[PrepareNextTurnContext], Awaitable[bool]] | None = None
     tool_execution: Literal["parallel", "sequential"] = "parallel"
+    #: Optional stop/nudge state machine, one instance per run (see ``guards``).
+    #: ``None`` keeps the bare loop: no iteration cap, no empty/repeat detection.
+    turn_guards: TurnGuards | None = None
     session_id: str | None = None
     stream_fn: StreamFn | None = None
     stream_options: StreamOptions | None = None

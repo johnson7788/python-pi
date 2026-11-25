@@ -42,21 +42,28 @@ from pi_ai import (
     AbortSignal,
     AssistantMessage,
     AuthenticationError,
+    Context,
     ImageContent,
     Model,
+    StreamOptions,
     TextContent,
+    Usage,
     UserMessage,
     clamp_thinking_level,
+    stream_simple,
 )
 from pi_agent import (
+    DEFAULT_MAX_TURNS,
     Agent,
     AgentContext,
     AgentLoopTurnUpdate,
     AgentMessage,
     AgentTool,
     MessageEndEvent,
+    MessageStartEvent,
     PrepareNextTurnContext,
     StreamFn,
+    TurnGuards,
 )
 
 from .compaction import (
@@ -68,12 +75,16 @@ from .compaction import (
     calculate_context_tokens,
     compact_session,
     estimate_context_tokens,
+    estimate_tokens,
     should_compact,
 )
 from .messages import convert_to_llm
+from .overflow import is_overflow_error
 from .resource_loader import PromptTemplate, ResourceLoader
 from .session_manager import SessionManager, get_latest_compaction_entry
+from .policy.rules import PolicyConfig
 from .settings import SettingsManager
+from .token_scale import TokenScale
 from .skills import expand_skill_command
 from .system_prompt import build_system_prompt, get_system_prompt_options
 from .tools import DEFAULT_ACTIVE_TOOL_NAMES, create_builtin_tools
@@ -98,6 +109,34 @@ _DEFAULT_RETRY_SETTINGS: dict[str, Any] = {
     "baseDelayMs": 2000,
     "maxAgentDelayMs": 60000,
 }
+
+#: What a guard stop means, in words a reader of the transcript can use.
+_STOP_REASONS: dict[str, str] = {
+    "max_turns": "the iteration limit was reached",
+    "empty_response": "the model returned an empty reply twice",
+    "repeated_response": "the model repeated its previous reply",
+    "truncated": "the provider kept truncating the reply at the token cap",
+    "tool_failures": "the same tool calls kept failing",
+}
+
+#: A compaction must free at least this reciprocal of the context (5%) to count.
+#: Below it the next turn re-triggers immediately and pays for another summary
+#: every round while the window never actually shrinks.
+_MIN_FREED_FRACTION = 20
+
+#: Instruction for the tool-free answer written when a run ended without one.
+#:
+#: The point is not to pretend the task succeeded: it is that a failure with
+#: evidence collected should still produce the best available answer plus an
+#: honest limitation, instead of a blank assistant message.  Tools are off so the
+#: synthesis cannot start a second unbounded run.
+_FINALIZE_NOTICE = (
+    "The run stopped before the task finished: {reason}.\n"
+    "Using only the conversation above and the tool results already collected, "
+    "write the best final answer you can for the user now. Do not call tools, and "
+    "do not describe this notice. If part of the request could not be verified or "
+    "completed, state that briefly at the end."
+)
 
 #: Deterministic quota/billing failures must not be retried (upstream classifier).
 _NON_RETRYABLE_ERROR_RE = re.compile(
@@ -204,6 +243,14 @@ def expand_prompt_template(text: str, templates: Sequence[PromptTemplate]) -> st
 # --------------------------------------------------------------------------------------
 # Small helpers
 # --------------------------------------------------------------------------------------
+
+
+def _has_image_block(message: Any) -> bool:
+    """Whether a message carries an image; such samples do not measure text."""
+    content = getattr(message, "content", None)
+    if not isinstance(content, (list, tuple)):
+        return False
+    return any(getattr(block, "type", None) == "image" for block in content)
 
 
 def _content_text(content: Any) -> str:
@@ -420,6 +467,7 @@ class AgentSession:
         sandbox_backend: Any = None,
         extra_system_prompt: str = "",
         question_broker: QuestionBroker | None = None,
+        max_turns: int | None = DEFAULT_MAX_TURNS,
     ) -> None:
         self._model = model
         self._cwd = cwd
@@ -453,6 +501,9 @@ class AgentSession:
         # name too so ``get_active_tools`` never reports a tool that is not there.
         available = {tool.name for tool in self._tools}
         self._active_tool_names = [name for name in self._active_tool_names if name in available]
+        #: What this session asked for, before a policy narrows it.  Recomputed from
+        #: this on every run so a policy attached after construction still applies.
+        self._requested_tool_names = list(self._active_tool_names)
         # Extension tools are merged in and enabled by default: an extension
         # registers a tool because it wants it usable.
         if extension_runner is not None:
@@ -481,6 +532,17 @@ class AgentSession:
         self._retry_attempt = 0
         self._retry_abort: AbortController | None = None
         self._last_compaction_error: str | None = None
+        #: Message count at which compaction last reported it could free nothing.
+        #: Below that count the answer has not changed, so it is not retried.
+        self._compaction_exhausted_at: int | None = None
+        #: Learned ratio between provider token counts and ``chars / 4``.  Used only
+        #: to decide when and how much to compact (see ``token_scale``).
+        self._token_scale = TokenScale()
+        self._scale_prev_prompt: int | None = None
+        self._scale_prev_index: int | None = None
+        #: One overflow recovery per run: a second attempt means the history size
+        #: was never the problem, and looping burns the round budget.
+        self._overflow_recovered = False
         #: Runtime toggles driven by the RPC surface.  ``None`` means "follow settings".
         self._auto_compaction_override: bool | None = None
         self._auto_retry_override: bool | None = None
@@ -493,12 +555,17 @@ class AgentSession:
         #: one so one-shot modes do not exit while a child is still running.
         self._background_work: Callable[[], Any] | None = None
 
+        #: One guard state machine per session; the owner resets it per run, which
+        #: is what makes the counters describe *this* user turn.
+        self._turn_guards = TurnGuards(max_turns=max_turns)
+
         self._agent = Agent(
             model,
             self._base_system_prompt,
             self._tools,
             self._convert_to_llm,
             stream_fn=stream_fn,
+            turn_guards=self._turn_guards,
             prepare_next_turn=self._prepare_next_turn,
             get_api_key=self._get_api_key if auth_storage is not None else None,
             before_tool_call=self._before_tool_call if extension_runner is not None else None,
@@ -626,6 +693,7 @@ class AgentSession:
         """
         if self._disposed:
             raise RuntimeError("AgentSession has been disposed")
+        self._sync_offered_tools()
 
         if await self._try_extension_command(text):
             return
@@ -778,10 +846,13 @@ class AgentSession:
             raise RuntimeError("AgentSession has been disposed")
         if self._is_agent_run_active:
             raise RuntimeError("Agent is already processing. Wait for completion before continuing.")
+        self._sync_offered_tools()
         self._assert_usable_auth()
         await self._run_agent_call(self._agent.continue_)
 
     async def _run_agent_call(self, start: Callable[[], Any]) -> None:
+        self._turn_guards.reset()
+        self._overflow_recovered = False
         self._is_agent_run_active = True
         idle_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._idle_future = idle_future
@@ -802,6 +873,16 @@ class AgentSession:
         if message is None:
             return False
 
+        # An oversized prompt is not a transient failure: retrying the same request
+        # cannot work, and compacting afterwards is too late.  Compact, then let the
+        # run continue once.
+        if is_overflow_error(message) and not self._overflow_recovered:
+            self._overflow_recovered = True
+            if await self._run_auto_compaction(force=True):
+                self._drop_trailing_assistant()
+                return True
+            return False
+
         if self._is_retryable_error(message) and await self._prepare_retry(message):
             return True
 
@@ -810,12 +891,58 @@ class AgentSession:
             # counter so the next run starts fresh.
             self._retry_attempt = 0
 
+        # A guard stop is not an error: retries do not apply, and compaction would
+        # only delay the answer.  Write the answer from what the run collected
+        # instead of leaving an empty assistant message behind.
+        if self._turn_guards.stop_reason is not None:
+            reason = self._turn_guards.stop_reason
+            self._turn_guards.stop_reason = None
+            await self._finalize_after_stop(reason)
+            return False
+
         if await self._check_compaction(message, skip_aborted_check=True) == "retry":
             return True
 
         # The loop drains both queues before agent_end, so anything left was
         # queued during the run and needs a continuation.
         return self._agent.has_queued_messages()
+
+    async def _finalize_after_stop(self, reason: str) -> None:
+        """Write a tool-free final answer from the transcript the run produced.
+
+        Best-effort by design: every failure path returns without raising, because
+        this runs after the turn already failed and a second error would replace a
+        partial answer with a crash.  An empty synthesis is discarded rather than
+        appended — a blank assistant message is worse than none.
+        """
+        notice = _FINALIZE_NOTICE.format(reason=_STOP_REASONS.get(reason, reason))
+        request = [
+            *self._agent.state.messages,
+            UserMessage(content=[TextContent(text=notice)], timestamp=int(time.time() * 1000)),
+        ]
+        try:
+            messages = await self._convert_to_llm(request)
+            context = Context(
+                messages=messages,
+                system_prompt=self._agent.state.system_prompt,
+                tools=[],
+            )
+            options = StreamOptions(api_key=self._resolve_api_key())
+            produce: Callable[..., Any] = self._stream_fn or stream_simple
+            response = await produce(self._model, context, options).result()
+        except Exception:  # noqa: BLE001 - a failed synthesis must not mask the turn
+            return
+
+        if getattr(response, "stop_reason", None) == "error":
+            return
+        if not _content_text(getattr(response, "content", None)).strip():
+            return
+
+        # State first, then the single observer that persists and fans out: the
+        # message must be in the transcript before anything can react to it.
+        self._agent.state.messages.append(response)
+        await self._handle_agent_event(MessageStartEvent(message=response))
+        await self._handle_agent_event(MessageEndEvent(message=response))
 
     # -- persistence + state reduction -------------------------------------------------
 
@@ -859,6 +986,7 @@ class AgentSession:
         # bashExecution / compactionSummary / branchSummary are persisted elsewhere.
 
         if role == "assistant":
+            self._observe_token_scale(message)
             self._last_assistant_message = message
             if getattr(message, "stop_reason", None) != "error" and self._retry_attempt > 0:
                 # Reset immediately so retries do not accumulate across the
@@ -885,6 +1013,31 @@ class AgentSession:
     @property
     def extension_runner(self) -> Any:
         return self._extension_runner
+
+    def _policy_config(self) -> PolicyConfig | None:
+        """The deployment policy, when one was attached to this session's host."""
+        host = getattr(self._extension_runner, "host", None)
+        policy = getattr(host, "policy", None)
+        return policy if isinstance(policy, PolicyConfig) else None
+
+    def _sync_offered_tools(self) -> None:
+        """Drop tools the policy would refuse anyway.
+
+        A policy attached after construction (the normal order: the host binds before
+        the policy is installed) is honoured on the next run.  Removing a tool here
+        only changes what the model *sees*; the policy still refuses at call time if
+        something slips through.
+        """
+        policy = self._policy_config()
+        if policy is None:
+            return
+        offered = policy.offered_tools(self._requested_tool_names)
+        if offered == self._active_tool_names:
+            return
+        self._active_tool_names = offered
+        self._agent.set_tools([tool for tool in self._tools if tool.name in offered])
+        self._base_system_prompt = self._build_system_prompt()
+        self._agent.state.system_prompt = self._base_system_prompt
 
     async def _before_tool_call(self, context: Any, signal: Any) -> Any:
         """Bridge the agent's pre-tool hook to the extension ``tool_call`` event."""
@@ -1076,6 +1229,8 @@ class AgentSession:
             self._tools.append(tool)
             if tool.name not in self._active_tool_names:
                 self._active_tool_names.append(tool.name)
+            if tool.name not in self._requested_tool_names:
+                self._requested_tool_names.append(tool.name)
             added = True
         if not added:
             return
@@ -1218,9 +1373,7 @@ class AgentSession:
 
         # Remove the failed assistant from agent state (it stays in the session
         # file for history); agent.continue() rejects an assistant tail.
-        messages = self._agent.state.messages
-        if messages and getattr(messages[-1], "role", None) == "assistant":
-            self._agent.set_messages(messages[:-1])
+        self._drop_trailing_assistant()
 
         controller = AbortController()
         self._retry_abort = controller
@@ -1232,6 +1385,16 @@ class AgentSession:
             self._retry_attempt = 0
             return False
         return True
+
+    def _drop_trailing_assistant(self) -> None:
+        """Drop a trailing assistant message from state so ``continue_`` can run.
+
+        The session file keeps it: this is about the *next request's* transcript,
+        which cannot end on an assistant message.
+        """
+        messages = self._agent.state.messages
+        if messages and getattr(messages[-1], "role", None) == "assistant":
+            self._agent.set_messages(messages[:-1])
 
     async def _sleep_ms(self, delay_ms: int, signal: AbortSignal) -> bool:
         """Sleep for the backoff; ``False`` when the signal fired first."""
@@ -1246,6 +1409,44 @@ class AgentSession:
         return False
 
     # -- compaction --------------------------------------------------------------------
+
+    @property
+    def token_scale(self) -> TokenScale:
+        """The learned provider/estimate ratio (1.0 until enough samples land)."""
+        return self._token_scale
+
+    def _observe_token_scale(self, message: AssistantMessage) -> None:
+        """Learn from the prompt-token growth between two assistant replies.
+
+        The increment is measured from the *previous* assistant message onward, so it
+        is exactly the text (and tool results) appended between the two requests.
+        A session whose history shrank — a compaction, a branch switch — resets the
+        baseline instead of pretending a negative delta is a sample.
+        """
+        usage = getattr(message, "usage", None)
+        if not isinstance(usage, Usage):
+            return
+        prompt_tokens = calculate_context_tokens(usage)
+        if prompt_tokens <= 0:
+            return
+
+        messages = self._agent.state.messages
+        index = len(messages) - 1
+        previous_prompt, previous_index = self._scale_prev_prompt, self._scale_prev_index
+        if (
+            previous_prompt is not None
+            and previous_index is not None
+            and index > previous_index
+        ):
+            appended = messages[previous_index:index]
+            if appended:
+                estimated = sum(estimate_tokens(item) for item in appended)
+                has_image = any(_has_image_block(item) for item in appended)
+                self._token_scale.observe(
+                    prompt_tokens - previous_prompt, estimated, has_image=has_image
+                )
+        self._scale_prev_prompt = prompt_tokens
+        self._scale_prev_index = index
 
     def _model_key(self) -> str:
         return f"{self._model.provider}/{self._model.id}"
@@ -1298,6 +1499,13 @@ class AgentSession:
             return "none"
         if skip_aborted_check and getattr(message, "stop_reason", None) == "aborted":
             return "none"
+        # The last compaction could not free anything at this size; unless the
+        # session has grown since, the answer would be the same.
+        if (
+            self._compaction_exhausted_at is not None
+            and len(self._agent.state.messages) <= self._compaction_exhausted_at
+        ):
+            return "none"
 
         context_window = self._model.context_window if self._model is not None else 0
 
@@ -1315,7 +1523,9 @@ class AgentSession:
         if getattr(message, "stop_reason", None) != "error" and usage is not None:
             context_tokens = calculate_context_tokens(usage)
         if context_tokens <= 0:
-            context_tokens = estimate_context_tokens(self._agent.state.messages)
+            context_tokens = estimate_context_tokens(
+                self._agent.state.messages, self._token_scale.value
+            )
 
         if not should_compact(context_tokens, context_window, settings):
             return "none"
@@ -1323,8 +1533,13 @@ class AgentSession:
             return "compacted"
         return "none"
 
-    async def _run_auto_compaction(self) -> bool:
-        """Threshold compaction; failures are recorded, never raised into the run."""
+    async def _run_auto_compaction(self, *, force: bool = False) -> bool:
+        """Compaction; failures are recorded, never raised into the run.
+
+        ``force`` skips the "did it free enough" check, which only makes sense for
+        overflow repair: there the provider has already proved the window is too
+        small, so any reduction is progress.
+        """
         self._is_compacting = True
         try:
             try:
@@ -1334,19 +1549,33 @@ class AgentSession:
                     settings=self._compaction_settings(),
                     stream_fn=self._stream_fn,
                     api_key=self._resolve_api_key(),
+                    scale=self._token_scale.value,
                 )
             except Exception as error:  # noqa: BLE001 - upstream swallows auto-compaction errors
                 self._last_compaction_error = str(error)
+                return False
+
+            freed = result.tokens_before - result.tokens_after
+            floor = max(1, result.tokens_before // _MIN_FREED_FRACTION)
+            if not force and freed < floor:
+                # Writing this summary back would cost a call per turn without
+                # making the window any smaller.
+                self._compaction_exhausted_at = len(self._agent.state.messages)
+                self._last_compaction_error = (
+                    f"compaction freed {freed} of {result.tokens_before} tokens "
+                    f"(minimum {floor})"
+                )
                 return False
 
             await self._session_manager.append_compaction(
                 result.summary,
                 result.first_kept_entry_id,
                 result.tokens_before,
-                details=None,
+                details={"degraded": True} if result.degraded else None,
                 usage=result.usage,
             )
             self._replace_context_from_session()
+            self._compaction_exhausted_at = None
             self._last_compaction_error = None
             return True
         finally:
@@ -1364,6 +1593,7 @@ class AgentSession:
                 stream_fn=self._stream_fn,
                 api_key=self._resolve_api_key(),
                 custom_instructions=custom_instructions,
+                scale=self._token_scale.value,
             )
             await self._session_manager.append_compaction(
                 result.summary,

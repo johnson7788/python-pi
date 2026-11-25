@@ -22,9 +22,8 @@ surface removed.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Literal, Union
+from typing import Any, Callable, Literal, Union
 
-from pi_agent import AgentTool
 
 # --------------------------------------------------------------------------------------
 # Events emitted by this port

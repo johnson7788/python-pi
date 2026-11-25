@@ -28,7 +28,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 #: Tools whose argument set always contains a workspace path under ``path``.
 PATH_TOOLS = frozenset({"read", "write", "edit", "ls", "grep", "find", "glob"})
@@ -81,7 +81,10 @@ CONFIRM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 #: Redirection-ish targets to check for leaving the workspace.  Reading ``/usr/bin/python3``
 #: is normal and must stay allowed, so only *write* shapes are inspected.
 _WRITE_TARGET = re.compile(
-    r"(?:>>?|\btee\b|\bcp\b|\bmv\b|\brm\b|\bmkdir\b|\btouch\b|\bln\b|\bdd\s+of=)"
+    # ``of=`` is its own alternative: ``dd if=/dev/zero of=/dev/sda`` has an argument
+    # between ``dd`` and the target, which an anchored ``dd of=`` would miss — and
+    # missing it meant a raw device write was read as an ordinary path inspection.
+    r"(?:>>?|\btee\b|\bcp\b|\bmv\b|\brm\b|\bmkdir\b|\btouch\b|\bln\b|\bof=)"
     r"\s*['\"]?(/[^\s'\";|&)>]+)"
 )
 
@@ -122,6 +125,89 @@ class Decision(str, Enum):
     ALLOW = "allow"
     CONFIRM = "confirm"
     DENY = "deny"
+
+
+class Risk(str, Enum):
+    """How much an action can change, independent of whether it is permitted.
+
+    The verdict above says *what to do*; the risk says *what it costs if wrong*, and
+    is what a session grant is scoped to.  ``DESTRUCTIVE`` is deliberately not
+    grantable: "allow this for the session" must never cover an action that cannot be
+    undone.
+    """
+
+    READ = "read"
+    PROBE = "probe"
+    WRITE = "write"
+    DESTRUCTIVE = "destructive"
+
+
+_RISK_RANK = {Risk.READ: 1, Risk.PROBE: 2, Risk.WRITE: 3, Risk.DESTRUCTIVE: 4}
+
+#: Command shapes that remove or overwrite data irreversibly.  Kept narrow: a broad
+#: list would mark every ``rm`` destructive and make the distinction useless.
+DESTRUCTIVE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("recursive delete", re.compile(r"\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)+")),
+    ("disk write", re.compile(r"\bdd\s+.*\bof=/dev/")),
+    ("filesystem format", re.compile(r"\bmkfs(\.\w+)?\b")),
+    ("history rewrite", re.compile(r"\bgit\s+(reset\s+--hard|clean\s+-[a-zA-Z]*f)")),
+    ("database drop", re.compile(r"\b(drop\s+(table|database|schema)|truncate\s+table)\b", re.I)),
+    ("broad delete", re.compile(r"\bfind\b.*\s-delete\b")),
+)
+
+#: Command shapes that change files but are recoverable.
+WRITE_PATTERNS = (
+    re.compile(r">\s*[^&|]"),
+    re.compile(r"\b(tee|mv|cp|mkdir|rmdir|touch|chmod|chown|sed\s+-i|truncate|ln)\b"),
+)
+
+
+class SessionGrants:
+    """Risks the user approved "for this session" on this conversation.
+
+    Grants only ever move *down*: approving a write covers reads, never a
+    destructive action.  The store is deliberately in-memory — a grant dies with the
+    process, which is the lifetime users mean by "this session".
+    """
+
+    def __init__(self) -> None:
+        self._granted: set[Risk] = set()
+
+    def grant(self, risk: Risk) -> bool:
+        """Record a grant; returns ``False`` for a risk that may not be granted."""
+        if risk is Risk.DESTRUCTIVE:
+            return False
+        self._granted.add(risk)
+        return True
+
+    def covers(self, risk: Risk) -> bool:
+        return any(_RISK_RANK[risk] <= _RISK_RANK[granted] for granted in self._granted)
+
+    def clear(self) -> None:
+        self._granted.clear()
+
+    def snapshot(self) -> tuple[str, ...]:
+        return tuple(sorted(risk.value for risk in self._granted))
+
+
+def risk_of(tool_name: str, args: Mapping[str, Any] | None = None) -> Risk:
+    """Classify one call's risk; unknown tools are treated as a probe, never as read."""
+    name = (tool_name or "").strip()
+    payload = args if isinstance(args, Mapping) else {}
+    if name in WRITE_TOOLS:
+        return Risk.WRITE
+    if name in PATH_TOOLS:
+        return Risk.READ
+    if name in ("ask_user_question", "present"):
+        return Risk.READ
+    if name == "bash":
+        command = str(payload.get("command") or "")
+        if any(pattern.search(command) for _label, pattern in DESTRUCTIVE_PATTERNS):
+            return Risk.DESTRUCTIVE
+        if any(pattern.search(command) for pattern in WRITE_PATTERNS):
+            return Risk.WRITE
+        return Risk.PROBE
+    return Risk.PROBE
 
 
 @dataclass(frozen=True)
@@ -166,6 +252,26 @@ class PolicyConfig:
     #: Seconds to wait for a human answer before treating a confirmation as refused.
     confirm_timeout: float = 300.0
     record: Callable[[dict[str, Any]], None] | None = None
+    #: Approvals remembered for the rest of this session.  Empty by default: a
+    #: deployment that wants "allow for this session" turns on ``grant_after_confirm``.
+    session_grants: SessionGrants = field(default_factory=SessionGrants)
+    #: When true, approving a *write* also covers later writes in this session.  The
+    #: dialog text must say so; that copy lives in ``policy/extension.py``.
+    grant_after_confirm: bool = False
+
+    def offered_tools(self, names: Iterable[str]) -> list[str]:
+        """The subset worth offering to the model.
+
+        A tool in neither ``allow_tools`` nor ``confirm_tools`` is refused before it
+        runs; advertising it anyway costs tokens and invites a wasted round.
+        """
+        return [
+            name for name in names if name in self.allow_tools or name in self.confirm_tools
+        ]
+
+
+#: Reason prefix of an allow that came from a session grant (not from the rules).
+GRANT_REASON_PREFIX = "granted for this session"
 
 
 def _within(root: str, candidate: str) -> bool:
@@ -287,7 +393,18 @@ def classify_tool_call(
         return Verdict(Decision.DENY, f"refused by policy: tool {name!r} is not available here")
 
     payload = args if isinstance(args, Mapping) else {}
+    verdict = _classify_without_grants(config, name, payload)
+    if verdict.decision is Decision.CONFIRM:
+        risk = risk_of(name, payload)
+        if config.session_grants.covers(risk):
+            return Verdict(Decision.ALLOW, f"{GRANT_REASON_PREFIX}: {risk.value}")
+    return verdict
 
+
+def _classify_without_grants(
+    config: PolicyConfig, name: str, payload: Mapping[str, Any]
+) -> Verdict:
+    """The rules' verdict before any session grant is considered."""
     if name in PATH_TOOLS:
         for key in PATH_ARGUMENTS:
             value = payload.get(key)

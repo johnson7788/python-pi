@@ -26,941 +26,89 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import inspect
-import io
 import json
 import os
 import re
 import shutil
-import time
-import tempfile
-import urllib.parse
-import base64
-import secrets
-import uuid
-import zipfile
-from xml.etree import ElementTree
+import sys
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
-from pi_coding_agent.bootstrap import BootstrapOptions, bootstrap, resolve_project_trust
+from pi_coding_agent.bootstrap import BootstrapOptions, resolve_project_trust
 from pi_coding_agent.modes.jsonl import serialize_json_line
-from pi_coding_agent.modes.rpc_mode import RpcMode, model_to_json
-from pi_coding_agent.policy import DEFAULT_ALLOW_TOOLS, POLICY_EXTENSION_PATH, PolicyConfig
+from pi_coding_agent.modes.rpc_mode import model_to_json
+from pi_coding_agent.policy import DEFAULT_ALLOW_TOOLS, PolicyConfig
 from pi_coding_agent.resource_loader import ResourceLoader
 from pi_coding_agent.settings import SettingsManager
-from pi_coding_agent.session_manager import SessionManager, get_default_session_dir
+from pi_coding_agent.session_manager import get_default_session_dir
 
 from . import apps as app_catalog
 from . import market as market_catalog
-from . import office as office_store
-from .docx_export import markdown_to_docx
-from . import xlsx_sidecar as xlsx_engine
+from .constants import (
+    BLOCKING_DIALOG_METHODS,
+    LOCAL_UID,
+)
+from .errors import error, install_error_handlers
+from .routers.accounts import register as register_account_routes
+from .routers.apps import register as register_app_routes
+from .routers.plugins import register as register_plugin_routes
+from .routers.workspace import register as register_workspace_routes
+from .routers.schedules import register as register_schedule_routes
+from .routers.office import register as register_office_routes
+from .schemas import (
+    SkillToggleRequest,
+    MarketRatingRequest,
+    FeedbackRequest,
+    AppUpsertRequest,
+)
+from .worker import (
+    Connection,
+    Hub,
+    CapacityError,
+    BootstrapError,
+    SessionWorker,
+    SessionRegistry,
+)
 from . import plugins as plugin_catalog
 from . import schedules as schedule_catalog
 from . import auth
 from .config import COOKIE_NAME, ServerConfig
-from .db import Database, DuplicateUsername, DuplicateWorkspace, month_start
-from .workspace import Workspace, WorkspaceError
+from .db import Database, DuplicateUsername, month_start
+from .runlog import replay_floor
+from .tracing import NullTracer, Tracer
+from .workspace import WorkspaceError
 
 __version__ = "0.1.0"
 
-#: Shortest password the account endpoints will accept.  Length beats composition rules.
-_MIN_PASSWORD_LENGTH = 8
-
-#: The single implicit tenant in ``single`` mode.  Team mode never uses it.
-LOCAL_UID = "local"
-
-#: A user has at most one live worker, so one sandbox slot per user is enough.  Naming it
-#: (rather than hashing something dynamic) is what makes the container id stable across an
-#: idle eviction and restart, so a user's installed packages survive a quiet afternoon.
-DEFAULT_SANDBOX_SLOT = "session"
-
-#: Dialog methods that block a handler until a client answers.
-BLOCKING_DIALOG_METHODS = frozenset({"select", "confirm", "input", "editor"})
 
 
-@dataclass
-class Connection:
-    """One browser tab."""
+def query_int(value: str | None, default: int = 0) -> int:
+    """A non-negative integer query parameter, or ``default`` when absent/invalid.
 
-    websocket: WebSocket
-    queue: "asyncio.Queue[dict]" = field(default_factory=asyncio.Queue)
-    sender: asyncio.Task | None = None
-
-    def send(self, payload: dict) -> None:
-        self.queue.put_nowait(payload)
-
-
-class Hub:
-    """Fan-out for outbound records."""
-
-    def __init__(self) -> None:
-        self._clients: list[Connection] = []
-        self._last_active: Connection | None = None
-
-    @property
-    def client_count(self) -> int:
-        return len(self._clients)
-
-    def add(self, websocket: WebSocket) -> Connection:
-        connection = Connection(websocket=websocket)
-        self._clients.append(connection)
-        self._last_active = connection
-        return connection
-
-    def remove(self, connection: Connection) -> None:
-        try:
-            self._clients.remove(connection)
-        except ValueError:
-            pass
-        if self._last_active is connection:
-            self._last_active = self._clients[-1] if self._clients else None
-
-    def touch(self, connection: Connection) -> None:
-        self._last_active = connection
-
-    def broadcast(self, payload: dict) -> None:
-        for connection in list(self._clients):
-            connection.send(payload)
-
-    def send_to_dialog_target(self, payload: dict) -> None:
-        """Deliver a blocking dialog to one client, not all of them."""
-        target = self._last_active or (self._clients[-1] if self._clients else None)
-        if target is None:
-            # Nobody can answer; the UI context resolves with safe defaults.
-            return
-        target.send(payload)
-
-    def emit_routed(self, payload: dict) -> None:
-        """Route one outbound record: dialogs to one client, everything else to all."""
-        if (
-            payload.get("type") == "extension_ui_request"
-            and payload.get("method") in BLOCKING_DIALOG_METHODS
-        ):
-            self.send_to_dialog_target(payload)
-            return
-        self.broadcast(payload)
-
-
-class CapacityError(RuntimeError):
-    """Raised when the process is already holding as many sessions as it may."""
-
-
-class BootstrapError(RuntimeError):
-    """A session could not be started, for a reason the user can act on.
-
-    ``bootstrap`` reports missing credentials and unselectable models by raising
-    ``SystemExit``, which is not an ``Exception``: in a single-user CLI that exits the
-    program, but in a server it would tear through the request handler.  It is converted
-    here so one user's misconfiguration becomes that user's error message.
+    Used for the WebSocket's ``?since=`` reconnect offset: a stale bookmark or a
+    hand-edited URL must not be able to raise inside the handshake.
     """
+    try:
+        return max(0, int(value or default))
+    except (TypeError, ValueError):
+        return default
 
 
-class SessionWorker:
-    """One user's live session, plus the browser tabs watching it.
 
-    A worker owns exactly what a whole server process used to own: a bootstrapped
-    session, the ``RpcMode`` controller driving it, and a :class:`Hub`.  Because the hub
-    is per worker, a blocking dialog is offered only to *that user's* tabs — the old
-    "most recently active tab anywhere" rule would have shown one colleague's
-    confirmation prompt inside another colleague's page.
-    """
 
-    def __init__(
-        self,
-        uid: str,
-        options: BootstrapOptions,
-        *,
-        workspace: str = "default",
-        app_id: str = "general",
-        mode_id: str = "office",
-        on_warning: Callable[[str], None] | None = None,
-        on_session_file: Callable[[str, str, str, str, str], None] | None = None,
-        policy_factory: Callable[["SessionWorker"], Any] | None = None,
-        on_audit: Callable[[dict[str, Any]], int | None] | None = None,
-        on_audit_finish: Callable[[int, bool, int], None] | None = None,
-        on_usage: Callable[[dict[str, Any]], None] | None = None,
-    ) -> None:
-        self.uid = uid
-        self.workspace = workspace
-        self.app_id = app_id
-        self.mode_id = mode_id
-        self.options = options
-        self.hub = Hub()
-        self.warnings: list[str] = []
-        self.last_active = time.monotonic()
-        self._on_warning = on_warning
-        self._on_session_file = on_session_file
-        self._policy_factory = policy_factory
-        self._on_audit = on_audit
-        self._on_audit_finish = on_audit_finish
-        self._on_usage = on_usage
-        #: tool_call_id -> (audit row id, monotonic start), so an execution outcome can be
-        #: attached to the decision that authorised it.
-        self._pending_audit: dict[str, tuple[int, float]] = {}
-        self._state: Any = None
-        self._controller: RpcMode | None = None
-        self._lock = asyncio.Lock()
 
-    @property
-    def started(self) -> bool:
-        return self._controller is not None
 
-    @property
-    def state(self) -> Any:
-        assert self._state is not None, "worker not started"
-        return self._state
 
-    @property
-    def controller(self) -> RpcMode:
-        assert self._controller is not None, "worker not started"
-        return self._controller
 
-    @property
-    def idle_seconds(self) -> float:
-        return time.monotonic() - self.last_active
 
-    @property
-    def busy(self) -> bool:
-        """True while a turn or a delegated child is running.
 
-        An idle timeout must never interrupt a turn, and a background subagent is
-        exactly the kind of work a user expects to survive a quiet minute.
-        """
-        if self._controller is None:
-            return False
-        runtime = getattr(self._state, "runtime", None)
-        if runtime is not None and callable(getattr(runtime, "has_retiring_runs", None)):
-            # A conversation the user navigated away from is still finishing; evicting
-            # this worker now would abort work they expect to survive the click.
-            if runtime.has_retiring_runs():
-                return True
-        manager = getattr(self._state, "subagent_manager", None)
-        if manager is not None and manager.has_running():
-            return True
-        try:
-            session = self._controller.session
-        except Exception:  # noqa: BLE001 - a torn-down session is simply not busy
-            return False
-        return bool(getattr(session, "is_streaming", False))
 
-    def touch(self) -> None:
-        self.last_active = time.monotonic()
 
-    def session_file(self) -> str | None:
-        if self._controller is None:
-            return None
-        try:
-            return self._controller.session.state().get("session_file")
-        except Exception:  # noqa: BLE001
-            return None
-
-    def running_session_files(self) -> set[str]:
-        """Absolute paths of this worker's conversations that are streaming now.
-
-        Includes runs the user walked away from: the runtime retires them instead
-        of cancelling, and the sidebar still has to draw their spinner.
-        """
-        if self._controller is None or self._state is None:
-            return set()
-        runtime = getattr(self._state, "runtime", None)
-        getter = getattr(runtime, "running_session_files", None)
-        if callable(getter):
-            try:
-                return set(getter())
-            except Exception:  # noqa: BLE001 - a torn-down runtime is simply idle
-                return set()
-        try:
-            session = self._controller.session
-            if session.is_streaming and session.session_file:
-                return {os.path.realpath(session.session_file)}
-        except Exception:  # noqa: BLE001
-            pass
-        return set()
-
-    async def ensure_started(self) -> None:
-        """Bootstrap on first use, so the server binds instantly and idle users cost nothing."""
-        if self._controller is not None:
-            return
-        async with self._lock:
-            if self._controller is not None:
-                return
-
-            def _warn(message: str) -> None:
-                self.warnings.append(message)
-                if self._on_warning is not None:
-                    self._on_warning(message)
-
-            state = await bootstrap(self.options, on_warning=_warn)
-            self._state = state
-            self._controller = RpcMode(
-                runtime=state.runtime,
-                model_registry=state.registry,
-                resource_loader=state.loader,
-                extension_runner=state.extension_runner,
-                emit=self._emit,
-                host_mode="web",
-                app_id=self.app_id,
-                mode_id=self.mode_id,
-            )
-            # A browser tab is the only possible answerer here. Before the first
-            # tab exists the count is zero, so a scheduled run that tries to ask
-            # fails fast instead of parking a turn nobody can see.
-            self._controller.set_client_count(lambda: self.hub.client_count)
-            # A conversation left mid-turn keeps streaming after its events stopped
-            # reaching the tabs; this is the one notification that it has finished.
-            set_settled = getattr(state.runtime, "set_on_background_settled", None)
-            if callable(set_settled):
-                set_settled(self._notify_background_settled)
-            # The policy goes in after ``RpcMode`` has bound the host, because binding is
-            # what supplies the UI context a confirmation dialog needs.
-            if self._policy_factory is not None and state.extension_runner is not None:
-                policy = self._policy_factory(self)
-                if policy is not None:
-                    state.extension_runner.host.policy = policy
-
-    # -- auditing ----------------------------------------------------------------------
-
-    def _emit(self, payload: dict[str, Any]) -> None:
-        """Every outbound record, observed for audit and usage, then routed to the tabs."""
-        try:
-            self._observe(payload)
-        except Exception:  # noqa: BLE001 - bookkeeping must not be able to break the stream
-            pass
-        self.hub.emit_routed(payload)
-
-    def _notify_background_settled(self, session_path: str) -> None:
-        """Tell the tabs that a conversation abandoned mid-turn has finished.
-
-        The client turns this into the sidebar's green "done, unread" dot. It is an
-        extra record on the same socket, not a protocol command, so an older client
-        simply ignores it.
-        """
-        self._emit(
-            {
-                "type": "session_activity",
-                "sessionFile": session_path,
-                "running": False,
-            }
-        )
-
-    def _observe(self, payload: dict[str, Any]) -> None:
-        kind = payload.get("type")
-        if kind == "tool_execution_end":
-            self._observe_tool_end(payload)
-        elif kind == "message_end":
-            self._observe_message_end(payload)
-        elif kind == "response":
-            self._observe_response(payload)
-
-    def _record_usage(self, usage: Any, request_kind: str) -> None:
-        """Persist one usage payload, if it reports anything at all."""
-        if self._on_usage is None or not isinstance(usage, dict):
-            return
-        input_tokens = int(usage.get("input") or 0)
-        output_tokens = int(usage.get("output") or 0)
-        cost = float((usage.get("cost") or {}).get("total") or 0.0)
-        if not (input_tokens or output_tokens or cost):
-            return
-        session_id = ""
-        provider = model_id = ""
-        try:
-            session = self.controller.session
-            session_id = session.state().get("session_id") or ""
-            model = getattr(session, "model", None)
-            provider = getattr(model, "provider", "") or ""
-            model_id = getattr(model, "id", "") or ""
-        except Exception:  # noqa: BLE001 - a torn-down session still gets billed
-            pass
-        self._on_usage(
-            {
-                "uid": self.uid,
-                "session_id": session_id,
-                "provider": provider,
-                "model_id": model_id,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cache_read_tokens": int(usage.get("cacheRead") or 0),
-                "cache_write_tokens": int(usage.get("cacheWrite") or 0),
-                "cost": cost,
-                "request_kind": request_kind,
-            }
-        )
-
-    def _observe_message_end(self, payload: dict[str, Any]) -> None:
-        """Record one model response's usage.
-
-        ``message_end`` fires once per assistant message and carries that message's own
-        usage, so this is per-response accounting rather than a running total — which is
-        what makes the sum over a month meaningful.  ``turn_end`` carries the same message
-        again and is deliberately ignored, or every response would be counted twice.
-        """
-        message = payload.get("message")
-        if not isinstance(message, dict) or message.get("role") != "assistant":
-            return
-        self._record_usage(message.get("usage"), "turn")
-
-    def _observe_response(self, payload: dict[str, Any]) -> None:
-        """Record context compaction, which never produces a ``message_end``.
-
-        Compaction is a full summarisation pass over the transcript, so it is one of the
-        most expensive calls a session makes; leaving it out would understate usage in
-        exactly the sessions that use the most tokens.
-        """
-        if not payload.get("success") or payload.get("command") != "compact":
-            return
-        data = payload.get("data")
-        if isinstance(data, dict):
-            self._record_usage(data.get("usage"), "compaction")
-
-    def _observe_tool_end(self, payload: dict[str, Any]) -> None:
-        call_id = payload.get("toolCallId") or payload.get("tool_call_id") or ""
-        pending = self._pending_audit.pop(str(call_id), None)
-        if pending is None or self._on_audit_finish is None:
-            return
-        row_id, started = pending
-        self._on_audit_finish(
-            row_id, bool(payload.get("isError")), int((time.monotonic() - started) * 1000)
-        )
-
-    def record_tool_decision(self, entry: dict[str, Any]) -> None:
-        """The policy extension's audit sink.
-
-        The decision is written as soon as it is made — a blocked call never reaches
-        execution, so waiting for an outcome would lose exactly the rows that matter most.
-        """
-        if self._on_audit is None:
-            return
-        session_id = ""
-        try:
-            session_id = self.controller.session.state().get("session_id") or ""
-        except Exception:  # noqa: BLE001 - a torn-down session still gets audited
-            pass
-        row_id = self._on_audit(
-            {
-                "uid": self.uid,
-                "session_id": session_id,
-                "tool_name": str(entry.get("tool_name") or ""),
-                "tool_call_id": str(entry.get("tool_call_id") or ""),
-                "decision": str(entry.get("decision") or ""),
-                "reason": str(entry.get("reason") or ""),
-                "input_preview": str(entry.get("input_preview") or ""),
-            }
-        )
-        call_id = str(entry.get("tool_call_id") or "")
-        if row_id and call_id:
-            self._pending_audit[call_id] = (int(row_id), time.monotonic())
-
-    async def shutdown(self, reason: str = "session closed") -> None:
-        """Record where the user was, then release the session object and its sandbox."""
-        if self._on_session_file is not None:
-            path = self.session_file()
-            if path:
-                self._on_session_file(self.uid, self.workspace, self.app_id, self.mode_id, path)
-        controller, state = self._controller, self._state
-        self._controller, self._state = None, None
-        if controller is not None:
-            controller.close()
-        if state is not None:
-            await state.shutdown(reason)
-        await self._release_sandbox()
-
-    async def _release_sandbox(self) -> None:
-        """Drop the user's container when their session goes away.
-
-        Best effort: the provisioner also reaps idle containers, because a server that dies
-        cannot be relied on to have cleaned up.
-        """
-        backend = getattr(self.options, "sandbox_backend", None)
-        release = getattr(backend, "release", None)
-        if release is None:
-            return
-        try:
-            result = release()
-            if inspect.isawaitable(result):
-                await result
-        except Exception:  # noqa: BLE001 - a stuck container must not block eviction
-            pass
-
-    async def run_prompt(self, text: str) -> str | None:
-        """Run one headless turn; returns the session file once it settles."""
-        await self.ensure_started()
-        if self.busy:
-            raise RuntimeError("worker is already running")
-        await self.controller.handle_line(
-            json.dumps({"type": "prompt", "id": "scheduled", "message": text})
-        )
-        await self.controller.wait_for_prompt()
-        return self.session_file()
-
-    async def run_scheduled_prompt(self, text: str) -> str | None:
-        """Start a fresh conversation for one scheduled run, then prompt it.
-
-        A schedule is a task generator, not a command sent to the currently open
-        conversation: every run must produce its own session in the schedule history.
-        """
-        await self.ensure_started()
-        if self.busy:
-            raise RuntimeError("worker is already running")
-        await self.controller.handle_line(
-            json.dumps({"type": "new_session", "id": "scheduled-new"})
-        )
-        await self.controller.handle_line(
-            json.dumps({"type": "prompt", "id": "scheduled", "message": text})
-        )
-        await self.controller.wait_for_prompt()
-        return self.session_file()
-
-    def state_payload(self) -> dict[str, Any]:
-        """The same shape the ``get_state`` command returns."""
-        session = self.controller.session
-        snapshot = session.state()
-        payload: dict[str, Any] = {
-            "model": model_to_json(session.model),
-            "thinkingLevel": session.thinking_level,
-            "isStreaming": session.is_streaming,
-            "isCompacting": session.is_compacting,
-            "steeringMode": session.steering_mode,
-            "followUpMode": session.follow_up_mode,
-            "sessionFile": snapshot["session_file"],
-            "sessionId": snapshot["session_id"],
-            "autoCompactionEnabled": session.auto_compaction_enabled,
-            "messageCount": len(session.messages),
-            "pendingMessageCount": session.pending_message_count,
-            # Questions that can still be answered: derived from the transcript, so
-            # a reconnecting tab restores them without any extra bookkeeping.
-            "pendingQuestions": session.question_broker.pending_view(),
-            "cwd": self.state.cwd,
-        }
-        if snapshot["session_name"]:
-            payload["sessionName"] = snapshot["session_name"]
-        return payload
-
-
-class SessionRegistry:
-    """Owns every live session in this process, one worker per user.
-
-    In team mode each user's ``cwd`` and ``agent_dir`` come from their ``uid``, so a
-    session physically cannot see another user's files.  Single mode keeps exactly one
-    worker under :data:`LOCAL_UID` with the command-line options untouched, which is how
-    the original personal flow keeps behaving the same way it always did.
-
-    Two things bound the shared failure domain: a cap on live workers, and idle
-    eviction.  Eviction is lossless because the session file is remembered before the
-    session object is released.
-    """
-
-    def __init__(
-        self,
-        base_options: BootstrapOptions,
-        config: ServerConfig,
-        *,
-        on_warning: Callable[[str], None] | None = None,
-        on_session_file: Callable[[str, str, str, str, str], None] | None = None,
-        resume_lookup: Callable[[str, str, str, str], str | None] | None = None,
-        disabled_skills_lookup: Callable[[str, str], Sequence[str]] | None = None,
-        plugin_paths_lookup: Callable[[str, str], Sequence[str]] | None = None,
-        composition_lookup: Callable[[str, str], tuple[str, tuple[str, ...] | None]] | None = None,
-        workspace_path_lookup: Callable[[str, str], str | None] | None = None,
-        policy_factory: Callable[[SessionWorker], Any] | None = None,
-        on_audit: Callable[[dict[str, Any]], int | None] | None = None,
-        on_audit_finish: Callable[[int, bool, int], None] | None = None,
-        on_usage: Callable[[dict[str, Any]], None] | None = None,
-    ) -> None:
-        self.base_options = base_options
-        self.config = config
-        self._on_warning = on_warning
-        self._on_session_file = on_session_file
-        self._resume_lookup = resume_lookup
-        self._disabled_skills_lookup = disabled_skills_lookup
-        self._plugin_paths_lookup = plugin_paths_lookup
-        self._composition_lookup = composition_lookup
-        self._workspace_path_lookup = workspace_path_lookup
-        self._policy_factory = policy_factory
-        self._on_audit = on_audit
-        self._on_audit_finish = on_audit_finish
-        self._on_usage = on_usage
-        self._workers: dict[tuple[str, str, str, str], SessionWorker] = {}
-        self._lock = asyncio.Lock()
-
-    # -- introspection ---------------------------------------------------------------
-
-    @property
-    def active_users(self) -> int:
-        return len({uid for uid, _workspace, _app, _mode in self._workers})
-
-    def worker(
-        self,
-        uid: str,
-        workspace: str = "default",
-        app_id: str = "general",
-        mode_id: str = "office",
-    ) -> SessionWorker | None:
-        return self._workers.get((uid, workspace, app_id, mode_id))
-
-    def workers_for(self, uid: str, workspace: str | None = None) -> list[SessionWorker]:
-        return [
-            worker
-            for (worker_uid, worker_workspace, _app, _mode), worker in self._workers.items()
-            if worker_uid == uid and (workspace is None or worker_workspace == workspace)
-        ]
-
-    def client_count(self) -> int:
-        return sum(worker.hub.client_count for worker in self._workers.values())
-
-    # -- lifecycle -------------------------------------------------------------------
-
-    def backend_for(self, uid: str, workspace: str, workspace_id: str = "default") -> Any:
-        """The execution backend for one user's session.
-
-        The scope is per **user**, not per command: one container serves their conversation
-        so a ``ls`` does not pay for a container start, and it is released when their worker
-        is evicted.  The id is a function of the uid, so a user who comes back finds the
-        same container if the provisioner has not reaped it yet.
-        """
-        if self.config.sandbox_backend in ("", "local", "process"):
-            return None  # LocalBackend is the tool's own default; no need to construct one.
-        from pi_coding_agent.sandbox import SandboxScope, host_path_for, select_backend
-
-        host_workspace = host_path_for(
-            workspace,
-            app_root=self.config.data_root,
-            host_root=self.config.host_data_root,
-        )
-        scope = SandboxScope(
-            uid=uid,
-            thread=DEFAULT_SANDBOX_SLOT if workspace_id == "default" else f"ws-{workspace_id}",
-            workspace=workspace,
-            host_workspace=host_workspace,
-        )
-        return select_backend(
-            self.config.sandbox_backend,
-            scope=scope,
-            url=self.config.provisioner_url,
-            token=self.config.provisioner_token,
-            image=self.config.sandbox_image,
-            network=self.config.sandbox_network,
-            run_as=self.config.sandbox_run_as,
-        )
-
-    def options_for(
-        self,
-        uid: str,
-        workspace_id: str = "default",
-        app_id: str = "general",
-        mode_id: str = "office",
-    ) -> BootstrapOptions:
-        """Per-user, per-workspace session options.  Single mode passes the command line through."""
-        if not self.config.requires_auth:
-            if workspace_id != "default":
-                raise ValueError("workspaces require team mode")
-            if self._composition_lookup is not None:
-                app_prompt, app_skills = self._composition_lookup(app_id, mode_id)
-            else:
-                app_prompt, app_skills = app_catalog.composition_for(app_id, mode_id)
-            # Sandboxing is orthogonal to tenancy: a single-user install may still want its
-            # commands contained, so the backend is attached in both modes.
-            if self.config.sandbox_backend in ("", "local", "process"):
-                return dataclasses.replace(
-                    self.base_options,
-                    app_prompt=app_prompt,
-                    app_skills=app_skills,
-                    app_id=app_id,
-                    mode_id=mode_id,
-                    plugin_paths=(
-                        tuple(self._plugin_paths_lookup(uid, app_id))
-                        if self._plugin_paths_lookup is not None
-                        else ()
-                    ),
-                )
-            return dataclasses.replace(
-                self.base_options,
-                sandbox_backend=self.backend_for(LOCAL_UID, self.base_options.cwd),
-                app_prompt=app_prompt,
-                app_skills=app_skills,
-                app_id=app_id,
-                mode_id=mode_id,
-                plugin_paths=(
-                    tuple(self._plugin_paths_lookup(uid, app_id))
-                    if self._plugin_paths_lookup is not None
-                    else ()
-                ),
-            )
-        workspace, agent = self.config.ensure_user_layout(uid)
-        if self._workspace_path_lookup is not None:
-            looked_up = self._workspace_path_lookup(uid, workspace_id)
-            if looked_up:
-                workspace = looked_up
-                os.makedirs(workspace, exist_ok=True)
-        if workspace_id != "default" and self._workspace_path_lookup is None:
-            workspace = self.config.ensure_workspace_path(uid, workspace_id)
-        resume = (
-            self._resume_lookup(uid, workspace_id, app_id, mode_id)
-            if self._resume_lookup is not None
-            else None
-        )
-        if resume and not os.path.isfile(resume):
-            resume = None
-        return dataclasses.replace(
-            self.base_options,
-            cwd=workspace,
-            agent_dir=agent,
-            # The shared credential replaces any per-user `auth.json`, so a user cannot
-            # shadow it.  `--resume` is per worker, never inherited from the command line.
-            api_key=self.config.api_key or self.base_options.api_key,
-            resume=resume,
-            extension_paths=(),
-            no_extensions=not self.config.allow_user_extensions,
-            # The governance extension is a *built-in* path, so it loads in exactly the
-            # configuration that refuses per-user extension code.
-            builtin_extension_paths=(POLICY_EXTENSION_PATH,),
-            # The process environment holds the shared credential; without this any user
-            # could read it back by asking the agent to run `env`.
-            scrub_shell_env=True,
-            sandbox_backend=self.backend_for(uid, workspace, workspace_id),
-            disabled_skills=(
-                tuple(self._disabled_skills_lookup(uid, workspace_id))
-                if self._disabled_skills_lookup is not None
-                else ()
-            ),
-            # A tenant's catalog is the deployment template (symlinked into the agent
-            # dir), never the server operator's personal ~/.agents/skills.
-            include_home_skills=False,
-            app_prompt=(
-                self._composition_lookup(app_id, mode_id)[0]
-                if self._composition_lookup is not None
-                else app_catalog.composition_for(app_id, mode_id)[0]
-            ),
-            app_id=app_id,
-            mode_id=mode_id,
-            app_skills=(
-                self._composition_lookup(app_id, mode_id)[1]
-                if self._composition_lookup is not None
-                else app_catalog.composition_for(app_id, mode_id)[1]
-            ),
-            plugin_paths=(
-                tuple(self._plugin_paths_lookup(uid, app_id))
-                if self._plugin_paths_lookup is not None
-                else ()
-            ),
-        )
-
-    async def acquire(
-        self,
-        uid: str,
-        workspace: str = "default",
-        app_id: str = "general",
-        mode_id: str = "office",
-    ) -> SessionWorker:
-        """Return the worker for one user/workspace/composition, starting it if needed."""
-        key = (uid, workspace, app_id, mode_id)
-        async with self._lock:
-            existing = self._workers.get(key)
-            if existing is not None:
-                existing.touch()
-                return existing
-
-            await self._evict_idle_locked()
-            users = {key[0] for key in self._workers}
-            if uid not in users and len(users) >= self.config.max_active_users:
-                raise CapacityError(
-                    f"the server is already serving {len(users)} users; try again shortly"
-                )
-            # A user pins one worker per composition; bound that separately from the
-            # deployment-wide user cap, and recycle their least recently used idle one.
-            evicted: list[SessionWorker] = []
-            mine = [key for key in self._workers if key[0] == uid]
-            if len(mine) >= self.config.max_workers_per_user:
-                idle = sorted(
-                    (
-                        (self._workers[key].last_active, key)
-                        for key in mine
-                        if not self._workers[key].busy
-                    ),
-                    key=lambda item: item[0],
-                )
-                if not idle:
-                    raise CapacityError(
-                        "this account already has the maximum number of active sessions; "
-                        "finish one before opening another"
-                    )
-                evicted.append(self._workers.pop(idle[0][1]))
-
-            worker = SessionWorker(
-                uid,
-                self.options_for(uid, workspace, app_id, mode_id),
-                workspace=workspace,
-                app_id=app_id,
-                mode_id=mode_id,
-                on_warning=self._on_warning,
-                on_session_file=self._on_session_file,
-                policy_factory=self._policy_factory,
-                on_audit=self._on_audit,
-                on_audit_finish=self._on_audit_finish,
-                on_usage=self._on_usage,
-            )
-            self._workers[key] = worker
-
-        for stale in evicted:
-            try:
-                await stale.shutdown("worker limit")
-            except Exception:  # noqa: BLE001
-                pass
-
-        # Started outside the registry lock: a bootstrap can take seconds, and holding the
-        # lock would stall every other user for its duration.
-        try:
-            await worker.ensure_started()
-        except BaseException as error:
-            async with self._lock:
-                self._workers.pop(key, None)
-            if isinstance(error, SystemExit):
-                raise BootstrapError(str(error)) from error
-            raise
-        worker.touch()
-        await self._recycle_idle_siblings(uid, workspace, key)
-        return worker
-
-    async def _recycle_idle_siblings(
-        self, uid: str, workspace: str, keep: tuple[str, str, str, str]
-    ) -> None:
-        """Drop this user's other compositions in the same workspace.
-
-        Each (app, mode) has its own worker, so switching apps would otherwise pin one
-        worker per composition until the 30-minute idle sweep.  A worker is only
-        recycled when it is idle *and* has no connected tab: a second browser tab on
-        another app keeps its own worker.
-        """
-        stale: list[SessionWorker] = []
-        async with self._lock:
-            for key, worker in list(self._workers.items()):
-                if key == keep or key[0] != uid or key[1] != workspace:
-                    continue
-                if worker.busy or worker.hub.client_count > 0:
-                    continue
-                stale.append(self._workers.pop(key))
-        for worker in stale:
-            try:
-                await worker.shutdown("another composition became active")
-            except Exception:  # noqa: BLE001
-                pass
-
-    async def acquire_scheduled(
-        self,
-        uid: str,
-        workspace: str = "default",
-        app_id: str = "general",
-        mode_id: str = "office",
-    ) -> SessionWorker:
-        """A disposable worker for one scheduled run.
-
-        The user's interactive worker must not be switched to the scheduled session:
-        a background run would otherwise replace the conversation they are reading.
-        This worker is not registered, is not connected to any client, and is shut
-        down by the schedule runner after its turn.
-        """
-        worker = SessionWorker(
-            uid,
-            self.options_for(uid, workspace, app_id, mode_id),
-            workspace=workspace,
-            app_id=app_id,
-            mode_id=mode_id,
-            on_warning=self._on_warning,
-            # Do not let a background run become the user's interactive resume target.
-            on_session_file=None,
-            policy_factory=self._policy_factory,
-            on_audit=self._on_audit,
-            on_audit_finish=self._on_audit_finish,
-            on_usage=self._on_usage,
-        )
-        try:
-            await worker.ensure_started()
-        except BaseException as error:
-            await worker.shutdown("scheduled bootstrap failed")
-            if isinstance(error, SystemExit):
-                raise BootstrapError(str(error)) from error
-            raise
-        return worker
-
-    async def _evict_idle_locked(self) -> None:
-        timeout = self.config.session_idle_minutes * 60
-        if timeout <= 0:
-            return
-        # Never evict the last worker: it is the one being asked for right now.
-        for key, worker in list(self._workers.items()):
-            if len(self._workers) <= 1:
-                break
-            if worker.busy or worker.idle_seconds < timeout:
-                continue
-            self._workers.pop(key, None)
-            await worker.shutdown("idle timeout")
-
-    async def evict_idle(self) -> int:
-        """Drop sessions that have gone quiet.  Called periodically by the app."""
-        async with self._lock:
-            before = len(self._workers)
-            await self._evict_idle_locked()
-            return before - len(self._workers)
-
-    async def evict_plugin(self, plugin_root: str) -> None:
-        """Drop workers that have this plugin loaded, so an uninstall takes effect."""
-        prefix = os.path.abspath(plugin_root)
-        async with self._lock:
-            keys = [
-                key
-                for key, worker in self._workers.items()
-                if any(os.path.abspath(path).startswith(prefix) for path in worker.options.plugin_paths)
-            ]
-            workers = [self._workers.pop(key) for key in keys]
-        for worker in workers:
-            try:
-                await worker.shutdown("plugin removed")
-            except Exception:  # noqa: BLE001
-                pass
-
-    async def evict_app(self, app_id: str) -> None:
-        """Apps are team-wide: drop every user's worker for this app."""
-        async with self._lock:
-            keys = [key for key in self._workers if key[2] == app_id]
-            workers = [self._workers.pop(key) for key in keys]
-        for worker in workers:
-            try:
-                await worker.shutdown("app changed")
-            except Exception:  # noqa: BLE001
-                pass
-
-    async def evict(self, uid: str, app_id: str | None = None) -> None:
-        """Drop workers for a user (optionally one app) so the next request reloads config."""
-        async with self._lock:
-            keys = [
-                key
-                for key in self._workers
-                if key[0] == uid and (app_id is None or key[2] == app_id)
-            ]
-            workers = [self._workers.pop(key) for key in keys]
-        for worker in workers:
-            try:
-                await worker.shutdown("configuration changed")
-            except Exception:  # noqa: BLE001
-                pass
-
-    async def shutdown(self) -> None:
-        async with self._lock:
-            workers = list(self._workers.values())
-            self._workers.clear()
-        for worker in workers:
-            try:
-                await worker.shutdown("server stopped")
-            except Exception:  # noqa: BLE001 - one bad teardown must not block the rest
-                pass
 
 
 # --------------------------------------------------------------------------------------
@@ -994,128 +142,40 @@ def resolve_static_dir() -> Path | None:
 # --------------------------------------------------------------------------------------
 
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
 
 
-class RegisterRequest(BaseModel):
-    username: str
-    password: str
-    displayName: str = ""
 
 
-class PasswordChangeRequest(BaseModel):
-    currentPassword: str
-    newPassword: str
 
 
-class CreateUserRequest(BaseModel):
-    username: str
-    password: str
-    displayName: str = ""
-    role: str = "user"
-    mustChangePassword: bool = True
-    monthlyTokenQuota: int | None = None
-    monthlyCostQuota: float | None = None
 
 
-class UpdateUserRequest(BaseModel):
-    """Every field is optional; only what the client sent is applied."""
-
-    displayName: str | None = None
-    role: str | None = None
-    status: str | None = None
-    password: str | None = None
-    mustChangePassword: bool | None = None
-    monthlyTokenQuota: int | None = None
-    monthlyCostQuota: float | None = None
 
 
-class WriteFileRequest(BaseModel):
-    """The JSON half of ``PUT /api/workspace/file``; raw bytes are the other half."""
-
-    content: str
 
 
-class SkillToggleRequest(BaseModel):
-    enabled: bool
 
 
-class CreateWorkspaceRequest(BaseModel):
-    name: str
 
 
-class PluginToggleRequest(BaseModel):
-    enabled: bool
-    appId: str | None = None
 
 
-class CreateScheduleRequest(BaseModel):
-    name: str
-    prompt: str
-    kind: str
-    workspace: str = "default"
-    appId: str = "general"
-    modeId: str = "office"
-    runAt: str | None = None
-    hour: int | None = None
-    minute: int | None = None
-    weekday: int | None = None
-    intervalMinutes: int | None = None
 
 
-class UpdateScheduleRequest(BaseModel):
-    enabled: bool
 
 
-class MarketRatingRequest(BaseModel):
-    score: int
 
 
-class FeedbackRequest(BaseModel):
-    sessionFile: str
-    timestamp: float
-    rating: int
-    comment: str = ""
 
 
-class ExportDocxRequest(BaseModel):
-    markdown: str
-    title: str = ""
-    subtitle: str = ""
 
 
-class AppUpsertRequest(BaseModel):
-    name: str
-    description: str = ""
-    accent: str = "#3b5fba"
-    modes: list[dict[str, Any]] = []
 
 
-class RenameWorkspaceRequest(BaseModel):
-    name: str
 
 
-class CreateDirectoryRequest(BaseModel):
-    parentPath: str = "/"
-    name: str
 
 
-def _user_row_to_json(row: Any) -> dict[str, Any]:
-    """The admin-facing shape of an account.  Never includes the password hash."""
-    return {
-        "uid": row["uid"],
-        "username": row["username"],
-        "displayName": row["display_name"],
-        "role": row["role"],
-        "status": row["status"],
-        "mustChangePassword": bool(row["must_change_password"]),
-        "monthlyTokenQuota": row["monthly_token_quota"],
-        "monthlyCostQuota": row["monthly_cost_quota"],
-        "createdAt": row["created_at"],
-        "lastLoginAt": row["last_login_at"],
-    }
 
 
 def create_app(
@@ -1172,8 +232,6 @@ def create_app(
                 pass
     schedule_db = database or local_schedule_db
 
-    sheets_sessions: dict[str, dict[str, Any]] = {}
-
     def _audit_sink(entry: dict[str, Any]) -> int | None:
         """Write one policy decision to the audit log; never let it break a turn."""
         if database is None:
@@ -1223,6 +281,7 @@ def create_app(
             protected_roots=(server_config.data_root,),
             auto_approve=server_config.auto_approve_tools,
             confirm_timeout=server_config.confirm_timeout_seconds,
+            grant_after_confirm=server_config.grant_after_confirm,
             record=worker.record_tool_decision,
         )
 
@@ -1306,9 +365,17 @@ def create_app(
             names.update(database.enabled_plugins(uid, app_id))
         return plugin_catalog.entry_paths(server_config.plugin_root, sorted(names))
 
+    # Traces are opt-in: a deployment that does not want another file per day should
+    # not pay for it, and the span writer opens nothing until the first span.
+    tracing_dir = (
+        os.path.join(server_config.data_root, "traces") if server_config.tracing else None
+    )
+    tracer: Tracer = Tracer(tracing_dir) if tracing_dir else NullTracer()
+
     registry = SessionRegistry(
         options,
         server_config,
+        tracer=tracer,
         on_warning=on_warning,
         on_session_file=(
             (
@@ -1390,24 +457,24 @@ def create_app(
     app.state.server_config = server_config
     app.state.db = database
 
+    # Every AppError becomes one JSON shape here, so no handler chooses a body format.
+    install_error_handlers(app)
+
     @app.exception_handler(BootstrapError)
-    async def _bootstrap_failed(_request: Request, error: BootstrapError) -> JSONResponse:
+    async def _bootstrap_failed(_request: Request, failure: BootstrapError) -> JSONResponse:
         # 503, not 500: the server is fine, this session's configuration is not.
         return JSONResponse(
             status_code=503,
-            content={"error": "session could not be started", "detail": str(error)},
+            content={"error": "session could not be started", "detail": str(failure)},
         )
 
     @app.exception_handler(WorkspaceError)
-    async def _workspace_failed(_request: Request, error: WorkspaceError) -> JSONResponse:
-        return JSONResponse(status_code=error.status_code, content={"error": error.message})
+    async def _workspace_failed(_request: Request, failure: WorkspaceError) -> JSONResponse:
+        return JSONResponse(status_code=failure.status_code, content={"error": failure.message})
 
     def require_team_mode() -> Database:
         if database is None:
-            raise HTTPException(
-                status_code=503,
-                detail={"error": "accounts are disabled (auth mode is 'single')"},
-            )
+            raise error(503, "accounts are disabled (auth mode is 'single')")
         return database
 
     def schedule_uid(request: Request) -> str:
@@ -1420,7 +487,7 @@ def create_app(
 
     def schedule_store() -> Database:
         if schedule_db is None:
-            raise HTTPException(status_code=503, detail={"error": "scheduler is not configured"})
+            raise error(503, "scheduler is not configured")
         return schedule_db
 
     def ensure_default_workspace(uid: str) -> None:
@@ -1447,11 +514,11 @@ def create_app(
         workspace = (requested or "default").strip()
         if database is None:
             if workspace != "default":
-                raise HTTPException(status_code=404, detail={"error": f"unknown workspace: {workspace}"})
+                raise error(404, f"unknown workspace: {workspace}")
             return "default"
         ensure_default_workspace(uid)
         if database.get_workspace(uid, workspace) is None:
-            raise HTTPException(status_code=404, detail={"error": f"unknown workspace: {workspace}"})
+            raise error(404, f"unknown workspace: {workspace}")
         return workspace
 
     def ensure_apps() -> None:
@@ -1478,22 +545,19 @@ def create_app(
         wanted_app = app_id or app_catalog.DEFAULT_APP_ID
         app = next((item for item in apps if item["id"] == wanted_app), None)
         if app is None:
-            raise HTTPException(status_code=404, detail={"error": f"unknown app: {wanted_app}"})
+            raise error(404, f"unknown app: {wanted_app}")
         wanted_mode = mode_id or (app["modes"][0]["id"] if app["modes"] else app_catalog.DEFAULT_MODE_ID)
         mode = next((item for item in app["modes"] if item["id"] == wanted_mode), None)
         if mode is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"unknown mode: {wanted_app}/{wanted_mode}"},
-            )
+            raise error(404, f"unknown mode: {wanted_app}/{wanted_mode}")
         return str(app["id"]), str(mode["id"])
 
     def workspace_row(uid: str, workspace: str) -> Any:
         if database is None:
-            raise HTTPException(status_code=503, detail={"error": "workspaces require team mode"})
+            raise error(503, "workspaces require team mode")
         row = database.get_workspace(uid, workspace)
         if row is None:
-            raise HTTPException(status_code=404, detail={"error": f"unknown workspace: {workspace}"})
+            raise error(404, f"unknown workspace: {workspace}")
         return row
 
     async def worker_for(request: Request) -> SessionWorker:
@@ -1543,245 +607,20 @@ def create_app(
             "clients": registry.client_count(),
             "activeUsers": registry.active_users,
             "authMode": server_config.auth_mode,
+            # Which permission posture this deployment runs with, so an operator can
+            # confirm the env switch took effect without reading the logs.
+            "toolPolicy": server_config.tool_policy,
         }
 
-    # -- accounts ----------------------------------------------------------------------
-
-    @app.post("/api/auth/login")
-    async def login(payload: LoginRequest, request: Request) -> JSONResponse:
-        db = require_team_mode()
-        user = auth.authenticate(db, payload.username, payload.password)
-        if user is None:
-            # One message for every failure mode: never reveal whether a name exists.
-            raise HTTPException(status_code=401, detail={"error": "invalid username or password"})
-        token = auth.start_session(
-            db, user, server_config, user_agent=request.headers.get("user-agent", "")
-        )
-        response = JSONResponse({"user": user.to_json()})
-        auth.set_cookie(response, token, server_config)
-        return response
-
-    @app.post("/api/auth/register", status_code=201)
-    async def register(payload: RegisterRequest) -> dict[str, Any]:
-        """Open LAN registration: a new member creates their own account.
-
-        Registration is intentionally available only in team mode.  It creates a
-        member (never an administrator), and the chosen password is final — the
-        user is not forced to change it again.
-        """
-        db = require_team_mode()
-        username = payload.username.strip()
-        display_name = payload.displayName.strip() or username
-        if not 2 <= len(username) <= 64 or any(char.isspace() for char in username):
-            raise HTTPException(status_code=422, detail={"error": "username must be 2-64 characters without spaces"})
-        if len(payload.password) < _MIN_PASSWORD_LENGTH:
-            raise HTTPException(status_code=422, detail={"error": f"password must be at least {_MIN_PASSWORD_LENGTH} characters"})
-        try:
-            uid = db.create_user(
-                username=username,
-                password_hash=auth.hash_password(payload.password),
-                display_name=display_name,
-                role="user",
-                must_change_password=False,
-            )
-        except DuplicateUsername:
-            raise HTTPException(status_code=409, detail={"error": "username already exists"}) from None
-        ensure_default_workspace(uid)
-        created = db.get_user(uid)
-        assert created is not None
-        return {"user": _user_row_to_json(created)}
-
-    @app.post("/api/auth/logout")
-    async def logout(request: Request) -> JSONResponse:
-        db = require_team_mode()
-        token = request.cookies.get(COOKIE_NAME)
-        if token:
-            db.revoke_auth_session(auth.hash_token(token))
-        response = JSONResponse({"ok": True})
-        auth.clear_cookie(response)
-        return response
-
-    @app.get("/api/auth/me")
-    async def me(request: Request) -> dict[str, Any]:
-        user = auth.current_user(request)
-        return {
-            "authMode": server_config.auth_mode,
-            "user": user.to_json() if user is not None else None,
-        }
-
-    @app.post("/api/auth/password")
-    async def change_password(
-        payload: PasswordChangeRequest,
-        user: auth.AuthUser = Depends(auth.get_required_user),
-    ) -> JSONResponse:
-        """Change your own password.  Other devices are signed out; this one is not."""
-        db = require_team_mode()
-        row = db.get_user(user.uid)
-        if row is None:
-            raise HTTPException(status_code=404, detail={"error": "account not found"})
-        if not auth.verify_password(payload.currentPassword, row["password_hash"]):
-            raise HTTPException(status_code=403, detail={"error": "current password is incorrect"})
-        if len(payload.newPassword) < _MIN_PASSWORD_LENGTH:
-            raise HTTPException(
-                status_code=422,
-                detail={"error": f"password must be at least {_MIN_PASSWORD_LENGTH} characters"},
-            )
-        db.set_password(user.uid, auth.hash_password(payload.newPassword), must_change=False)
-        db.revoke_user_sessions(user.uid)
-        token = auth.start_session(db, user, server_config)
-        refreshed = db.get_user(user.uid)
-        response = JSONResponse(
-            {"user": _user_row_to_json(refreshed) if refreshed is not None else user.to_json()}
-        )
-        auth.set_cookie(response, token, server_config)
-        return response
-
-    # -- administration ----------------------------------------------------------------
-
-    @app.get("/api/admin/users")
-    async def admin_list_users(
-        _actor: auth.AuthUser = Depends(auth.get_admin_user),
-    ) -> dict[str, Any]:
-        db = require_team_mode()
-        return {"users": [_user_row_to_json(row) for row in db.list_users()]}
-
-    @app.post("/api/admin/users")
-    async def admin_create_user(
-        payload: CreateUserRequest,
-        actor: auth.AuthUser = Depends(auth.get_admin_user),
-    ) -> dict[str, Any]:
-        db = require_team_mode()
-        auth.validate_role(payload.role)
-        if payload.role != "user" and not actor.is_superadmin:
-            raise HTTPException(
-                status_code=403, detail={"error": "only a superadmin can create administrators"}
-            )
-        if len(payload.password) < _MIN_PASSWORD_LENGTH:
-            raise HTTPException(
-                status_code=422,
-                detail={"error": f"password must be at least {_MIN_PASSWORD_LENGTH} characters"},
-            )
-        try:
-            uid = db.create_user(
-                username=payload.username,
-                password_hash=auth.hash_password(payload.password),
-                display_name=payload.displayName or payload.username,
-                role=payload.role,
-                must_change_password=payload.mustChangePassword,
-                monthly_token_quota=payload.monthlyTokenQuota,
-                monthly_cost_quota=payload.monthlyCostQuota,
-            )
-        except DuplicateUsername:
-            raise HTTPException(
-                status_code=409, detail={"error": f"username already exists: {payload.username}"}
-            ) from None
-        created = db.get_user(uid)
-        assert created is not None
-        return {"user": _user_row_to_json(created)}
-
-    @app.patch("/api/admin/users/{uid}")
-    async def admin_update_user(
-        uid: str,
-        payload: UpdateUserRequest,
-        actor: auth.AuthUser = Depends(auth.get_admin_user),
-    ) -> dict[str, Any]:
-        db = require_team_mode()
-        target = db.get_user(uid)
-        if target is None:
-            raise HTTPException(status_code=404, detail={"error": "account not found"})
-
-        sent = payload.model_dump(exclude_unset=True)
-        if "role" in sent:
-            auth.validate_role(sent["role"])
-            if not actor.is_superadmin:
-                raise HTTPException(
-                    status_code=403, detail={"error": "only a superadmin can change roles"}
-                )
-        if "status" in sent and sent["status"] not in {"active", "disabled"}:
-            raise HTTPException(status_code=422, detail={"error": "status must be active or disabled"})
-        if uid == actor.uid and ("role" in sent or "status" in sent):
-            raise HTTPException(
-                status_code=400, detail={"error": "you cannot change your own role or status"}
-            )
-        if len(sent.get("password") or "") and len(sent["password"]) < _MIN_PASSWORD_LENGTH:
-            raise HTTPException(
-                status_code=422,
-                detail={"error": f"password must be at least {_MIN_PASSWORD_LENGTH} characters"},
-            )
-        # Never let the last usable administrator lock everyone out.
-        removes_admin = sent.get("status") == "disabled" or sent.get("role") == "user"
-        if target["role"] in auth.ADMIN_ROLES and target["status"] == "active" and removes_admin:
-            if db.count_active_admins() <= 1:
-                raise HTTPException(
-                    status_code=400,
-                    detail={"error": "the last active administrator cannot be demoted or disabled"},
-                )
-
-        fields: dict[str, Any] = {}
-        if "displayName" in sent:
-            fields["display_name"] = sent["displayName"] or target["username"]
-        if "role" in sent:
-            fields["role"] = sent["role"]
-        if "status" in sent:
-            fields["status"] = sent["status"]
-        if "monthlyTokenQuota" in sent:
-            fields["monthly_token_quota"] = sent["monthlyTokenQuota"]
-        if "monthlyCostQuota" in sent:
-            fields["monthly_cost_quota"] = sent["monthlyCostQuota"]
-        if "mustChangePassword" in sent:
-            fields["must_change_password"] = bool(sent["mustChangePassword"])
-        if "password" in sent:
-            fields["password_hash"] = auth.hash_password(sent["password"])
-            fields["must_change_password"] = bool(sent.get("mustChangePassword", True))
-        if fields:
-            db.update_user(uid, **fields)
-
-        # A credential or account change must invalidate existing browser sessions.
-        if "password" in sent or sent.get("status") == "disabled":
-            db.revoke_user_sessions(uid)
-
-        updated = db.get_user(uid)
-        assert updated is not None
-        return {"user": _user_row_to_json(updated)}
-
-    # -- usage and quota ---------------------------------------------------------------
-
-    @app.get("/api/usage/me")
-    async def usage_me(
-        user: auth.AuthUser = Depends(auth.get_required_user),
-    ) -> dict[str, Any]:
-        db = require_team_mode()
-        since = month_start()
-        row = db.get_user(user.uid)
-        return {
-            "windowStart": since,
-            "summary": db.usage_summary(user.uid, since),
-            "byDay": db.usage_by_day(user.uid, since),
-            "byKind": db.usage_by_kind(user.uid, since),
-            "bySession": db.usage_by_session(user.uid, since),
-            "quota": {
-                "tokens": row["monthly_token_quota"] if row is not None else None,
-                "cost": row["monthly_cost_quota"] if row is not None else None,
-            },
-        }
-
-    @app.get("/api/admin/usage")
-    async def admin_usage(
-        _actor: auth.AuthUser = Depends(auth.get_admin_user),
-    ) -> dict[str, Any]:
-        db = require_team_mode()
-        since = month_start()
-        return {"windowStart": since, "users": db.usage_all_users(since)}
-
-    @app.get("/api/admin/audit")
-    async def admin_audit(
-        _actor: auth.AuthUser = Depends(auth.get_admin_user),
-        uid: str | None = Query(None, description="Restrict to one account"),
-        limit: int = Query(100, ge=1, le=500),
-        offset: int = Query(0, ge=0),
-    ) -> dict[str, Any]:
-        db = require_team_mode()
-        return {"records": db.query_audit(uid=uid, limit=limit, offset=offset)}
+    # Account, quota and audit routes live in their own module (see routers/accounts.py).
+    # They receive the two helpers they need explicitly, so the dependency is visible
+    # at the call site rather than hidden in a closure.
+    register_account_routes(
+        app,
+        require_team_mode=require_team_mode,
+        ensure_default_workspace=ensure_default_workspace,
+        server_config=server_config,
+    )
 
     def skill_context(request: Request, workspace: str) -> tuple[str, str, str, ResourceLoader]:
         """Discover skills for the caller without bootstrapping a model session."""
@@ -1842,13 +681,10 @@ def create_app(
         workspace: str = Query("default", description="Workspace id"),
     ) -> dict[str, Any]:
         if database is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "skill preferences require team mode"},
-            )
+            raise error(400, "skill preferences require team mode")
         uid, _cwd, _agent_dir, loader = skill_context(request, workspace)
         if all(skill.name != name for skill in loader.skills()):
-            raise HTTPException(status_code=404, detail={"error": f"unknown skill: {name}"})
+            raise error(404, f"unknown skill: {name}")
         database.set_skill_pref(uid, name, body.enabled, workspace)
         disabled = database.disabled_skills(uid, workspace)
         for worker in registry.workers_for(uid, workspace):
@@ -1861,464 +697,28 @@ def create_app(
         worker = await worker_for(request)
         return {"models": [model_to_json(model) for model in worker.state.registry.list_models()]}
 
-    # -- notifications ---------------------------------------------------------------
+    # Scheduled tasks and the notification feed (routers/schedules.py).
+    register_schedule_routes(
+        app,
+        schedule_uid=schedule_uid,
+        schedule_store=schedule_store,
+        require_team_mode=require_team_mode,
+        registry=registry,
+        resolve_workspace=resolve_workspace,
+        resolve_app_mode=resolve_app_mode,
+        schedule_runner=schedule_runner,
+    )
 
-    @staticmethod
-    def _notification_json(row: Any) -> dict[str, Any]:
-        return {
-            "id": row["id"],
-            "kind": row["kind"],
-            "title": row["title"],
-            "body": row["body"],
-            "link": row["link"],
-            "read": bool(row["read"]),
-            "createdAt": row["created_at"],
-        }
-
-    @app.get("/api/notifications")
-    async def list_notifications(request: Request) -> dict[str, Any]:
-        db = schedule_store()
-        uid = schedule_uid(request)
-        return {
-            "notifications": [
-                _notification_json(row) for row in db.list_notifications(uid)
-            ],
-            "unread": db.unread_notifications(uid),
-        }
-
-    @app.post("/api/notifications/{notification_id}/read")
-    async def read_notification(notification_id: str, request: Request) -> dict[str, Any]:
-        db = schedule_store()
-        uid = schedule_uid(request)
-        db.mark_notification(uid, notification_id)
-        return {"id": notification_id, "read": True}
-
-    @app.post("/api/notifications/read-all")
-    async def read_all_notifications(request: Request) -> dict[str, Any]:
-        db = schedule_store()
-        db.mark_all_notifications(schedule_uid(request))
-        return {"read": True}
-
-    # -- schedules -------------------------------------------------------------------
-
-    @app.get("/api/schedules")
-    async def list_schedules(request: Request) -> dict[str, Any]:
-        db = schedule_store()
-        uid = schedule_uid(request)
-        return {
-            "schedules": [
-                schedule_catalog.schedule_json(row) for row in db.list_schedules(uid)
-            ]
-        }
-
-    @app.get("/api/schedules/runs")
-    async def list_schedule_runs(request: Request, limit: int = 50) -> dict[str, Any]:
-        db = schedule_store()
-        rows = db.list_user_schedule_runs(schedule_uid(request), limit)
-        return {
-            "runs": [
-                {
-                    **schedule_catalog.run_json(row),
-                    "scheduleId": row["schedule_id"],
-                    "scheduleName": row["schedule_name"],
-                    "workspace": row["schedule_workspace"],
-                    "appId": row["schedule_app_id"],
-                    "modeId": row["schedule_mode_id"],
-                }
-                for row in rows
-            ]
-        }
-
-    @app.post("/api/schedules", status_code=201)
-    async def create_schedule(payload: CreateScheduleRequest, request: Request) -> dict[str, Any]:
-        db = schedule_store()
-        uid = schedule_uid(request)
-        name = payload.name.strip()
-        prompt = payload.prompt.strip()
-        if not 1 <= len(name) <= 80 or not prompt:
-            raise HTTPException(status_code=422, detail={"error": "name/prompt are required"})
-        kind = payload.kind
-        if kind not in ("once", "interval", "daily", "weekly"):
-            raise HTTPException(status_code=422, detail={"error": f"unknown schedule kind: {kind}"})
-        if kind in ("daily", "weekly") and (
-            payload.hour is None or payload.minute is None
-            or not 0 <= payload.hour <= 23 or not 0 <= payload.minute <= 59
-        ):
-            raise HTTPException(status_code=422, detail={"error": "hour/minute are required"})
-        if kind == "weekly" and (payload.weekday is None or not 0 <= payload.weekday <= 6):
-            raise HTTPException(status_code=422, detail={"error": "weekday is required"})
-        if kind == "interval" and (
-            payload.intervalMinutes is None or not 1 <= payload.intervalMinutes <= 10080
-        ):
-            raise HTTPException(status_code=422, detail={"error": "intervalMinutes must be 1-10080"})
-        workspace = resolve_workspace(uid, payload.workspace)
-        app_id, mode_id = resolve_app_mode(payload.appId, payload.modeId)
-        if kind == "once" and schedule_catalog.parse_iso(payload.runAt) is None:
-            raise HTTPException(status_code=422, detail={"error": "runAt must be ISO-8601"})
-        next_at = schedule_catalog.next_run_at(
-            kind=kind,
-            run_at=payload.runAt,
-            hour=payload.hour,
-            minute=payload.minute,
-            weekday=payload.weekday,
-            interval_minutes=payload.intervalMinutes,
-        )
-        if next_at is None:
-            raise HTTPException(status_code=422, detail={"error": "runAt must be in the future"})
-        schedule_id = db.create_schedule(
-            uid=uid,
-            workspace=workspace,
-            app_id=app_id,
-            mode_id=mode_id,
-            name=name,
-            prompt=prompt,
-            kind=kind,
-            run_at=payload.runAt,
-            hour=payload.hour,
-            minute=payload.minute,
-            weekday=payload.weekday,
-            interval_minutes=payload.intervalMinutes,
-            next_run_at=next_at,
-        )
-        row = db.get_schedule(uid, schedule_id)
-        return schedule_catalog.schedule_json(row)
-
-    @app.patch("/api/schedules/{schedule_id}")
-    async def update_schedule(
-        schedule_id: str, payload: UpdateScheduleRequest, request: Request
-    ) -> dict[str, Any]:
-        db = schedule_store()
-        uid = schedule_uid(request)
-        row = db.get_schedule(uid, schedule_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail={"error": "unknown schedule"})
-        next_at = None
-        if payload.enabled:
-            next_at = schedule_catalog.next_run_at(
-                kind=str(row["kind"]),
-                run_at=row["run_at"],
-                hour=row["hour"],
-                minute=row["minute"],
-                weekday=row["weekday"],
-                interval_minutes=row["interval_minutes"],
-            )
-            if next_at is None:
-                raise HTTPException(status_code=422, detail={"error": "schedule has no future run"})
-        db.set_schedule_enabled(uid, schedule_id, payload.enabled, next_at)
-        return schedule_catalog.schedule_json(db.get_schedule(uid, schedule_id))
-
-    @app.delete("/api/schedules/{schedule_id}")
-    async def delete_schedule(schedule_id: str, request: Request) -> dict[str, Any]:
-        db = schedule_store()
-        uid = schedule_uid(request)
-        if db.get_schedule(uid, schedule_id) is None:
-            raise HTTPException(status_code=404, detail={"error": "unknown schedule"})
-        db.delete_schedule(uid, schedule_id)
-        return {"deleted": schedule_id}
-
-    @app.post("/api/schedules/{schedule_id}/run", status_code=202)
-    async def run_schedule(schedule_id: str, request: Request) -> dict[str, Any]:
-        db = schedule_store()
-        uid = schedule_uid(request)
-        row = db.get_schedule(uid, schedule_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail={"error": "unknown schedule"})
-        if schedule_runner is None:
-            raise HTTPException(status_code=503, detail={"error": "scheduler is not running"})
-        await schedule_runner.run_now(row)
-        return {"accepted": True, "id": schedule_id}
-
-    @app.get("/api/schedules/{schedule_id}/runs")
-    async def schedule_runs(schedule_id: str, request: Request) -> dict[str, Any]:
-        db = schedule_store()
-        uid = schedule_uid(request)
-        if db.get_schedule(uid, schedule_id) is None:
-            raise HTTPException(status_code=404, detail={"error": "unknown schedule"})
-        return {
-            "runs": [
-                schedule_catalog.run_json(row)
-                for row in db.list_schedule_runs(schedule_id)
-            ]
-        }
-
-    def _extract_plugin_zip(data: bytes, staging: str) -> Any:
-        """Validate a plugin zip and extract it (safely) into ``staging``."""
-        if not data or len(data) > 10 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail={"error": "plugin zip must be 1 byte - 10 MB"})
-        try:
-            with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                total = 0
-                for info in archive.infolist():
-                    name = info.filename.replace("\\", "/")
-                    if name.startswith("/") or ".." in name.split("/"):
-                        raise HTTPException(status_code=422, detail={"error": "zip contains an unsafe path"})
-                    if (info.external_attr >> 16) & 0o170000 == 0o120000:
-                        raise HTTPException(status_code=422, detail={"error": "zip contains a symlink"})
-                    total += int(info.file_size)
-                    if total > 20 * 1024 * 1024:
-                        raise HTTPException(status_code=413, detail={"error": "uncompressed plugin is too large"})
-                    target = os.path.join(staging, *name.split("/"))
-                    if name.endswith("/"):
-                        os.makedirs(target, exist_ok=True)
-                        continue
-                    os.makedirs(os.path.dirname(target), exist_ok=True)
-                    with archive.open(info) as source, open(target, "wb") as destination:
-                        shutil.copyfileobj(source, destination)
-        except zipfile.BadZipFile:
-            raise HTTPException(status_code=422, detail={"error": "not a valid zip file"}) from None
-
-        found = plugin_catalog.scan(staging)
-        if len(found) != 1:
-            top = [item for item in os.listdir(staging) if os.path.isdir(os.path.join(staging, item))]
-            if len(top) == 1:
-                found = plugin_catalog.scan(os.path.join(staging, top[0]))
-        if len(found) != 1:
-            raise HTTPException(status_code=422, detail={"error": "zip must contain exactly one plugin.json"})
-        return found[0]
-
-    @app.post("/api/plugins/install", status_code=201)
-    async def install_plugin(request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        if not user.is_admin:
-            raise HTTPException(status_code=403, detail={"error": "only administrators can install plugins"})
-        data = await request.body()
-        root = server_config.plugin_root
-        os.makedirs(root, exist_ok=True)
-        staging = tempfile.mkdtemp(prefix=".install-", dir=root)
-        try:
-            info = _extract_plugin_zip(data, staging)
-            target = os.path.join(root, info.id)
-            if os.path.exists(target):
-                backup = f"{target}.bak-{uuid.uuid4().hex[:6]}"
-                os.rename(target, backup)
-                try:
-                    shutil.move(info.path, target)
-                except Exception:
-                    shutil.move(backup, target)
-                    raise
-                shutil.rmtree(backup, ignore_errors=True)
-            else:
-                shutil.move(info.path, target)
-            return {**info.to_json(), "installed": True, "enabled": False}
-        finally:
-            shutil.rmtree(staging, ignore_errors=True)
-
-    @app.post("/api/plugin-submissions", status_code=201)
-    async def submit_plugin(request: Request) -> dict[str, Any]:
-        """Any team member may submit; nothing is installed until an admin approves."""
-        require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        data = await request.body()
-        root = plugin_catalog.submissions_root(server_config.plugin_root)
-        os.makedirs(root, exist_ok=True)
-        sid = uuid.uuid4().hex[:12]
-        staging = tempfile.mkdtemp(prefix=".submit-", dir=root)
-        try:
-            info = _extract_plugin_zip(data, staging)
-            target = os.path.join(root, sid)
-            os.makedirs(target)
-            shutil.move(info.path, os.path.join(target, "plugin"))
-            with open(
-                os.path.join(target, plugin_catalog.SUBMISSION_META), "w", encoding="utf-8"
-            ) as handle:
-                json.dump(
-                    {"submitter": user.username, "createdAt": time.time()},
-                    handle,
-                    ensure_ascii=False,
-                )
-        finally:
-            shutil.rmtree(staging, ignore_errors=True)
-        return {
-            "id": sid,
-            "pluginId": info.id,
-            "name": info.name,
-            "version": info.version,
-            "submitted": True,
-        }
-
-    @app.get("/api/plugin-submissions")
-    async def list_plugin_submissions(request: Request) -> dict[str, Any]:
-        require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        if not user.is_admin:
-            raise HTTPException(status_code=403, detail={"error": "only administrators can review submissions"})
-        root = plugin_catalog.submissions_root(server_config.plugin_root)
-        return {
-            "submissions": [item.to_json() for item in plugin_catalog.scan_submissions(root)]
-        }
-
-    @app.post("/api/plugin-submissions/{submission_id}/approve")
-    async def approve_plugin_submission(submission_id: str, request: Request) -> dict[str, Any]:
-        require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        if not user.is_admin:
-            raise HTTPException(status_code=403, detail={"error": "only administrators can approve submissions"})
-        root = plugin_catalog.submissions_root(server_config.plugin_root)
-        item = plugin_catalog.find_submission(root, submission_id)
-        if item is None:
-            raise HTTPException(status_code=404, detail={"error": "unknown submission"})
-        plugin_root = server_config.plugin_root
-        os.makedirs(plugin_root, exist_ok=True)
-        target = os.path.join(plugin_root, item.plugin.id)
-        if os.path.exists(target):
-            raise HTTPException(
-                status_code=409,
-                detail={"error": f"plugin {item.plugin.id} is already installed; uninstall it first"},
-            )
-        shutil.move(item.plugin.path, target)
-        shutil.rmtree(item.base, ignore_errors=True)
-        return {**item.plugin.to_json(), "installed": True, "enabled": False}
-
-    @app.delete("/api/plugin-submissions/{submission_id}")
-    async def reject_plugin_submission(submission_id: str, request: Request) -> dict[str, Any]:
-        require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        if not user.is_admin:
-            raise HTTPException(status_code=403, detail={"error": "only administrators can reject submissions"})
-        root = plugin_catalog.submissions_root(server_config.plugin_root)
-        item = plugin_catalog.find_submission(root, submission_id)
-        if item is None:
-            raise HTTPException(status_code=404, detail={"error": "unknown submission"})
-        shutil.rmtree(item.base, ignore_errors=True)
-        return {"deleted": submission_id}
-
-    @app.delete("/api/plugins/{plugin_id}")
-    async def uninstall_plugin(plugin_id: str, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        if not user.is_admin:
-            raise HTTPException(status_code=403, detail={"error": "only administrators can uninstall plugins"})
-        installed = {item.id: item for item in plugin_catalog.scan(server_config.plugin_root)}
-        item = installed.get(plugin_id)
-        if item is None:
-            raise HTTPException(status_code=404, detail={"error": f"unknown plugin: {plugin_id}"})
-        shutil.rmtree(item.path, ignore_errors=True)
-        db.delete_plugin_enable(plugin_id)
-        await registry.evict_plugin(item.path)
-        return {"deleted": plugin_id}
-
-    @app.get("/api/plugins")
-    async def list_plugins(request: Request, app: str = Query("general")) -> dict[str, Any]:
-        installed = plugin_catalog.scan(server_config.plugin_root)
-        can_install = False
-        app_id, _mode_id = resolve_app_mode(app, None)
-        app_def = app_catalog.find_app(app_id)
-        # An app that declares a plugin gets it whether or not anyone clicked "enable", so
-        # report it as enabled here too — otherwise the page says "off" for a tool the
-        # model is already using.
-        required = set(app_def.plugins) if app_def is not None else set()
-        if database is None:
-            states: dict[str, bool] = {}
-            can_manage = False
-        else:
-            user = auth.current_user(request)
-            if user is None:
-                raise auth.reject_unauthenticated()
-            states = database.plugin_states(user.uid, app_id)
-            can_manage = True
-            can_install = bool(user.is_admin)
-        return {
-            "app": app_id,
-            "canManage": can_manage,
-            "canInstall": can_install,
-            "plugins": [
-                {
-                    **info.to_json(),
-                    "enabled": states.get(info.id, False) or info.id in required,
-                    "required": info.id in required,
-                }
-                for info in installed
-            ],
-        }
-
-    @app.patch("/api/plugins/{plugin_id}/enable")
-    async def toggle_plugin(
-        plugin_id: str,
-        body: PluginToggleRequest,
-        request: Request,
-        app: str = Query("general"),
-    ) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        app_id, _mode_id = resolve_app_mode(body.appId or app, None)
-        if all(info.id != plugin_id for info in plugin_catalog.scan(server_config.plugin_root)):
-            raise HTTPException(status_code=404, detail={"error": f"unknown plugin: {plugin_id}"})
-        app_def = app_catalog.find_app(app_id)
-        if not body.enabled and app_def is not None and plugin_id in app_def.plugins:
-            raise HTTPException(
-                status_code=409,
-                detail={"error": f"the app declares plugin {plugin_id!r}; it cannot be switched off here"},
-            )
-        db.set_plugin_enabled(user.uid, app_id, plugin_id, body.enabled)
-        # The next request/worker for this app reloads the plugin set; running turns are
-        # allowed to finish on the old set rather than mutating tools mid-turn.
-        await registry.evict(user.uid, app_id)
-        return {"id": plugin_id, "enabled": body.enabled, "app": app_id}
-
-    @app.get("/api/plugins/status")
-    async def plugin_status(request: Request, app: str = Query("general")) -> dict[str, Any]:
-        """What each installed plugin registered in this user's live worker.
-
-        A plugin that failed to import never reaches a worker, so the loader's
-        diagnostics are the only place the reason exists.  Without them the UI can
-        only say "enabled", which is indistinguishable from "silently broken".
-        """
-        require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        app_id, _mode_id = resolve_app_mode(app, None)
-
-        workers = [
-            worker
-            for worker in registry.workers_for(user.uid)
-            if worker.app_id == app_id and worker.started
-        ]
-        runner = workers[0].state.extension_runner if workers else None
-        snapshot = runner.status() if runner is not None else {"extensions": [], "diagnostics": []}
-
-        def _inside(raw: str, root: str) -> bool:
-            try:
-                return os.path.realpath(raw).startswith(root + os.sep)
-            except (OSError, ValueError):
-                return False
-
-        plugins: list[dict[str, Any]] = []
-        for info in plugin_catalog.scan(server_config.plugin_root):
-            root = os.path.realpath(info.path)
-            entries = [entry for entry in snapshot["extensions"] if _inside(entry["path"], root)]
-            diagnostics = [
-                item for item in snapshot["diagnostics"] if _inside(item["path"], root)
-            ]
-            plugins.append(
-                {
-                    "id": info.id,
-                    "loaded": bool(entries),
-                    "tools": sorted({name for entry in entries for name in entry["tools"]}),
-                    "errors": [
-                        item["message"] for item in diagnostics if item["severity"] == "error"
-                    ],
-                    "warnings": [
-                        item["message"] for item in diagnostics if item["severity"] != "error"
-                    ],
-                }
-            )
-        return {"app": app_id, "runtimeLoaded": runner is not None, "plugins": plugins}
+    # Plugin install, submissions and enablement (routers/plugins.py).
+    register_plugin_routes(
+        app,
+        server_config=server_config,
+        require_team_mode=require_team_mode,
+        plugin_paths_for=_plugin_paths_for,
+        registry=registry,
+        database=database,
+        resolve_app_mode=resolve_app_mode,
+    )
 
     def _safe_id(raw: Any, fallback: str) -> str:
         value = str(raw or "").strip()
@@ -2350,41 +750,35 @@ def create_app(
     def normalize_app(payload: AppUpsertRequest, app_id: str) -> dict[str, Any]:
         name = payload.name.strip()
         if not 1 <= len(name) <= 40:
-            raise HTTPException(status_code=422, detail={"error": "app name must be 1-40 characters"})
+            raise error(422, "app name must be 1-40 characters")
         accent = str(payload.accent or "").strip()
         if not _ACCENT.match(accent):
-            raise HTTPException(status_code=422, detail={"error": "accent must look like #3b5fba"})
+            raise error(422, "accent must look like #3b5fba")
         if len(payload.modes) > 10:
-            raise HTTPException(status_code=422, detail={"error": "an app can have at most 10 modes"})
+            raise error(422, "an app can have at most 10 modes")
 
         modes: list[dict[str, Any]] = []
         seen_modes: set[str] = set()
         for mode_index, raw_mode in enumerate(payload.modes):
             mode_id = _safe_id(raw_mode.get("id"), f"mode-{mode_index + 1}")
             if mode_id in seen_modes:
-                raise HTTPException(status_code=422, detail={"error": f"duplicate mode id: {mode_id}"})
+                raise error(422, f"duplicate mode id: {mode_id}")
             seen_modes.add(mode_id)
             mode_name = str(raw_mode.get("name") or mode_id).strip()[:40]
             prompt = str(raw_mode.get("prompt") or "")
             if len(prompt) > 4000:
-                raise HTTPException(
-                    status_code=422,
-                    detail={"error": f"mode {mode_name!r} prompt is over 4000 characters"},
-                )
+                raise error(422, f"mode {mode_name!r} prompt is over 4000 characters")
             binding = raw_mode.get("skillBinding", "all")
             if binding != "all":
                 if not isinstance(binding, list):
-                    raise HTTPException(status_code=422, detail={"error": "skillBinding must be 'all' or a list"})
+                    raise error(422, "skillBinding must be 'all' or a list")
                 binding = list(dict.fromkeys(str(item).strip() for item in binding if str(item).strip()))
 
             examples_raw = raw_mode.get("examples") or []
             if not isinstance(examples_raw, list):
-                raise HTTPException(
-                    status_code=422,
-                    detail={"error": "examples must be a list of strings or objects"},
-                )
+                raise error(422, "examples must be a list of strings or objects")
             if len(examples_raw) > 6:
-                raise HTTPException(status_code=422, detail={"error": "at most 6 examples per mode"})
+                raise error(422, "at most 6 examples per mode")
             examples: list[dict[str, Any]] = []
             seen_examples: set[str] = set()
             for example_index, raw_example in enumerate(examples_raw):
@@ -2416,10 +810,7 @@ def create_app(
                         raw_example.get("id"), f"example-{example_index + 1}"
                     )
                 else:
-                    raise HTTPException(
-                        status_code=422,
-                        detail={"error": "each example must be a string or an object"},
-                    )
+                    raise error(422, "each example must be a string or an object")
                 if not prompt:
                     continue
                 if example_id in seen_examples:
@@ -2449,15 +840,15 @@ def create_app(
             seen_capsules: set[str] = set()
             raw_capsules = raw_mode.get("capsules") or []
             if not isinstance(raw_capsules, list):
-                raise HTTPException(status_code=422, detail={"error": "capsules must be a list"})
+                raise error(422, "capsules must be a list")
             if len(raw_capsules) > 12:
-                raise HTTPException(status_code=422, detail={"error": "at most 12 capsules per mode"})
+                raise error(422, "at most 12 capsules per mode")
             for capsule_index, raw_capsule in enumerate(raw_capsules):
                 if not isinstance(raw_capsule, dict):
-                    raise HTTPException(status_code=422, detail={"error": "each capsule must be an object"})
+                    raise error(422, "each capsule must be an object")
                 capsule_id = _safe_id(raw_capsule.get("id"), f"capsule-{capsule_index + 1}")
                 if capsule_id in seen_capsules:
-                    raise HTTPException(status_code=422, detail={"error": f"duplicate capsule id: {capsule_id}"})
+                    raise error(422, f"duplicate capsule id: {capsule_id}")
                 seen_capsules.add(capsule_id)
                 capsule_name = str(raw_capsule.get("name") or capsule_id).strip()[:40]
                 if not capsule_name:
@@ -2483,7 +874,7 @@ def create_app(
                 }
             )
         if not modes:
-            raise HTTPException(status_code=422, detail={"error": "an app needs at least one mode"})
+            raise error(422, "an app needs at least one mode")
         return {
             "id": app_id,
             "name": name,
@@ -2502,7 +893,7 @@ def create_app(
         except ValueError:
             inside = False
         if not inside:
-            raise HTTPException(status_code=403, detail={"error": "session file is outside the agent directory"})
+            raise error(403, "session file is outside the agent directory")
         return candidate
 
     @app.post("/api/feedback")
@@ -2512,7 +903,7 @@ def create_app(
         if user is None:
             raise auth.reject_unauthenticated()
         if payload.rating not in (-1, 1):
-            raise HTTPException(status_code=422, detail={"error": "rating must be -1 or 1"})
+            raise error(422, "rating must be -1 or 1")
         session_file = checked_session_file(user.uid, payload.sessionFile)
         db.set_feedback(user.uid, session_file, payload.timestamp, payload.rating, payload.comment)
         return {"timestamp": payload.timestamp, "rating": payload.rating}
@@ -2561,12 +952,12 @@ def create_app(
         tag: str = Query("", description="exact tag filter"),
         sort: str = Query("rating", description="rating | name | source"),
     ) -> dict[str, Any]:
-        db = require_team_mode()
+        require_team_mode()
         user = auth.current_user(request)
         if user is None:
             raise auth.reject_unauthenticated()
         if kind not in ("skill", "plugin"):
-            raise HTTPException(status_code=422, detail={"error": "kind must be skill or plugin"})
+            raise error(422, "kind must be skill or plugin")
         items = [
             market_item_json(item, user.uid)
             for item in market_catalog.search_items(kind, q, tag)
@@ -2591,13 +982,13 @@ def create_app(
 
     @app.get("/api/market/{kind}/{item_id}")
     async def market_item_detail(kind: str, item_id: str, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
+        require_team_mode()
         user = auth.current_user(request)
         if user is None:
             raise auth.reject_unauthenticated()
         item = market_catalog.find_item(kind, item_id)
         if item is None:
-            raise HTTPException(status_code=404, detail={"error": "unknown market item"})
+            raise error(404, "unknown market item")
         return {
             **market_item_json(item, user.uid),
             "readme": market_catalog.readme_for(item),
@@ -2613,26 +1004,26 @@ def create_app(
             raise auth.reject_unauthenticated()
         item = market_catalog.find_item(kind, item_id)
         if item is None:
-            raise HTTPException(status_code=404, detail={"error": "unknown market item"})
+            raise error(404, "unknown market item")
         if not 1 <= payload.score <= 5:
-            raise HTTPException(status_code=422, detail={"error": "score must be 1-5"})
+            raise error(422, "score must be 1-5")
         db.set_market_rating(user.uid, kind, item_id, payload.score)
         average, count = db.market_rating_summary(kind, item_id)
         return {"average": average, "count": count, "mine": payload.score}
 
     @app.post("/api/market/skills/{item_id}/install")
     async def install_market_skill(item_id: str, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
+        require_team_mode()
         user = auth.current_user(request)
         if user is None:
             raise auth.reject_unauthenticated()
         item = market_catalog.find_item("skill", item_id)
         if item is None or not item.content:
-            raise HTTPException(status_code=404, detail={"error": "unknown skill"})
+            raise error(404, "unknown skill")
         _workspace, agent_dir = server_config.ensure_user_layout(user.uid)
         target = os.path.join(agent_dir, "skills", item.id)
         if os.path.exists(os.path.join(target, "SKILL.md")):
-            raise HTTPException(status_code=409, detail={"error": "skill is already installed"})
+            raise error(409, "skill is already installed")
         os.makedirs(target, exist_ok=True)
         with open(os.path.join(target, "SKILL.md"), "w", encoding="utf-8") as handle:
             handle.write(item.content)
@@ -2641,19 +1032,19 @@ def create_app(
 
     @app.post("/api/market/plugins/{item_id}/install")
     async def install_market_plugin(item_id: str, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
+        require_team_mode()
         user = auth.current_user(request)
         if user is None:
             raise auth.reject_unauthenticated()
         if not user.is_admin:
-            raise HTTPException(status_code=403, detail={"error": "only administrators can install plugins"})
+            raise error(403, "only administrators can install plugins")
         item = market_catalog.find_item("plugin", item_id)
         if item is None or not item.package or not os.path.isdir(item.package):
-            raise HTTPException(status_code=404, detail={"error": "plugin package is not bundled"})
+            raise error(404, "plugin package is not bundled")
         os.makedirs(server_config.plugin_root, exist_ok=True)
         target = os.path.join(server_config.plugin_root, item.id)
         if os.path.exists(target):
-            raise HTTPException(status_code=409, detail={"error": "plugin is already installed"})
+            raise error(409, "plugin is already installed")
         shutil.copytree(
             item.package,
             target,
@@ -2663,1051 +1054,43 @@ def create_app(
 
     # -- apps (team-wide; only administrators may change them) -------------------------
 
-    def _loads_or_none(raw: Any) -> Any:
-        if not raw:
-            return None
-        try:
-            return json.loads(raw)
-        except (TypeError, json.JSONDecodeError):
-            return None
-
-    def app_by_id(app_id: str) -> dict[str, Any] | None:
-        return next((item for item in all_apps() if item["id"] == app_id), None)
-
-    def require_app_admin(request: Request) -> Any:
-        require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        if not user.is_admin:
-            raise HTTPException(status_code=403, detail={"error": "only administrators can manage apps"})
-        return user
-
-    def app_name_taken(name: str, *, exclude: str | None = None) -> bool:
-        needle = name.strip().lower()
-        return any(
-            item["id"] != exclude and str(item["name"]).strip().lower() == needle
-            for item in all_apps()
-        )
-
-    def app_diff(before: dict[str, Any] | None, after: dict[str, Any] | None) -> list[str]:
-        """Human-readable change list; the audit table stores whole snapshots."""
-        if not before or not after:
-            return []
-        changes: list[str] = []
-        for field, label in (("name", "名称"), ("description", "描述"), ("accent", "标识色")):
-            if str(before.get(field) or "") != str(after.get(field) or ""):
-                changes.append(
-                    f"{label}：{before.get(field) or '(空)'} → {after.get(field) or '(空)'}"
-                )
-        old_modes = {str(m.get("id")): m for m in before.get("modes") or []}
-        new_modes = {str(m.get("id")): m for m in after.get("modes") or []}
-        added = [str(m.get("name") or m.get("id")) for mid, m in new_modes.items() if mid not in old_modes]
-        removed = [str(m.get("name") or m.get("id")) for mid, m in old_modes.items() if mid not in new_modes]
-        if added:
-            changes.append("新增模式：" + "、".join(added))
-        if removed:
-            changes.append("删除模式：" + "、".join(removed))
-        for mid, mode in new_modes.items():
-            old = old_modes.get(mid)
-            if old and str(old.get("prompt") or "") != str(mode.get("prompt") or ""):
-                changes.append(f"模式「{mode.get('name') or mid}」的提示词已修改")
-        return changes or ["没有字段变化"]
-
-    @app.get("/api/apps")
-    async def list_apps(request: Request) -> dict[str, Any]:
-        if database is None:
-            catalog = app_catalog.catalog_json()
-            return {**catalog, "canManage": False}
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        apps = all_apps()
-        first = apps[0] if apps else None
-        default_app = (
-            app_catalog.DEFAULT_APP_ID
-            if any(app["id"] == app_catalog.DEFAULT_APP_ID for app in apps)
-            else (first["id"] if first else "")
-        )
-        default_mode = ""
-        if first is not None:
-            chosen = next((app for app in apps if app["id"] == default_app), first)
-            default_mode = chosen["modes"][0]["id"] if chosen["modes"] else ""
-        return {
-            "apps": apps,
-            "defaultApp": default_app,
-            "defaultMode": default_mode,
-            "canManage": bool(user.is_admin),
-        }
-
-    @app.post("/api/apps", status_code=201)
-    async def create_app_endpoint(payload: AppUpsertRequest, request: Request) -> dict[str, Any]:
-        user = require_app_admin(request)
-        app_id = f"app-{uuid.uuid4().hex[:8]}"
-        app = normalize_app(payload, app_id)
-        if app_name_taken(app["name"]):
-            raise HTTPException(status_code=409, detail={"error": f"an app named {app['name']!r} already exists"})
-        db = require_team_mode()
-        db.replace_team_app(app)
-        created = app_by_id(app_id) or app
-        db.record_team_app_audit(
-            user.uid, user.display_name or user.username, app_id, "create", None, created
-        )
-        return created
-
-    @app.put("/api/apps/{app_id}")
-    async def update_app(app_id: str, payload: AppUpsertRequest, request: Request) -> dict[str, Any]:
-        user = require_app_admin(request)
-        existing = app_by_id(app_id)
-        if existing is None:
-            raise HTTPException(status_code=404, detail={"error": f"unknown app: {app_id}"})
-        app = normalize_app(payload, app_id)
-        if app_name_taken(app["name"], exclude=app_id):
-            raise HTTPException(status_code=409, detail={"error": f"an app named {app['name']!r} already exists"})
-        db = require_team_mode()
-        db.replace_team_app(app, builtin=bool(existing.get("builtin")))
-        updated = app_by_id(app_id) or app
-        db.record_team_app_audit(
-            user.uid,
-            user.display_name or user.username,
-            app_id,
-            "update",
-            existing,
-            updated,
-        )
-        await registry.evict_app(app_id)
-        return updated
-
-    @app.delete("/api/apps/{app_id}")
-    async def delete_app(app_id: str, request: Request) -> dict[str, Any]:
-        user = require_app_admin(request)
-        existing = app_by_id(app_id)
-        if existing is None:
-            raise HTTPException(status_code=404, detail={"error": f"unknown app: {app_id}"})
-        if existing.get("builtin"):
-            raise HTTPException(status_code=400, detail={"error": "built-in apps cannot be deleted"})
-        db = require_team_mode()
-        references = db.app_references(app_id)
-        if references["schedules"]:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": "this app is still used by scheduled tasks; move or delete them first",
-                    "schedules": references["schedules"],
-                },
-            )
-        db.delete_team_app(app_id)
-        db.delete_app_references(app_id)
-        db.record_team_app_audit(
-            user.uid, user.display_name or user.username, app_id, "delete", existing, None
-        )
-        await registry.evict_app(app_id)
-        return {"deleted": app_id, "cleaned": references}
-
-    @app.post("/api/apps/{app_id}/restore")
-    async def restore_app(app_id: str, request: Request) -> dict[str, Any]:
-        user = require_app_admin(request)
-        existing = app_by_id(app_id)
-        if existing is None:
-            raise HTTPException(status_code=404, detail={"error": f"unknown app: {app_id}"})
-        if not existing.get("builtin"):
-            raise HTTPException(status_code=400, detail={"error": "only built-in apps can be restored"})
-        default = next(
-            (item for item in app_catalog.catalog_json()["apps"] if item["id"] == app_id), None
-        )
-        if default is None:
-            raise HTTPException(status_code=404, detail={"error": f"no built-in default: {app_id}"})
-        db = require_team_mode()
-        db.replace_team_app(default, builtin=True)
-        restored = app_by_id(app_id) or default
-        db.record_team_app_audit(
-            user.uid,
-            user.display_name or user.username,
-            app_id,
-            "restore",
-            existing,
-            restored,
-        )
-        await registry.evict_app(app_id)
-        return restored
-
-    @app.post("/api/apps/{app_id}/duplicate", status_code=201)
-    async def duplicate_app(app_id: str, request: Request) -> dict[str, Any]:
-        user = require_app_admin(request)
-        existing = app_by_id(app_id)
-        if existing is None:
-            raise HTTPException(status_code=404, detail={"error": f"unknown app: {app_id}"})
-        base_name = f"{existing['name']} 副本"[:40]
-        name = base_name
-        suffix = 2
-        while app_name_taken(name):
-            name = f"{base_name[:36]} {suffix}"
-            suffix += 1
-        copy = json.loads(json.dumps(existing))
-        new_id = f"app-{uuid.uuid4().hex[:8]}"
-        copy.update({"id": new_id, "name": name, "builtin": False})
-        db = require_team_mode()
-        db.replace_team_app(copy)
-        created = app_by_id(new_id) or copy
-        db.record_team_app_audit(
-            user.uid, user.display_name or user.username, new_id, "duplicate", existing, created
-        )
-        return created
-
-    @app.post("/api/apps/order")
-    async def reorder_apps(payload: dict[str, Any], request: Request) -> dict[str, Any]:
-        require_app_admin(request)
-        ids = payload.get("ids")
-        if not isinstance(ids, list) or not all(isinstance(item, str) for item in ids):
-            raise HTTPException(status_code=422, detail={"error": "ids must be a list of app ids"})
-        known = [item["id"] for item in all_apps()]
-        if set(ids) - set(known):
-            raise HTTPException(status_code=422, detail={"error": "ids contains an unknown app"})
-        ordered = list(dict.fromkeys(ids)) + [item for item in known if item not in ids]
-        require_team_mode().reorder_team_apps(ordered)
-        return {"ids": ordered}
-
-    @app.get("/api/apps/export")
-    async def export_apps(request: Request) -> dict[str, Any]:
-        user = require_app_admin(request)
-        del user
-        apps = []
-        for item in all_apps():
-            copy = json.loads(json.dumps(item))
-            copy.pop("builtin", None)
-            apps.append(copy)
-        return {
-            "format": 1,
-            "exportedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "apps": apps,
-        }
-
-    @app.post("/api/apps/import", status_code=201)
-    async def import_apps(payload: dict[str, Any], request: Request) -> dict[str, Any]:
-        user = require_app_admin(request)
-        raw_apps = payload.get("apps")
-        if not isinstance(raw_apps, list) or not raw_apps:
-            raise HTTPException(status_code=422, detail={"error": "apps must be a non-empty list"})
-        db = require_team_mode()
-        created: list[dict[str, Any]] = []
-        for raw in raw_apps[:20]:
-            if not isinstance(raw, dict):
-                continue
-            new_id = f"app-{uuid.uuid4().hex[:8]}"
-            try:
-                app = normalize_app(AppUpsertRequest(**raw), new_id)
-            except (HTTPException, TypeError, ValueError):
-                continue
-            name = app["name"]
-            suffix = 2
-            while app_name_taken(name):
-                name = f"{app['name'][:36]} {suffix}"
-                suffix += 1
-            app["name"] = name
-            db.replace_team_app(app)
-            created.append(app_by_id(new_id) or app)
-            db.record_team_app_audit(
-                user.uid, user.display_name or user.username, new_id, "import", None, app
-            )
-        if not created:
-            raise HTTPException(status_code=422, detail={"error": "no valid apps in this file"})
-        return {"imported": created}
-
-    @app.post("/api/apps/preview")
-    async def preview_app(payload: AppUpsertRequest, request: Request) -> dict[str, Any]:
-        require_app_admin(request)
-        app = normalize_app(payload, "preview")
-        modes = [
-            {
-                "id": mode["id"],
-                "name": mode["name"],
-                "prompt": mode["prompt"],
-                "chars": len(mode["prompt"]),
-                "skills": "all" if mode["skillBinding"] == "all" else mode["skillBinding"],
-            }
-            for mode in app["modes"]
-        ]
-        return {"app": app, "modes": modes}
-
-    @app.get("/api/apps/{app_id}/audit")
-    async def app_audit(app_id: str, request: Request) -> dict[str, Any]:
-        require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        rows = require_team_mode().list_team_app_audit(app_id)
-        if not rows and app_by_id(app_id) is None:
-            raise HTTPException(status_code=404, detail={"error": f"unknown app: {app_id}"})
-        audit = []
-        for row in rows:
-            before = _loads_or_none(row["before_json"])
-            after = _loads_or_none(row["after_json"])
-            audit.append(
-                {
-                    "id": row["id"],
-                    "action": row["action"],
-                    "actor": row["actor"],
-                    "createdAt": row["created_at"],
-                    "changes": app_diff(before, after),
-                    "before": before,
-                    "after": after,
-                }
-            )
-        return {"audit": audit}
+    # Team apps (routers/apps.py).
+    register_app_routes(
+        app,
+        database=database,
+        server_config=server_config,
+        registry=registry,
+        require_team_mode=require_team_mode,
+        ensure_apps=ensure_apps,
+        all_apps=all_apps,
+        normalize_app=normalize_app,
+        safe_id=_safe_id,
+    )
 
     # -- office editor ----------------------------------------------------------------
 
-    def office_target(request: Request, doc_id: str, *, must_exist: bool = True) -> tuple[str, Any, str]:
-        try:
-            ref = office_store.decode_doc_id(doc_id)
-        except office_store.OfficeIdError as error:
-            raise HTTPException(status_code=400, detail={"error": str(error)}) from None
-        if database is None:
-            user_uid = LOCAL_UID
-            resolve_workspace(LOCAL_UID, ref.workspace)
-            root = options.cwd
-        else:
-            user = auth.current_user(request)
-            if user is None:
-                raise auth.reject_unauthenticated()
-            user_uid = user.uid
-            workspace = resolve_workspace(user.uid, ref.workspace)
-            root = str(workspace_row(user.uid, workspace)["path"])
-        workspace_obj = Workspace(root, create=False)
-        try:
-            path = workspace_obj.path_for(ref.path, must_exist=must_exist)
-        except Exception as error:  # noqa: BLE001 - workspace errors are handled by the app
-            raise HTTPException(status_code=404, detail={"error": str(error)}) from None
-        return path, ref, root
+    # Office documents and the spreadsheet sidecar (routers/office.py).
+    register_office_routes(
+        app,
+        database=database,
+        options=options,
+        resolve_workspace=resolve_workspace,
+        workspace_row=workspace_row,
+    )
 
-    @app.get("/api/office/documents/{doc_id}")
-    async def office_metadata(doc_id: str, request: Request) -> dict[str, Any]:
-        path, ref, _root = office_target(request, doc_id)
-        stat = os.stat(path)
-        return {
-            "id": doc_id,
-            "name": os.path.basename(path),
-            "path": ref.path,
-            "size": stat.st_size,
-            "modified": stat.st_mtime,
-            "sha": office_store.sha256_file(path),
-        }
-
-    @app.get("/api/office/documents/{doc_id}/blob")
-    async def office_blob(doc_id: str, request: Request) -> Response:
-        path, _ref, _root = office_target(request, doc_id)
-        with open(path, "rb") as handle:
-            data = handle.read()
-        return Response(content=data, media_type="application/octet-stream")
-
-    @app.put("/api/office/documents/{doc_id}/blob")
-    async def office_save(doc_id: str, request: Request) -> dict[str, Any]:
-        path, ref, root = office_target(request, doc_id, must_exist=False)
-        if database is not None:
-            lock = database.office_lock(doc_id)
-            supplied = (request.headers.get("x-office-token") or "").strip()
-            if lock is not None and float(lock["expires_at"]) > time.time():
-                user = auth.current_user(request)
-                if user is None or lock["uid"] != user.uid:
-                    raise HTTPException(status_code=409, detail={"error": "document is locked"})
-        data = await request.body()
-        if not data or len(data) > office_store.MAX_OFFICE_BYTES:
-            raise HTTPException(status_code=413, detail={"error": "office file must be 1 byte - 50 MB"})
-        if os.path.exists(path):
-            current = office_store.sha256_file(path)
-            expected = (request.headers.get("if-match") or "").strip().strip('"')
-            if expected and expected != current:
-                raise HTTPException(status_code=409, detail={"error": "document changed on disk"})
-            office_store.backup_version(root, doc_id, path)
-        office_store.atomic_write(path, data)
-        return {
-            "id": doc_id,
-            "path": ref.path,
-            "size": len(data),
-            "sha": office_store.sha256_file(path),
-        }
-
-    @app.post("/api/office/documents/{doc_id}/lock")
-    async def office_lock(doc_id: str, request: Request) -> dict[str, Any]:
-        path, _ref, _root = office_target(request, doc_id)
-        if database is None:
-            return {"token": "single", "expiresAt": time.time() + 3600, "owner": "single"}
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        token = secrets.token_urlsafe(24)
-        row = database.acquire_office_lock(doc_id, user.uid, token, ttl_seconds=120)
-        if row["uid"] != user.uid:
-            raise HTTPException(
-                status_code=409,
-                detail={"error": "document is being edited by another user", "owner": row["uid"]},
-            )
-        return {"token": token, "expiresAt": float(row["expires_at"]), "owner": user.uid}
-
-    @app.delete("/api/office/documents/{doc_id}/lock")
-    async def office_unlock(doc_id: str, request: Request) -> dict[str, Any]:
-        office_target(request, doc_id, must_exist=False)
-        if database is None:
-            return {"released": True}
-        token = (request.headers.get("x-office-token") or "").strip()
-        return {"released": database.release_office_lock(doc_id, token)}
-
-    @app.get("/api/office/documents/{doc_id}/versions")
-    async def office_versions(doc_id: str, request: Request) -> dict[str, Any]:
-        _path, _ref, root = office_target(request, doc_id)
-        directory = Path(root) / ".pi" / "versions" / doc_id
-        versions: list[dict[str, Any]] = []
-        if directory.is_dir():
-            for entry in sorted(directory.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
-                if entry.is_file():
-                    versions.append(
-                        {
-                            "id": entry.name,
-                            "size": entry.stat().st_size,
-                            "created": entry.stat().st_mtime,
-                        }
-                    )
-        return {"versions": versions}
-
-    @app.post("/api/office/documents/{doc_id}/versions/{version}/restore")
-    async def office_restore(doc_id: str, version: str, request: Request) -> dict[str, Any]:
-        path, ref, root = office_target(request, doc_id)
-        if database is not None:
-            lock = database.office_lock(doc_id)
-            supplied = (request.headers.get("x-office-token") or "").strip()
-            if lock is not None and float(lock["expires_at"]) > time.time():
-                user = auth.current_user(request)
-                if user is None or lock["uid"] != user.uid:
-                    raise HTTPException(status_code=409, detail={"error": "document is locked"})
-        directory = (Path(root) / ".pi" / "versions" / doc_id).resolve()
-        candidate = (directory / version).resolve()
-        if candidate.parent != directory or not candidate.is_file():
-            raise HTTPException(status_code=404, detail={"error": "version not found"})
-        office_store.backup_version(root, doc_id, path)
-        office_store.atomic_write(path, candidate.read_bytes())
-        return {
-            "id": doc_id,
-            "path": ref.path,
-            "sha": office_store.sha256_file(path),
-            "size": candidate.stat().st_size,
-        }
-
-    # -- xlsx sidecar sessions --------------------------------------------------------
-
-    def sheet_uid(request: Request) -> str:
-        if database is None:
-            return LOCAL_UID
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        return user.uid
-
-    def sheet_session(request: Request, session_id: str) -> dict[str, Any]:
-        session = sheets_sessions.get(session_id)
-        if session is None or session["uid"] != sheet_uid(request):
-            raise HTTPException(status_code=404, detail={"error": "workbook session not found"})
-        return session
-
-    async def sheet_call(command: str, **fields: Any) -> Any:
-        try:
-            return await xlsx_engine.sidecar().request(command, **fields)
-        except xlsx_engine.SidecarError as error:
-            raise HTTPException(status_code=503, detail={"error": f"xlsx engine: {error}"}) from None
-
-    @app.post("/api/office/sheets/open")
-    async def sheets_open(request: Request) -> dict[str, Any]:
-        data = await request.body()
-        if not data or len(data) > office_store.MAX_OFFICE_BYTES:
-            raise HTTPException(status_code=413, detail={"error": "workbook is empty or too large"})
-        work_dir = Path(tempfile.mkdtemp(prefix="pi-xlsx-"))
-        path = work_dir / "workbook.xlsx"
-        path.write_bytes(data)
-        result = await sheet_call("open", path=str(path))
-        sheets_sessions[result["sessionId"]] = {
-            "sessionId": result["sessionId"],
-            "uid": sheet_uid(request),
-            "dir": work_dir,
-            "path": path,
-        }
-        return result
-
-    @app.post("/api/office/sheets/read-range")
-    async def sheets_read_range(request: Request) -> Any:
-        body = await request.json()
-        session = sheet_session(request, str(body.get("sessionId") or ""))
-        return await sheet_call(
-            "read_range",
-            sessionId=session["sessionId"],
-            sheetId=body.get("sheetId"),
-            range=body.get("range"),
-        )
-
-    @app.post("/api/office/sheets/read-formulas")
-    async def sheets_read_formulas(request: Request) -> Any:
-        body = await request.json()
-        session = sheet_session(request, str(body.get("sessionId") or ""))
-        return await sheet_call(
-            "read_formula_cells", sessionId=session["sessionId"], sheetId=body.get("sheetId")
-        )
-
-    @app.post("/api/office/sheets/read-media")
-    async def sheets_read_media(request: Request) -> Any:
-        body = await request.json()
-        session = sheet_session(request, str(body.get("sessionId") or ""))
-        return await sheet_call(
-            "read_media", sessionId=session["sessionId"], visualId=body.get("visualId")
-        )
-
-    @app.post("/api/office/sheets/recalc")
-    async def sheets_recalc(request: Request) -> Any:
-        body = await request.json()
-        session = sheet_session(request, str(body.get("sessionId") or ""))
-        return await sheet_call(
-            "recalc_cells",
-            path=str(session["path"]),
-            edits=body.get("edits") or [],
-            reads=body.get("reads") or [],
-        )
-
-    @app.post("/api/office/sheets/manifest")
-    async def sheets_manifest(request: Request) -> Any:
-        body = await request.json()
-        session = sheet_session(request, str(body.get("sessionId") or ""))
-        return await sheet_call("archive_manifest", path=str(session["path"]))
-
-    @app.post("/api/office/sheets/read-entries")
-    async def sheets_read_entries(request: Request) -> Any:
-        body = await request.json()
-        session = sheet_session(request, str(body.get("sessionId") or ""))
-        entries = body.get("entries") or []
-        if not entries:
-            return {"entries": []}
-        out_dir = Path(tempfile.mkdtemp(prefix="pi-xlsx-read-", dir=session["dir"]))
-        try:
-            result = await sheet_call(
-                "read_entries",
-                path=str(session["path"]),
-                entries=entries,
-                outputDir=str(out_dir),
-            )
-            return {
-                "entries": [
-                    {
-                        "name": entry["name"],
-                        "contentB64": base64.b64encode(Path(entry["path"]).read_bytes()).decode(),
-                    }
-                    for entry in result.get("entries", [])
-                ]
-            }
-        finally:
-            shutil.rmtree(out_dir, ignore_errors=True)
-
-    @app.post("/api/office/sheets/scan-entries")
-    async def sheets_scan_entries(request: Request) -> Any:
-        body = await request.json()
-        session = sheet_session(request, str(body.get("sessionId") or ""))
-        return await sheet_call(
-            "scan_entries",
-            path=str(session["path"]),
-            entries=body.get("entries") or [],
-            needle=body.get("needle") or "",
-        )
-
-    @app.post("/api/office/sheets/save")
-    async def sheets_save(request: Request) -> dict[str, Any]:
-        body = await request.json()
-        session = sheet_session(request, str(body.get("sessionId") or ""))
-        doc_id = str(body.get("docId") or "")
-        if not doc_id:
-            raise HTTPException(status_code=422, detail={"error": "save requires an existing document"})
-        path, _ref, root = office_target(request, doc_id, must_exist=True)
-        if database is not None:
-            lock = database.office_lock(doc_id)
-            if lock is not None and float(lock["expires_at"]) > time.time() and lock["uid"] != sheet_uid(request):
-                raise HTTPException(status_code=409, detail={"error": "document is locked"})
-
-        def materialize(items: list[dict[str, Any]], tag: str) -> list[dict[str, str]]:
-            output: list[dict[str, str]] = []
-            for index, item in enumerate(items):
-                target = Path(session["dir"]) / f"{tag}-{index}.bin"
-                target.write_bytes(base64.b64decode(item.get("contentB64") or ""))
-                output.append({"name": str(item.get("name") or ""), "contentPath": str(target)})
-            return output
-
-        replacements = materialize(body.get("replacements") or [], "replace")
-        additions = materialize(body.get("additions") or [], "add")
-        target = Path(session["dir"]) / "saved.xlsx"
-        await sheet_call(
-            "save_archive",
-            sourcePath=str(session["path"]),
-            targetPath=str(target),
-            replacements=replacements,
-            removals=body.get("removals") or [],
-            additions=additions,
-        )
-        data = target.read_bytes()
-        office_store.backup_version(root, doc_id, path)
-        office_store.atomic_write(path, data)
-
-        # Reset the sidecar session on the saved file, like AIOffice.
-        await sheet_call("close", sessionId=session["sessionId"])
-        reopened = await sheet_call("open", path=str(target))
-        sheets_sessions.pop(session["sessionId"], None)
-        sheets_sessions[reopened["sessionId"]] = {
-            "sessionId": reopened["sessionId"],
-            "uid": sheet_uid(request),
-            "dir": session["dir"],
-            "path": target,
-        }
-        return {
-            "docId": doc_id,
-            "size": len(data),
-            "sha": office_store.sha256_file(path),
-            "workbook": reopened,
-        }
-
-    @app.post("/api/office/sheets/close")
-    async def sheets_close(request: Request) -> dict[str, Any]:
-        body = await request.json()
-        session = sheets_sessions.pop(str(body.get("sessionId") or ""), None)
-        if session is not None:
-            try:
-                await sheet_call("close", sessionId=body.get("sessionId"))
-            except HTTPException:
-                pass
-            shutil.rmtree(session["dir"], ignore_errors=True)
-        return {"closed": True}
-
-    @app.get("/api/workspaces")
-    async def list_workspaces(request: Request) -> dict[str, Any]:
-        if database is None:
-            return {
-                "workspaces": [
-                    {"id": "default", "name": "默认工作空间", "isDefault": True, "path": options.cwd}
-                ],
-                "canCreate": False,
-            }
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        ensure_default_workspace(user.uid)
-        rows = database.list_workspaces(user.uid)
-        return {
-            "workspaces": [
-                {
-                    "id": str(row["id"]),
-                    "name": str(row["name"]),
-                    "isDefault": bool(row["is_default"]),
-                    "path": str(row["path"]),
-                }
-                for row in rows
-            ],
-            "canCreate": True,
-        }
-
-    @app.post("/api/workspaces", status_code=201)
-    async def create_workspace(payload: CreateWorkspaceRequest, request: Request) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        name = payload.name.strip()
-        if not 1 <= len(name) <= 40:
-            raise HTTPException(status_code=422, detail={"error": "workspace name must be 1-40 characters"})
-        ensure_default_workspace(user.uid)
-        workspace_id = uuid.uuid4().hex[:12]
-        path = server_config.ensure_workspace_path(user.uid, workspace_id)
-        try:
-            db.create_workspace(user.uid, name, path, workspace_id)
-        except DuplicateWorkspace:
-            raise HTTPException(status_code=409, detail={"error": f"workspace already exists: {name}"}) from None
-        return {"id": workspace_id, "name": name, "isDefault": False}
-
-    @app.patch("/api/workspaces/{workspace_id}")
-    async def rename_workspace(
-        workspace_id: str, payload: RenameWorkspaceRequest, request: Request
-    ) -> dict[str, Any]:
-        db = require_team_mode()
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        ensure_default_workspace(user.uid)
-        if db.get_workspace(user.uid, workspace_id) is None:
-            raise HTTPException(status_code=404, detail={"error": f"unknown workspace: {workspace_id}"})
-        name = payload.name.strip()
-        if not 1 <= len(name) <= 40:
-            raise HTTPException(status_code=422, detail={"error": "workspace name must be 1-40 characters"})
-        try:
-            db.rename_workspace(user.uid, workspace_id, name)
-        except DuplicateWorkspace:
-            raise HTTPException(status_code=409, detail={"error": f"workspace already exists: {name}"}) from None
-        return {"id": workspace_id, "name": name, "isDefault": workspace_id == "default"}
-
-    @app.get("/api/sessions")
-    async def sessions(request: Request) -> dict[str, Any]:
-        worker = await worker_for(request)
-        # Sessions written before apps existed have no app; keep them visible everywhere
-        # instead of hiding half of someone's history.
-        wanted_app = request.query_params.get("app") or ""
-        wanted_mode = request.query_params.get("mode") or ""
-
-        # Running state is per user, not per request: a conversation left mid-turn
-        # keeps streaming in a worker that may belong to another workspace, and the
-        # sidebar lists every workspace at once. Union the live workers.
-        uid = LOCAL_UID
-        if database is not None:
-            user = auth.current_user(request)
-            if user is None:
-                raise auth.reject_unauthenticated()
-            uid = user.uid
-        running_files: set[str] = set()
-        for live in registry.workers_for(uid):
-            running_files |= live.running_session_files()
-
-        def serialize(info: Any, workspace: dict[str, str] | None) -> dict[str, Any]:
-            return {
-                "path": info.path,
-                "id": info.id,
-                "cwd": info.cwd,
-                "name": info.name,
-                "app": info.app,
-                "mode": info.mode,
-                "modified": info.modified.isoformat(),
-                "messageCount": info.message_count,
-                "firstMessage": info.first_message,
-                "workspace": workspace,
-                "running": os.path.realpath(str(info.path)) in running_files,
-            }
-
-        # ``scope=all`` feeds the sidebar's "按工作区" grouping: one call for every
-        # workspace this user owns instead of one call per switch. The session dir is
-        # derived from (cwd, agent_dir), so each workspace has to be listed separately.
-        if (request.query_params.get("scope") or "") != "all":
-            # `agent_dir` is what keeps this list per-user: the same call in single mode
-            # falls back to the default agent dir because the option is None there.
-            listed = await SessionManager.list(
-                worker.state.cwd,
-                agent_dir=worker.options.agent_dir,
-                session_dir=worker.options.session_dir,
-            )
-            rows = [(info, None) for info in listed]
-        elif database is None:
-            listed = await SessionManager.list(
-                worker.state.cwd,
-                agent_dir=worker.options.agent_dir,
-                session_dir=worker.options.session_dir,
-            )
-            rows = [(info, {"id": "default", "name": "默认工作空间"}) for info in listed]
-        else:
-            user = auth.current_user(request)
-            if user is None:
-                raise auth.reject_unauthenticated()
-            ensure_default_workspace(user.uid)
-            rows = []
-            for workspace in database.list_workspaces(user.uid):
-                listed = await SessionManager.list(
-                    str(workspace["path"]),
-                    agent_dir=worker.options.agent_dir,
-                    session_dir=worker.options.session_dir,
-                )
-                tag = {"id": str(workspace["id"]), "name": str(workspace["name"])}
-                rows.extend((info, tag) for info in listed)
-
-        if wanted_app:
-            rows = [(info, tag) for info, tag in rows if info.app in (None, wanted_app)]
-        if wanted_mode:
-            rows = [(info, tag) for info, tag in rows if info.mode in (None, wanted_mode)]
-        rows.sort(key=lambda row: row[0].modified, reverse=True)
-        return {"sessions": [serialize(info, tag) for info, tag in rows]}
-
-    @app.get("/api/state")
-    async def state(request: Request) -> dict[str, Any]:
-        worker = await worker_for(request)
-        return worker.state_payload()
-
-    _ARTIFACT_EDITABLE = {
-        "md", "mdx", "txt", "html", "htm", "csv", "tsv", "json", "yaml", "yml",
-    }
-    _ARTIFACT_EXTENSIONS = {
-        "md": "document",
-        "mdx": "document",
-        "docx": "document",
-        "txt": "document",
-        "html": "document",
-        "htm": "document",
-        "csv": "sheet",
-        "tsv": "sheet",
-        "xlsx": "sheet",
-        "xls": "sheet",
-        "pptx": "slides",
-        "ppt": "slides",
-        "pdf": "document",
-        "json": "data",
-        "yaml": "data",
-        "yml": "data",
-        "png": "image",
-        "jpg": "image",
-        "jpeg": "image",
-        "webp": "image",
-        "svg": "image",
-    }
-
-    # -- workspace files ---------------------------------------------------------------
-
-    def workspace_for(request: Request) -> Workspace:
-        """The caller's workspace.
-
-        Deliberately does **not** start an agent session: browsing files should not cost a
-        bootstrap, and it must keep working while a session is being evicted.
-        """
-        if database is None:
-            resolve_workspace(LOCAL_UID, request.query_params.get("workspace"))
-            return Workspace(options.cwd, create=False)
-        user = auth.current_user(request)
-        if user is None:
-            raise auth.reject_unauthenticated()
-        workspace = resolve_workspace(user.uid, request.query_params.get("workspace"))
-        row = workspace_row(user.uid, workspace)
-        return Workspace(str(row["path"]))
-
-    @app.get("/api/artifacts")
-    async def list_artifacts(request: Request) -> dict[str, Any]:
-        """Recent workspace files that look like deliverables, newest first."""
-        workspace = workspace_for(request)
-        tree = workspace.tree("/", recursive=True, files_only=True)
-        artifacts: list[dict[str, Any]] = []
-        for entry in tree["entries"]:
-            if entry.get("hidden"):
-                continue
-            extension = str(entry.get("name", "")).rsplit(".", 1)[-1].lower()
-            kind = _ARTIFACT_EXTENSIONS.get(extension)
-            if kind is None:
-                continue
-            artifacts.append(
-                {
-                    "path": entry["path"],
-                    "name": entry["name"],
-                    "kind": kind,
-                    "extension": extension,
-                    "size": entry["size"],
-                    "modified": entry["modified"],
-                    "editable": extension in _ARTIFACT_EDITABLE,
-                }
-            )
-        artifacts.sort(key=lambda item: float(item["modified"] or 0), reverse=True)
-        return {"artifacts": artifacts[:40]}
-
-    @app.get("/api/artifacts/pptx")
-    async def preview_pptx(request: Request, path: str = Query(...)) -> dict[str, Any]:
-        """Read-only slide text preview, extracted from the OOXML package.
-
-        Deliberately no python-pptx dependency: the package is a zip of XML, and the
-        preview only needs the text runs.  Editing stays a download-and-open workflow.
-        """
-        workspace = workspace_for(request)
-        target, _name = workspace.download_target(path)
-        try:
-            with zipfile.ZipFile(target) as archive:
-                names = [
-                    name
-                    for name in archive.namelist()
-                    if re.fullmatch(r"ppt/slides/slide[0-9]+\.xml", name)
-                ]
-                names.sort(key=lambda name: int(re.search(r"slide([0-9]+)\.xml$", name).group(1)))
-                slides: list[dict[str, Any]] = []
-                for index, name in enumerate(names[:100], start=1):
-                    root = ElementTree.fromstring(archive.read(name))
-                    texts = [
-                        node.text
-                        for node in root.iter()
-                        if node.tag.endswith("}t") and node.text and node.text.strip()
-                    ]
-                    slides.append({"number": index, "texts": texts[:80]})
-        except (zipfile.BadZipFile, KeyError, ElementTree.ParseError) as error:
-            raise HTTPException(status_code=422, detail={"error": f"not a readable pptx: {error}"}) from None
-        return {"path": path, "slides": slides}
-
-    @app.get("/api/artifacts/xlsx")
-    async def preview_xlsx(request: Request, path: str = Query(...)) -> dict[str, Any]:
-        """Read-only XLSX preview: sheet names and the first cells of each sheet."""
-        workspace = workspace_for(request)
-        target, _name = workspace.download_target(path)
-
-        def local(tag: str) -> str:
-            return tag.rsplit("}", 1)[-1]
-
-        def column_index(reference: str) -> int:
-            letters = "".join(char for char in reference if char.isalpha()).upper()
-            index = 0
-            for char in letters:
-                index = index * 26 + (ord(char) - 64)
-            return max(0, index - 1)
-
-        try:
-            with zipfile.ZipFile(target) as archive:
-                names = set(archive.namelist())
-                shared: list[str] = []
-                if "xl/sharedStrings.xml" in names:
-                    root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
-                    for item in root.iter():
-                        if local(item.tag) == "si":
-                            shared.append("".join(node.text or "" for node in item.iter() if local(node.tag) == "t"))
-
-                relations: dict[str, str] = {}
-                if "xl/_rels/workbook.xml.rels" in names:
-                    root = ElementTree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
-                    for item in root.iter():
-                        if local(item.tag) == "Relationship":
-                            relations[str(item.attrib.get("Id") or "")] = str(item.attrib.get("Target") or "")
-
-                workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
-                sheets: list[dict[str, Any]] = []
-                for item in workbook.iter():
-                    if local(item.tag) != "sheet":
-                        continue
-                    rel_id = next(
-                        (value for key, value in item.attrib.items() if local(key) == "id"), ""
-                    )
-                    target_name = relations.get(rel_id, "")
-                    if not target_name:
-                        continue
-                    sheet_path = target_name.lstrip("/")
-                    if not sheet_path.startswith("xl/"):
-                        sheet_path = f"xl/{sheet_path}"
-                    if sheet_path not in names:
-                        continue
-                    sheet_root = ElementTree.fromstring(archive.read(sheet_path))
-                    rows: list[list[str]] = []
-                    for row in sheet_root.iter():
-                        if local(row.tag) != "row":
-                            continue
-                        cells: dict[int, str] = {}
-                        for cell in row:
-                            if local(cell.tag) != "c":
-                                continue
-                            reference = str(cell.attrib.get("r") or "")
-                            cell_type = str(cell.attrib.get("t") or "")
-                            value = ""
-                            if cell_type == "inlineStr":
-                                value = "".join(
-                                    node.text or "" for node in cell.iter() if local(node.tag) == "t"
-                                )
-                            else:
-                                raw = next(
-                                    (node.text or "" for node in cell.iter() if local(node.tag) == "v"),
-                                    "",
-                                )
-                                if cell_type == "s" and raw.isdigit():
-                                    index = int(raw)
-                                    value = shared[index] if 0 <= index < len(shared) else ""
-                                elif cell_type == "b":
-                                    value = "TRUE" if raw == "1" else "FALSE"
-                                else:
-                                    value = raw
-                            if value:
-                                cells[column_index(reference)] = value
-                        if cells:
-                            width = min(max(cells) + 1, 30)
-                            rows.append([cells.get(index, "") for index in range(width)])
-                        if len(rows) >= 200:
-                            break
-                    sheets.append({"name": str(item.attrib.get("name") or sheet_path), "rows": rows})
-                    if len(sheets) >= 8:
-                        break
-        except (zipfile.BadZipFile, KeyError, ElementTree.ParseError) as error:
-            raise HTTPException(status_code=422, detail={"error": f"not a readable xlsx: {error}"}) from None
-        return {"path": path, "sheets": sheets}
-
-    @app.post("/api/export/docx")
-    async def export_docx(payload: ExportDocxRequest, request: Request) -> Response:
-        """把一条回答（Markdown）转成 Word，供"下载"按钮使用。
-
-        只做格式转换，不碰工作区：内容来自浏览器里已有的那条回答。
-        """
-        if database is not None and auth.current_user(request) is None:
-            raise auth.reject_unauthenticated()
-        text = payload.markdown or ""
-        if not text.strip():
-            raise HTTPException(status_code=422, detail={"error": "markdown is empty"})
-        if len(text) > 400_000:
-            raise HTTPException(status_code=413, detail={"error": "markdown is too large"})
-        data = markdown_to_docx(
-            text, title=payload.title or "回答", subtitle=payload.subtitle or ""
-        )
-        name = (payload.title or "answer").strip()[:60] or "answer"
-        # 注意 str.isalnum() 对中文也是 True，header 必须是 ASCII，所以额外要求 isascii()。
-        safe = "".join(
-            ch if ch.isascii() and (ch.isalnum() or ch in "-_ ") else "-" for ch in name
-        ).strip(" -") or "answer"
-        # HTTP 头只能是 latin-1：中文文件名走 RFC 5987 的 filename*，另给一个 ASCII 回退。
-        encoded = urllib.parse.quote(f"{name}.docx")
-        return Response(
-            content=data,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={
-                "Content-Disposition": f"attachment; filename=\"{safe}.docx\"; filename*=UTF-8''{encoded}"
-            },
-        )
-
-    @app.get("/api/workspace/tree")
-    async def workspace_tree(
-        request: Request,
-        path: str = Query("/", description="Workspace-relative directory"),
-        recursive: bool = Query(False),
-        files_only: bool = Query(False),
-    ) -> dict[str, Any]:
-        return workspace_for(request).tree(path, recursive=recursive, files_only=files_only)
-
-    @app.get("/api/workspace/file")
-    async def workspace_read(request: Request, path: str = Query(...)) -> dict[str, Any]:
-        return workspace_for(request).read(path)
-
-    @app.put("/api/workspace/file")
-    async def workspace_write(request: Request, path: str = Query(...)) -> dict[str, Any]:
-        """Write a file from either JSON (text edits) or raw bytes (uploads).
-
-        One endpoint serves both so that a binary upload needs no multipart parser, and so
-        the size cap and the path rules are applied exactly once.
-        """
-        body = await request.body()
-        media_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
-        if media_type in ("application/json", "text/json"):
-            try:
-                payload = json.loads(body or b"{}")
-            except json.JSONDecodeError as error:
-                raise HTTPException(
-                    status_code=422, detail={"error": f"invalid JSON body: {error}"}
-                ) from None
-            content = payload.get("content") if isinstance(payload, dict) else None
-            if not isinstance(content, str):
-                raise HTTPException(
-                    status_code=422, detail={"error": "JSON body must be {\"content\": \"...\"}"}
-                )
-            data = content.encode("utf-8")
-        else:
-            data = body
-        return workspace_for(request).write(path, data)
-
-    @app.delete("/api/workspace/file")
-    async def workspace_delete(request: Request, path: str = Query(...)) -> dict[str, Any]:
-        return workspace_for(request).delete(path)
-
-    @app.post("/api/workspace/directory")
-    async def workspace_mkdir(
-        request: Request, payload: CreateDirectoryRequest
-    ) -> dict[str, Any]:
-        return workspace_for(request).create_directory(payload.parentPath, payload.name)
-
-    @app.get("/api/workspace/download")
-    async def workspace_download(
-        request: Request, path: str = Query(...), inline: bool = Query(False)
-    ) -> FileResponse:
-        target, filename = workspace_for(request).download_target(path)
-        return FileResponse(
-            target,
-            filename=filename,
-            content_disposition_type="inline" if inline else "attachment",
-        )
+    # Workspace files, artifacts, export, session list/state (routers/workspace.py).
+    register_workspace_routes(
+        app,
+        database=database,
+        options=options,
+        server_config=server_config,
+        registry=registry,
+        require_team_mode=require_team_mode,
+        resolve_workspace=resolve_workspace,
+        workspace_row=workspace_row,
+        ensure_default_workspace=ensure_default_workspace,
+        worker_for=worker_for,
+    )
 
     @app.websocket("/api/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:
@@ -3752,16 +1135,35 @@ def create_app(
             # The question broker refuses to ask when no tab can see the card; this
             # counter is what makes that check live instead of optimistic.
             worker.controller.set_client_count(lambda: worker.hub.client_count)
+            # Snapshot the position once: ``ready`` and the replay below must agree,
+            # or a message persisted between the two would be promised as replayable
+            # and then skipped (the tab would lose it).
+            stream_head = worker.run_log.head
+            persisted = worker.last_persisted_seq
             connection.send(
                 {
                     "type": "ready",
                     "version": __version__,
                     "cwd": worker.state.cwd,
                     "warnings": list(worker.warnings),
+                    # A reconnecting tab tells the server what it already has, but
+                    # this is the authoritative pair: everything at or below
+                    # ``lastPersistedSeq`` is in ``get_state``, everything above it
+                    # is replayed below.
+                    "seq": stream_head,
+                    "lastPersistedSeq": persisted,
                 }
             )
             connection.send({"type": "response", "command": "get_state", "success": True,
                              "data": worker.state_payload()})
+            # Replay *after* get_state: the snapshot is the base a tab renders, and
+            # the replayed tail is the in-flight message that has not been
+            # persisted.  Nothing else is worth replaying — a finished turn's
+            # turn_end/agent_end are already reflected in the snapshot.
+            if worker.run_log.has_unpersisted_message(persisted):
+                since = query_int(websocket.query_params.get("since"))
+                for record in worker.run_log.since(replay_floor(since, persisted)):
+                    connection.send(record)
             while True:
                 text = await websocket.receive_text()
                 worker.touch()

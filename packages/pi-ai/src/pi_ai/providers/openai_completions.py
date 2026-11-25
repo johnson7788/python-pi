@@ -22,8 +22,6 @@ cached tokens, so the input count is a subtraction rather than a direct read.
 from __future__ import annotations
 
 import asyncio
-
-import asyncio
 import json
 import re
 import time

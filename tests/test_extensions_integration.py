@@ -8,7 +8,6 @@ that a broken extension cannot take the agent loop down with it.
 
 from __future__ import annotations
 
-import json
 
 import pytest
 from pi_ai import (
@@ -23,7 +22,7 @@ from pi_ai import (
 from pi_ai.auth import ApiKeyCredential
 from pi_ai import AuthStorage, InMemoryCredentialStore
 from pi_ai.providers.faux import FauxTurn, register_faux_api
-from pi_agent import AgentTool, AgentToolResult
+from pi_agent import AgentTool
 from pi_coding_agent.agent_session import AgentSession
 from pi_coding_agent.extensions import (
     BeforeAgentStartResult,

@@ -5,7 +5,10 @@
   "apiVersion": "2",
   "entry": "main.py",
   "description": "把数据画成可交付的 ECharts HTML：数据画像、数据绑定、spec 校验、HTML 生成（含 PNG/CSV 导出按钮）。图表里的每个数字都由工具从数据文件绑定，模型不手抄数字。",
-  "capabilities": ["tools"],
+  "capabilities": [
+    "tools",
+    "files"
+  ],
   "permissions": {
     "tools": [],
     "filesystem": "write",

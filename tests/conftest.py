@@ -53,6 +53,9 @@ class FakeOpenAIHandler(BaseHTTPRequestHandler):
     #: Seconds to stall before answering, so a test can observe a turn in flight. Kept
     #: at zero everywhere else: the suite should not pay for a sleep it does not need.
     delay = 0.0
+    #: Seconds between SSE events, for tests that need to catch a message *mid-stream*
+    #: (a run that has started streaming but not yet persisted the assistant message).
+    chunk_delay = 0.0
 
     def log_message(self, *args) -> None:  # keep test output clean
         pass
@@ -141,7 +144,14 @@ class FakeOpenAIHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        chunked_delay = type(self).chunk_delay
+        if chunked_delay:
+            for part in payload.split(b"\n\n")[:-1]:
+                self.wfile.write(part + b"\n\n")
+                self.wfile.flush()
+                time.sleep(chunked_delay)
+        else:
+            self.wfile.write(payload)
 
     def do_GET(self) -> None:  # noqa: N802 - http.server API
         self.send_error(404)
@@ -158,6 +168,7 @@ def fake_openai():
     FakeOpenAIHandler.tool = "write"
     FakeOpenAIHandler.bash_command = "git push"
     FakeOpenAIHandler.delay = 0.0
+    FakeOpenAIHandler.chunk_delay = 0.0
     server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenAIHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

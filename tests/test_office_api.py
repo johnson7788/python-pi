@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import os
+import io
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -12,7 +12,24 @@ from pi_server.app import create_app
 from pi_server.auth import ensure_admin
 from pi_server.config import ServerConfig
 
-FIXTURE = Path("/Users/admin/git/AIOffice/frontend/apps/docs/tests/pagination-corpus/docx/13-english-report.docx")
+
+def sample_docx() -> bytes:
+    """A real ``.docx``, generated here.
+
+    The tests used to read a file from a sibling checkout, which made them fail
+    (not skip) anywhere else, CI included.  The document only has to *be* a Word
+    file: the assertions are about opaque ids, blob round-trips and the sha guard.
+    """
+    from docx import Document
+
+    document = Document()
+    document.add_heading("Pagination fixture", level=1)
+    document.add_paragraph("First paragraph, enough text to be more than one line. " * 3)
+    document.add_page_break()
+    document.add_paragraph("Second page.")
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
 
 
 def _client(tmp_path):
@@ -30,7 +47,7 @@ def test_office_blob_roundtrip_and_sha_guard(tmp_path):
         client.get("/api/workspaces")
         workspace = app.state.db.get_workspace(uid, "default")["path"]
         target = Path(workspace) / "report.docx"
-        target.write_bytes(FIXTURE.read_bytes())
+        target.write_bytes(sample_docx())
         doc_id = office.encode_doc_id("default", "/report.docx")
 
         meta = client.get(f"/api/office/documents/{doc_id}")
@@ -82,7 +99,7 @@ def test_office_lock_and_version_restore(tmp_path):
         client.get("/api/workspaces")
         workspace = app.state.db.get_workspace(uid, "default")["path"]
         target = Path(workspace) / "paper.docx"
-        target.write_bytes(FIXTURE.read_bytes())
+        target.write_bytes(sample_docx())
         doc_id = office.encode_doc_id("default", "/paper.docx")
 
         bob_id = app.state.db.create_user(username="bob", password_hash=auth.hash_password("pw123456"))
@@ -90,7 +107,7 @@ def test_office_lock_and_version_restore(tmp_path):
         bob.post("/api/auth/login", json={"username": "bob", "password": "pw123456"})
         bob.get("/api/workspaces")
         bob_workspace = app.state.db.get_workspace(bob_id, "default")["path"]
-        (Path(bob_workspace) / "paper.docx").write_bytes(FIXTURE.read_bytes())
+        (Path(bob_workspace) / "paper.docx").write_bytes(sample_docx())
         lock = client.post(f"/api/office/documents/{doc_id}/lock")
         assert lock.status_code == 200, lock.text
         token = lock.json()["token"]

@@ -12,22 +12,15 @@ import asyncio
 import base64
 import io
 import json
-import os
-import subprocess
-import sys
-import threading
 from pathlib import Path
 
-import pytest
 from pi_ai import (
-    AbortController,
     AssistantMessage,
     Cost,
     ImageContent,
     Model,
     ModelCost,
     TextContent,
-    ToolCall,
     Usage,
     UserMessage,
     create_assistant_message_event_stream,
@@ -36,7 +29,6 @@ from pi_ai.auth import ApiKeyCredential
 from pi_ai import AuthStorage, InMemoryCredentialStore
 from pi_ai.providers.faux import FauxTurn, register_faux_api
 from pi_coding_agent.agent_session import AgentSession
-from pi_coding_agent.messages import convert_to_llm
 from pi_coding_agent.modes.jsonl import (
     JsonlLineReader,
     decode_record,

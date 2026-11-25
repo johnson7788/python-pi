@@ -26,7 +26,7 @@ from conftest import (
     ws_prompt,
 )
 
-from pi_server.db import Database, month_start, utcnow
+from pi_server.db import Database, month_start
 
 # --------------------------------------------------------------------------------------
 # Accounting

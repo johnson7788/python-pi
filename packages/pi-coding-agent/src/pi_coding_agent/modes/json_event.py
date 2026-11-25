@@ -13,6 +13,7 @@ the deltas that follow.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pi_ai import content_to_json, usage_to_json

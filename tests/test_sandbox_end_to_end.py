@@ -53,13 +53,23 @@ def _docker_ready() -> tuple[bool, str]:
         )
     except Exception as error:  # noqa: BLE001
         return False, str(error)
-    if result.returncode != 0:
-        return False, (result.stderr or "").strip()[:200]
-    return True, result.stdout.strip()
+    # ``docker info --format`` exits 0 with empty output when the daemon is down,
+    # so the return code alone says nothing; see the same note in
+    # ``test_sandbox_provisioner.py``.
+    version = result.stdout.strip()
+    if result.returncode != 0 or not version:
+        return False, (result.stderr or "docker reported no server version").strip()[:200]
+    return True, version
 
 
 _ready, _why = _docker_ready()
-pytestmark = pytest.mark.skipif(not _ready, reason=f"needs a docker daemon: {_why}")
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _ready and os.environ.get("PI_REQUIRE_INTEGRATION") != "1",
+        reason=f"needs a docker daemon: {_why}",
+    ),
+]
 
 
 @pytest.fixture()
@@ -270,7 +280,7 @@ def test_bash_works_with_the_same_paths_the_agent_is_told(sandboxed_server):
         created = admin.post(
             "/api/admin/users", json={"username": "ada", "password": TEAM_USER_PASSWORD}
         )
-        uid = created.json()["user"]["uid"]
+        created.json()["user"]["uid"]
         member = login(server, "ada", TEAM_USER_PASSWORD)
         try:
             member.put(

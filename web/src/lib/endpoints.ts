@@ -13,6 +13,8 @@ export function resolveWsUrl(
   workspace?: string,
   appId?: string,
   modeId?: string,
+  /** Last server record the tab applied; asks the server to replay what follows. */
+  since?: number,
 ): string {
   const configured = import.meta.env.VITE_WS_URL
   const base =
@@ -23,6 +25,7 @@ export function resolveWsUrl(
   if (workspace) params.set('workspace', workspace)
   if (appId) params.set('app', appId)
   if (modeId) params.set('mode', modeId)
+  if (since && since > 0) params.set('since', String(since))
   if (![...params].length) return base
   const separator = base.includes('?') ? '&' : '?'
   return `${base}${separator}${params.toString()}`

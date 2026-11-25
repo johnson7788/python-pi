@@ -77,6 +77,8 @@ class Skill:
     description: str
     location: str
     disable_model_invocation: bool = False
+    #: 限定可用的应用 id（空=不限）。用于"某个技能只给某个应用用"。
+    apps: tuple[str, ...] = ()
 
     @property
     def base_dir(self) -> str:
@@ -208,11 +210,14 @@ def _skill_from_file(
         return None, diagnostics
 
     assert isinstance(description, str)
+    raw_apps = frontmatter.get("apps")
+    apps = tuple(str(item) for item in raw_apps) if isinstance(raw_apps, list) else ()
     skill = Skill(
         name=name,
         description=description,
         location=os.path.abspath(file_path),
         disable_model_invocation=frontmatter.get(DISABLE_MODEL_INVOCATION_KEY) is True,
+        apps=apps,
     )
     return skill, diagnostics
 

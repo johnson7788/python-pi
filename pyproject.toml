@@ -1,6 +1,6 @@
 [project]
 name = "saas-workbuddy"
-version = "0.0.0"
+version = "0.1.0"
 description = "Python port of the pi coding-agent harness (uv workspace root)"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -33,3 +33,22 @@ dev = [
 testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = ["error::RuntimeWarning"]
+markers = [
+    "integration: needs external infrastructure (a docker daemon); skipped unless present",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+# Build outputs, the frontend (eslint's job) and vendored trees are not Python lint targets.
+extend-exclude = ["web", "office", "office-dist", "apps", "examples", "template", "docs/tutorials", "citexs-advanced"]
+
+[tool.ruff.lint]
+# Start from the rules that catch real defects.  Style rules can be ratcheted up
+# later; a lint gate that people routinely bypass is worse than a narrow one.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# A pytest fixture parameter legitimately shadows the imported fixture name, and a
+# test may keep a value only for its side effect.  Neither is a defect.
+"tests/*" = ["F811", "F841"]

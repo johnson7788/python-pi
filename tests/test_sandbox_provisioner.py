@@ -341,14 +341,27 @@ def _docker_ready() -> tuple[bool, str]:
         )
     except Exception as error:  # noqa: BLE001
         return False, str(error)
-    if result.returncode != 0:
-        return False, result.stderr.strip()[:200]
-    return True, result.stdout.strip()
+    # ``docker info --format`` exits 0 even when it cannot reach the daemon: the
+    # error goes to stderr and the formatted output is empty.  Reading only the
+    # return code made these tests run against a dead socket and fail instead of
+    # skipping.  The version string is the only honest signal.
+    version = result.stdout.strip()
+    if result.returncode != 0 or not version:
+        detail = (result.stderr or "docker reported no server version").strip()
+        return False, detail[:200]
+    return True, version
 
 
+_docker_ok, _docker_why = _docker_ready()
+# Set PI_REQUIRE_INTEGRATION=1 in CI: a missing daemon must fail that job rather
+# than silently skip the only tests that prove a sandbox really is one.
 requires_docker = pytest.mark.skipif(
-    not _docker_ready()[0], reason=f"needs a docker daemon: {_docker_ready()[1]}"
+    not _docker_ok and os.environ.get("PI_REQUIRE_INTEGRATION") != "1",
+    reason=f"needs a docker daemon: {_docker_why}",
 )
+
+
+pytestmark = [pytest.mark.integration]
 
 
 @pytest.fixture()

@@ -17,7 +17,6 @@ import time
 import httpx
 import pytest
 import websockets
-from fastapi.testclient import TestClient
 from pi_server.app import create_app
 from conftest import (
     TEAM_ADMIN_PASSWORD,
@@ -192,7 +191,11 @@ def test_login_rejects_a_wrong_password_and_sets_nothing(team_server):
     assert response.status_code == 401
     assert COOKIE_NAME not in response.cookies
     # The message must not distinguish "no such user" from "wrong password".
-    assert response.json() == {"detail": {"error": "invalid username or password"}}
+    # The body keeps ``detail.error`` and adds the stable machine-readable code, so a
+    # client can tell "wrong password" from "locked out" without parsing the message.
+    assert response.json() == {
+        "detail": {"error": "invalid username or password", "code": "UNAUTHENTICATED"}
+    }
 
 
 def test_login_then_reach_the_protected_surface(team_server):
@@ -416,7 +419,7 @@ def test_each_user_sees_only_their_own_dialog_target(team_server):
     # Exercised at the registry level: one Hub per worker is what makes the routing safe,
     # and this asserts it directly rather than depending on an extension being installed.
     config = ServerConfig(data_root=str(team_server.data_root), auth_mode="team")
-    registry = SessionRegistry(BootstrapOptions(cwd="."), config)
+    SessionRegistry(BootstrapOptions(cwd="."), config)
     ada = SessionWorker("ada", BootstrapOptions(cwd="."))
     bob = SessionWorker("bob", BootstrapOptions(cwd="."))
     assert ada.hub is not bob.hub

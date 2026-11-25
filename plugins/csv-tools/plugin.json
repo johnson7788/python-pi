@@ -5,7 +5,10 @@
   "apiVersion": "2",
   "entry": "main.py",
   "description": "探查工作区里的 CSV：行列数、类型、空值、Top 值、样例，以及简单的条件查询（= != > >= < <= contains）。",
-  "capabilities": ["tools"],
+  "capabilities": [
+    "tools",
+    "files"
+  ],
   "permissions": {
     "tools": [],
     "filesystem": "read",

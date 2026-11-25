@@ -932,7 +932,6 @@ async def test_run_agent_loop_returns_new_messages_only():
 
     stream_fn = scripted_stream_fn([create_assistant_message([TextContent(text="reply")])])
 
-    collected: list = []
 
     async def emit(event):
         emitted.append(event)

@@ -48,6 +48,45 @@ def resolve_data_root(value: str | None) -> str:
     return os.path.abspath(os.path.expanduser(raw))
 
 
+#: The permission modes ``PI_TOOL_POLICY`` accepts, and what each derives to.
+#:
+#: ``allow-all``       — what this project ships with: every call the hard-deny rules do
+#:                        not refuse runs without a dialog.
+#: ``confirm``         — every confirm-class call asks, every time.
+#: ``confirm-session`` — asks once per risk, then remembers for the session.
+TOOL_POLICIES: dict[str, tuple[bool, bool]] = {
+    "allow-all": (True, False),
+    "confirm": (False, False),
+    "confirm-session": (False, True),
+}
+
+
+def tool_policy_flags(
+    policy: str | None,
+    *,
+    explicit_auto: str | None = None,
+    explicit_grant: str | None = None,
+) -> tuple[bool, bool]:
+    """``(auto_approve, grant_after_confirm)`` for a mode, with explicit flags winning.
+
+    An unknown mode raises instead of falling back: silently running with a different
+    permission posture than the operator asked for is the one failure this switch
+    must not have.
+    """
+    # ``None`` is "not set"; the empty string is a setting, and a wrong one.
+    name = "allow-all" if policy is None else policy.strip().lower()
+    if name not in TOOL_POLICIES:
+        raise ValueError(
+            f"PI_TOOL_POLICY must be one of {', '.join(sorted(TOOL_POLICIES))}; got {policy!r}"
+        )
+    auto_approve, grant_after_confirm = TOOL_POLICIES[name]
+    if explicit_auto is not None:
+        auto_approve = explicit_auto.strip().lower() not in ("0", "false", "no", "off", "")
+    if explicit_grant is not None:
+        grant_after_confirm = explicit_grant.strip().lower() not in ("0", "false", "no", "off", "")
+    return auto_approve, grant_after_confirm
+
+
 def _bool_env(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None or raw == "":
@@ -140,11 +179,19 @@ class ServerConfig:
     #: runs in a container: the Docker daemon resolves bind mounts on the host, so the path
     #: the server knows is not the path the daemon can mount.
     host_data_root: str | None = None
+    #: The deployment's tool-permission mode, kept for display and for the two derived
+    #: flags below: ``allow-all`` | ``confirm`` | ``confirm-session``.
+    tool_policy: str = "allow-all"
     #: Auto-approve policy confirmations.  Hard-deny rules remain in force.
     auto_approve_tools: bool = True
     #: How long a confirmation dialog may stay unanswered before the call is refused.
     #: A turn that waits forever on a closed browser tab is worse than a denied command.
     confirm_timeout_seconds: float = 300.0
+    #: Remember an approved *write* for the rest of the session, so a workflow does not
+    #: ask once per file.  Off by default: it changes what the dialog means.
+    grant_after_confirm: bool = False
+    #: Write JSONL spans under ``<data_root>/traces``.  Off by default.
+    tracing: bool = False
 
     # -- derived paths ---------------------------------------------------------------
 
@@ -267,11 +314,20 @@ class ServerConfig:
     @classmethod
     def from_env(cls, **overrides: object) -> "ServerConfig":
         """Build from ``PI_*`` environment variables, with explicit values winning."""
+        raw_tool_policy = os.environ.get("PI_TOOL_POLICY")
+        auto_approve, grant_after_confirm = tool_policy_flags(
+            raw_tool_policy,
+            explicit_auto=os.environ.get("PI_AUTO_APPROVE_TOOLS"),
+            explicit_grant=os.environ.get("PI_POLICY_SESSION_GRANTS"),
+        )
         values: dict[str, object] = {
             "data_root": resolve_data_root(os.environ.get("PI_DATA_ROOT")),
             "auth_mode": (os.environ.get("PI_AUTH_MODE") or "single").strip().lower(),
             "single_workspace": os.environ.get("PI_SINGLE_WORKSPACE") or None,
-            "auto_approve_tools": _bool_env("PI_AUTO_APPROVE_TOOLS", True),
+            "tool_policy": (raw_tool_policy or "allow-all").strip().lower(),
+            "auto_approve_tools": auto_approve,
+            "grant_after_confirm": grant_after_confirm,
+            "tracing": _bool_env("PI_TRACING"),
             "cookie_secure": _bool_env("PI_COOKIE_SECURE"),
             "admin_username": os.environ.get("PI_ADMIN_USERNAME") or "admin",
             "api_key": _secret("PI_API_KEY"),

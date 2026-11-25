@@ -16,7 +16,10 @@ from pi_server.app import create_app
 from pi_server.auth import ensure_admin
 from pi_server.config import ServerConfig
 
-FIXTURE = Path("/Users/admin/git/AIOffice/backend/app/seed/sheets-sample.xlsx")
+
+#: A real workbook that is *in this repository*, so the test runs anywhere.  It used
+#: to read a sibling checkout, which made it fail (not skip) off that one machine.
+FIXTURE = Path(__file__).resolve().parents[1] / "docs" / "chart-demo" / "sales-data.xlsx"
 SIDECAR = Path(__file__).resolve().parents[1] / "office" / "xlsx-engine" / "target" / "release" / "xlsx-sidecar"
 
 

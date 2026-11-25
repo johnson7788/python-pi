@@ -26,10 +26,8 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from pathlib import Path
 
 import httpx
-import pytest
 from conftest import (
     TEAM_ADMIN_PASSWORD,
     TEAM_USER_PASSWORD,

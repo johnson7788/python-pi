@@ -31,8 +31,8 @@ from pi_ai.types import Message
 
 from .loop import run_agent_loop, run_agent_loop_continue
 from .stream_fn import get_default_stream_fn
+from .guards import TurnGuards
 from .types import (
-    AfterToolCallContext,
     AfterToolCallResult,
     AgentContext,
     AgentEvent,
@@ -40,7 +40,6 @@ from .types import (
     AgentLoopTurnUpdate,
     AgentMessage,
     AgentTool,
-    BeforeToolCallContext,
     BeforeToolCallResult,
     PrepareNextTurnContext,
     StreamFn,
@@ -130,6 +129,7 @@ class Agent:
         stream_options: StreamOptions | None = None,
         messages: list[AgentMessage] | None = None,
         thinking_level: str = "off",
+        turn_guards: TurnGuards | None = None,
     ) -> None:
         self._state = AgentState(
             messages=list(messages or []),
@@ -150,6 +150,9 @@ class Agent:
         self.prepare_next_turn = prepare_next_turn
         self.should_stop_after_turn = should_stop_after_turn
         self.stream_options = stream_options
+        #: Optional per-run stop/nudge state machine.  Owned by the caller so it
+        #: survives the multiple loop invocations one user turn can make.
+        self.turn_guards = turn_guards
 
         self.steering_queue = PendingMessageQueue(steering_mode)
         self.follow_up_queue = PendingMessageQueue(follow_up_mode)
@@ -367,6 +370,7 @@ class Agent:
             after_tool_call=self.after_tool_call,
             should_stop_after_turn=_should_stop if should_stop is not None else None,
             prepare_next_turn=self.prepare_next_turn,
+            turn_guards=self.turn_guards,
             convert_to_llm=self.convert_to_llm,
             transform_context=self.transform_context,
             get_api_key=self.get_api_key,

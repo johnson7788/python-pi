@@ -32,6 +32,7 @@ from pi_ai import (
     TextContent,
     Tool,
     ToolResultMessage,
+    UserMessage,
     validate_tool_arguments,
 )
 
@@ -261,6 +262,7 @@ async def _run_loop(
         if config.get_steering_messages
         else []
     )
+    guards = config.turn_guards
 
     while True:
         has_more_tool_calls = True
@@ -294,6 +296,13 @@ async def _run_loop(
                     current_context.messages.append(message)
                     new_messages.append(message)
                 pending = []
+
+            # Counting happens here, not after the tools: a turn that is about to
+            # make a model call is the unit the cap is meant to bound.
+            if guards is not None:
+                decision = guards.before_turn()
+                if decision is not None and decision.action == "stop":
+                    break
 
             message = await _stream_assistant_response(
                 current_context, config, signal, emit, stream_function
@@ -341,8 +350,32 @@ async def _run_loop(
                 await _emit(emit, AgentEndEvent(messages=new_messages))
                 return
 
+            if guards is not None:
+                decision = guards.after_turn(message, tool_results)
+                if decision is not None:
+                    if decision.action == "stop":
+                        break
+                    # A nudge is ordinary conversation as far as the provider is
+                    # concerned, but it is machine text, so it travels in the
+                    # runtime-event envelope.  The next iteration still drains
+                    # steering below, which is why this is not a ``continue``.
+                    nudge = UserMessage(
+                        content=[TextContent(text=decision.text)],
+                        timestamp=int(time.time() * 1000),
+                    )
+                    await _emit(emit, MessageStartEvent(message=nudge))
+                    await _emit(emit, MessageEndEvent(message=nudge))
+                    current_context.messages.append(nudge)
+                    new_messages.append(nudge)
+                    has_more_tool_calls = True
+
             if config.get_steering_messages is not None:
                 pending = list(await _maybe_await(config.get_steering_messages()) or [])
+
+        # A guard stopped the run: do not start follow-ups, the caller decides
+        # what to do with the evidence the run already produced.
+        if guards is not None and guards.stop_reason is not None:
+            break
 
         follow_up = (
             list(await _maybe_await(config.get_follow_up_messages()) or [])

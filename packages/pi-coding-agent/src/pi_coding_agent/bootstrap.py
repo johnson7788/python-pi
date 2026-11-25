@@ -328,6 +328,7 @@ async def bootstrap(
         disabled_skills=options.disabled_skills,
         include_home_skills=options.include_home_skills,
         skill_allowlist=options.app_skills,
+        app_id=options.app_id,
     )
 
     def _warn(message: str) -> None:

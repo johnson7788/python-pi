@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Sequence
+from typing import Any, Callable, Sequence
 
 from pi_agent import AgentTool, AgentToolResult
 

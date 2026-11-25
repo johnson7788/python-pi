@@ -24,7 +24,6 @@ from .types import (
     Cost,
     Message,
     Model,
-    StopReason,
     Usage,
 )
 

@@ -440,7 +440,6 @@ async def test_disposing_the_parent_cancels_running_children(tmp_path: Path):
 
 
 def tool_results_in(record: Any, tool_name: str) -> list[Any]:
-    session = record.session
     # The child session is disposed after settlement; read the transcript from its
     # manager instead.
     entries = record.session_manager.get_entries()

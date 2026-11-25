@@ -424,8 +424,11 @@ def test_find_first_kept_entry_id_never_cuts_at_a_tool_result() -> None:
     # The budget stops inside the assistant turn, so the boundary is the tool
     # call itself and its tool result stays attached.
     assert find_first_kept_entry_id(entries, 4) == "b"
-    # The tool result alone cannot be a cut point, so the whole history is kept.
-    assert find_first_kept_entry_id(entries, 1) == "a"
+    # Even a budget smaller than the trailing tool result keeps that result with
+    # its call: the boundary snaps back one turn (b) instead of orphaning "c" or
+    # refusing to compact at all.  Overshooting by a bounded amount is the
+    # deliberate trade; see ``_find_cut_index``.
+    assert find_first_kept_entry_id(entries, 1) == "b"
     # Plain messages carry no id.
     assert find_first_kept_entry_id([user, tool_call_message], 1) is None
 

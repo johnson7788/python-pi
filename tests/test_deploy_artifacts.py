@@ -275,7 +275,7 @@ def test_every_subcommand_an_operator_needs_exists():
     """These are the verbs the docs use; renaming one silently breaks the guide."""
     module = _deploy_module()
     parser = module.build_parser()
-    actions = [
+    [
         action for action in parser._actions if isinstance(action, type(parser._subparsers))
     ]
     names: set[str] = set()

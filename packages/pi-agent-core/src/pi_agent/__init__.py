@@ -12,6 +12,7 @@ deliberately **not** ported in v0.1: the core loop has no dependency on it.
 from __future__ import annotations
 
 from .agent import Agent, AgentState, PendingMessageQueue, QueueMode
+from .guards import DEFAULT_MAX_TURNS, GuardDecision, TurnGuards, runtime_event
 from .loop import agent_loop, agent_loop_continue, run_agent_loop, run_agent_loop_continue
 from .stream_fn import default_stream_fn, get_default_stream_fn
 from .types import (
@@ -49,6 +50,10 @@ from .types import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "DEFAULT_MAX_TURNS",
+    "GuardDecision",
+    "TurnGuards",
+    "runtime_event",
     "AfterToolCallContext",
     "AfterToolCallResult",
     "Agent",

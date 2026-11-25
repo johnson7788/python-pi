@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-import pytest
 from fastapi.testclient import TestClient
 from pi_coding_agent.bootstrap import BootstrapOptions
 from pi_server import schedules

@@ -58,6 +58,14 @@
 - 上游 `agentLoop` 在循环抛异常时会泄漏一个永不结束的 stream；本移植版把异常送进 stream。
 - 并行工具执行用 `asyncio.gather` 而非 `TaskGroup`（TaskGroup 会在异常时取消兄弟任务，
   而上游的 thunk 契约是各自吞掉异常）。
+- **本移植版新增单轮迭代上限与"守卫"**（上游没有）。`TurnGuards`（`pi_agent/guards.py`）在
+  `AgentLoopConfig.turn_guards` 上挂载，默认 `max_turns=20`（库的默认值是 `None`，即上游行为；
+  `AgentSession` 开启）。可观察差异：
+  - 达到上限时循环正常结束（不抛错），并在 `agent_end` 前不再发起新的一轮；
+  - 空回复 / 逐字复读会先注入**一条** `<runtime_event type="...">` 用户消息要求继续，第二次才停止；
+  - 连续 3 轮全部工具调用失败时注入一次"换策略"提示，之后再失败即停止；
+  - 守卫停止后不投递已排队的 follow-up，避免把"为什么停"藏在下一轮里。
+
 
 ---
 
@@ -74,6 +82,72 @@
 - `json_dumps` 模拟 JS 数字格式化（`0.0` → `0`，非有限值 → `null`）。
   已知残留差异：小于 `1e-4` 的值 Python 用指数形式，JS 在 `1e-6` 以下才用；对 token/成本数值无影响。
 - `is_persisted()` 语义是"是否启用持久化"，**不是**"文件是否已存在"——判断文件请查文件系统。
+
+### 风控与授权（上游没有）
+
+- 调用除了"允许/确认/拒绝"之外还带一个**风险等级**（read / probe / write / destructive），
+  用于审计行与会话授权，不改变原有判定：`DENY` 仍由路径/命令规则一票否决。
+- `PI_POLICY_SESSION_GRANTS=1` 时，用户在对话框里批准一次**写**操作后，本会话内同类写操作不再询问；
+  可撤销性差的 destructive 操作永远不会被记住，`dd of=/dev/sda` 这类写设备的目标也会被当作越界写。
+- 挂了策略的会话只把"策略允许或会询问"的工具交给模型：既不在 `allow_tools` 也不在 `confirm_tools`
+  的工具会从工具列表里消失（原来仍会出现在列表里，调用必被拒）。
+- 审计行新增 `risk` / `granted_by`（policy / session / confirm / auto）/ `granted_for_session`。
+
+### 可观测性（上游没有）
+
+- `PI_TRACING=1` 时把 span 以 JSONL 写在 `<data_root>/traces/YYYY-MM-DD.jsonl`：
+  每轮一个 `turn` span，每次模型回复一个 `llm` span（含 usage/成本），每次工具调用一个 `tool` span。
+- 工具参数只记录 key 与白名单键（path/command/pattern/url 等，截断 200 字符），其余记类型；
+  含 token/secret/password 的键记 `<redacted>`；结果只记长度与前 200 字符。
+- 没有结束的工具调用（中止/崩溃）会以 `incomplete=true` 落盘，而不是消失。
+- 默认关闭；tracing 的任何异常都不会影响会话。
+
+### token 估算自校准（上游没有）
+
+- 用相邻两次请求的 provider prompt 增量除以中间新增消息的估算，学习一个标量并夹在 [0.5, 1.5]；
+  仅用于决定何时压缩、压缩保留多少。样本阈值 256 token，单样本比值越界丢弃，含图片的样本跳过。
+- 可观察：同一会话的压缩触发点会随中文/英文比例变化，但语义不变。
+
+### 上下文压缩（相对上游 v0.1 补全）
+
+上游 TS 版有、本移植版 v0.1 曾标注为 deferral 的机制现已补上。可观察差异：
+
+- **切点预算按上限处理**：一条超出 `keepRecentTokens` 的工具结果不再被"连同后面一起留下"，
+  而是在它之前切。边界仍会吸附到合法的切点（不会把工具调用和结果拆开），必要时多留一轮。
+- **split-turn**：切点落在某一轮中间时，被丢掉的这一轮开头会被单独摘要一次
+  （第二次 LLM 调用），拼成 `## Current turn so far`；失败时降级为同一份摘要。
+- **`<read-files>` / `<modified-files>`**：从 read/write/edit 的工具调用里机械提取路径，追加到每份摘要，
+  并从上一份摘要继承（上限 50 条）。摘要模型失败时这层信息仍然存在。
+- **上一份摘要不再被"再摘要一次"**：作为 `<previous-summary>` 传给摘要模型，且从待摘要消息里排除。
+  这会改变摘要请求的 prompt 内容。
+- **摘要请求自身会 fit**：超出窗口时丢弃最旧的消息，并在 prompt 里写明"有 N 条更早消息未展示，不要猜"。
+- **摘要预算**同时受 `0.8 × reserveTokens` 与 `keepRecentTokens` 限制。
+- **腾不出空间就不写回**：压缩后回收不足 5% 时丢弃结果并记录"该消息数下压不动"，
+  直到会话继续增长才重试（避免每轮白花一次摘要调用）。
+- **溢出修复**：provider 返回上下文超限（识别 20 余种真实报错文本）时压缩一次并继续，
+  每轮只允许一次；其它错误仍走原有重试路径。
+- **降级 fallback**：摘要调用重试一次仍失败时，用有界的原始归档代替摘要（`degraded=true`
+  记录在 compaction entry 的 `details` 里），而不是放弃压缩。
+
+### 失败时的收尾回答
+
+上游在出错时留在会话里的是一条 `stop_reason="error"` 的**空** assistant 消息，已收集的工具结果被丢弃。
+本移植版在"守卫停止"（不是 error/aborted）后会再用一次 **无工具** 的模型调用，把已有证据写成最终回答：
+
+- 只有守卫停止才触发（`max_turns` / 空回复 / 复读 / 连续截断 / 工具连续失败）；
+- 请求里 `tools=[]`，不会再开第二轮工具循环；
+- 合成为空或失败时直接丢弃，不写入会话；
+- 合成消息与普通 assistant 消息一样落盘并广播，UI 看到的是一条完整回答而不是空白。
+
+### 流式恢复（WebSocket）
+
+浏览器断线/刷新后可以续上看不懂的半截回答：
+
+- 服务端给每条下行记录一个单调 `seq`，按 session 保留最近 4000 条（`pi_server/runlog.py`）；
+- `ready` 增加 `seq` 与 `lastPersistedSeq` 两个字段；
+- 客户端在 `?since=<seq>` 里报自己已应用到哪一条，服务端只补发 `max(since, lastPersistedSeq)` 之后的记录；
+- 只有"有消息已开始流出但尚未落盘"时才补发，避免把已完成的 `turn_end` / `agent_end` 重放一遍。
+- 不落盘：进程重启后的恢复仍靠会话文件 + `get_state`，不维护第二份磁盘事件流。
 
 ### 内置工具
 
@@ -197,6 +271,22 @@ Python 原生扩展协议已实现，**详细设计、事件表、合并语义�
   是**进程内**开关（上游同样不落盘），本移植版通过 `AgentSession` 上的运行时开关实现。
 
 ---
+
+## pi-server
+
+### 插件清单一致性（对旧清单是破坏性变化）
+
+- `permissions` 里声明的 `network` / `filesystem` / `process` / `secrets` 必须同时出现在 `capabilities`，
+  否则插件在加载时被跳过（此前两份声明可以互相矛盾，admin 面板只看到 `tools`）。
+- 七个内置插件的清单已按真实权限补齐；`permissions.network` 的主机白名单通过
+  `GET /api/plugins` 的 `networkHosts` 暴露，供审批时查看。
+- 进程内插件仍然以服务器全权运行：这是声明与审批层面的诚实化，不是隔离。
+
+### 出网地址校验
+
+- 沙箱 provisioner 的 URL 在启动时校验 scheme/凭据/字面 IP，第一次拨号前解析并校验**全部**解析结果；
+  默认允许私网、公网需 `PI_SANDBOX_ALLOW_PUBLIC_URL=1`，链路本地（云元数据）永不放过。
+- 注入自有 httpx client 的调用方（测试、嵌入方）不在此列：传输层归调用方所有。
 
 ## 影响评估
 

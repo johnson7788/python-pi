@@ -18,21 +18,18 @@ Three rules carry the whole design:
 from __future__ import annotations
 
 import traceback
-from typing import Any, Awaitable, Callable, Sequence
+from typing import Any, Callable, Sequence
 
 from pi_agent import AgentTool
 
 from .api import ExtensionAPI, ExtensionContext, ExtensionHost
 from .types import (
-    AgentEndEvent,
-    AgentStartEvent,
     BeforeAgentStartEvent,
     BeforeAgentStartResult,
     ExtensionError,
     InputEvent,
     InputEventResult,
     MessageEndEvent,
-    MessageEndResult,
     ProviderRegistration,
     RegisteredCommand,
     RegisteredFlag,

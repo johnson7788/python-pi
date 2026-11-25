@@ -1,0 +1,13 @@
+{"type":"session","version":3,"id":"0193f0c1-7c4a-7c9a-9a3e-1234567890ab","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/tmp/pi-golden"}
+{"type":"message","id":"a1b2c3d4","parentId":null,"timestamp":"2024-12-03T14:00:01.000Z","message":{"role":"user","content":"Hello","timestamp":1733234401000}}
+{"type":"message","id":"b2c3d4e5","parentId":"a1b2c3d4","timestamp":"2024-12-03T14:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Hi!"}],"api":"anthropic-messages","provider":"anthropic","model":"claude-sonnet-4-5","usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":15,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1733234402000}}
+{"type":"message","id":"c3d4e5f6","parentId":"b2c3d4e5","timestamp":"2024-12-03T14:00:03.000Z","message":{"role":"toolResult","toolCallId":"call_123","toolName":"bash","content":[{"type":"text","text":"output"}],"isError":false,"timestamp":1733234403000}}
+{"type":"custom","customType":"my-extension","data":{"count":42},"id":"d4e5f6a7","parentId":"c3d4e5f6","timestamp":"2024-12-03T14:00:04.000Z"}
+{"type":"model_change","id":"f6a7b8c9","parentId":"d4e5f6a7","timestamp":"2024-12-03T14:00:05.000Z","provider":"openai","modelId":"gpt-4o"}
+{"type":"thinking_level_change","id":"a7b8c9d0","parentId":"f6a7b8c9","timestamp":"2024-12-03T14:00:06.000Z","thinkingLevel":"high"}
+{"type":"compaction","id":"b8c9d0e1","parentId":"a7b8c9d0","timestamp":"2024-12-03T14:00:07.000Z","summary":"Earlier turns summarised","firstKeptEntryId":"e1f2a3b4","tokensBefore":50000,"usage":{"input":1,"output":2,"cacheRead":3,"cacheWrite":4,"totalTokens":10,"cost":{"input":0.1,"output":0.2,"cacheRead":0.3,"cacheWrite":0.4,"total":1}}}
+{"type":"custom_message","customType":"inline","content":"Injected context...","display":true,"id":"c9d0e1f2","parentId":"b8c9d0e1","timestamp":"2024-12-03T14:00:08.000Z"}
+{"type":"branch_summary","id":"d0e1f2a3","parentId":"c9d0e1f2","timestamp":"2024-12-03T14:00:09.000Z","fromId":"c3d4e5f6","summary":"Branch explored approach A"}
+{"type":"label","id":"e1f2a3b5","parentId":"d0e1f2a3","timestamp":"2024-12-03T14:00:10.000Z","targetId":"a1b2c3d4","label":"checkpoint-1"}
+{"type":"session_info","id":"f2a3b4c5","parentId":"e1f2a3b5","timestamp":"2024-12-03T14:00:11.000Z","name":"Refactor auth module"}
+{"type":"message","id":"e1f2a3b4","parentId":"f2a3b4c5","timestamp":"2024-12-03T14:00:12.000Z","message":{"role":"user","content":"continue","timestamp":1733234412000}}

@@ -5,13 +5,22 @@
   "apiVersion": "2",
   "entry": "main.py",
   "description": "检索 PubMed 并读取摘要（NCBI E-utilities）。返回 PMID、期刊、年份、作者与 DOI，摘要按小节输出。",
-  "capabilities": ["tools"],
+  "capabilities": [
+    "tools",
+    "network",
+    "secrets"
+  ],
   "permissions": {
     "tools": [],
     "filesystem": "none",
-    "network": ["eutils.ncbi.nlm.nih.gov"],
+    "network": [
+      "eutils.ncbi.nlm.nih.gov"
+    ],
     "process": false,
-    "secrets": ["NCBI_API_KEY", "NCBI_EMAIL"]
+    "secrets": [
+      "NCBI_API_KEY",
+      "NCBI_EMAIL"
+    ]
   },
   "config": {
     "type": "object",
@@ -33,7 +42,9 @@
         "description": "可选的 NCBI API key，把限流从 3 次/秒提高到 10 次/秒"
       }
     },
-    "required": ["baseUrl"]
+    "required": [
+      "baseUrl"
+    ]
   },
   "limits": {
     "timeoutSeconds": 30,

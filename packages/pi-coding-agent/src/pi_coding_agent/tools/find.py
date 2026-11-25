@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 import posixpath
-from pathlib import PurePath
 from typing import Any
 
 from pi_agent import AgentTool, AgentToolResult, ToolUpdateCallback

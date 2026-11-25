@@ -11,6 +11,9 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
     "noEmit": true,
+    // The reducer is loaded directly by node --experimental-strip-types in
+    // scripts/verify-stream-reducer.mjs, which needs real file extensions.
+    "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

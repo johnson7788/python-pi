@@ -7,7 +7,6 @@ import importlib.util
 import json
 import sys
 import threading
-import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 

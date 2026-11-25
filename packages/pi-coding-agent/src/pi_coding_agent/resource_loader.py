@@ -334,6 +334,7 @@ class ResourceLoader:
         disabled_skills: Iterable[str] = (),
         include_home_skills: bool = True,
         skill_allowlist: Iterable[str] | None = None,
+        app_id: str = "",
     ) -> None:
         self._cwd = os.path.abspath(os.path.expanduser(cwd))
         self._agent_dir = (
@@ -357,6 +358,8 @@ class ResourceLoader:
         self._skill_allowlist = (
             None if skill_allowlist is None else {str(name) for name in skill_allowlist}
         )
+        #: 当前应用 id：带 ``apps:`` 限定的技能只在这个应用下可见。
+        self._app_id = str(app_id or "")
         self._config_dir_name = find_config_dir(self._cwd)
         self._snapshot = _LoadedResources()
         self.load()
@@ -398,6 +401,7 @@ class ResourceLoader:
             for skill in self._snapshot.skills
             if skill.name not in self._disabled_skills
             and (self._skill_allowlist is None or skill.name in self._skill_allowlist)
+            and (not skill.apps or not self._app_id or self._app_id in skill.apps)
         ]
 
     def set_disabled_skills(self, names: Iterable[str]) -> None:

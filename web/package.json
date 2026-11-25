@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Web UI for saas-workbuddy (Vite + React 18 + TypeScript).",
+  "description": "Web UI for the python-pi coding agent (Vite + React 18 + TypeScript).",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -12,12 +12,13 @@
     "mock": "node mock-server.mjs",
     "verify:mock": "node scripts/verify-mock.mjs",
     "verify:dom": "node scripts/verify-dom.mjs",
-    "verify": "npm run typecheck && npm run verify:dom && npm run verify:question && npm run verify:dom:team && npm run verify:transcript && npm run verify:session-activity",
+    "verify": "npm run typecheck && npm run verify:dom && npm run verify:reducer && npm run verify:question && npm run verify:dom:team && npm run verify:transcript && npm run verify:session-activity",
     "verify:transcript": "node scripts/verify-transcript.mjs",
     "verify:dom:team": "node scripts/verify-dom.mjs --team",
     "verify:citations": "node --experimental-strip-types scripts/verify-citations.mjs",
     "verify:question": "node scripts/verify-question.mjs",
-    "verify:session-activity": "node --experimental-strip-types scripts/verify-session-activity.mjs"
+    "verify:session-activity": "node --experimental-strip-types scripts/verify-session-activity.mjs",
+    "verify:reducer": "node --experimental-strip-types scripts/verify-stream-reducer.mjs"
   },
   "dependencies": {
     "dompurify": "^3.2.4",

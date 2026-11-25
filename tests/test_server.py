@@ -202,7 +202,10 @@ def test_websocket_turn_with_a_real_tool(ui_server):
     updates = [r for r in records if r.get("type") == "message_update"]
     assert updates
     for update in updates:
-        assert set(update) == {"type", "usage", "assistantMessageEvent"}
+        # ``seq`` is the resume offset every WebSocket record now carries; the rest
+        # of the shape is the RPC delta-only contract.
+        assert set(update) == {"type", "usage", "assistantMessageEvent", "seq"}
+        assert isinstance(update["seq"], int) and update["seq"] > 0
         assert "partial" not in update["assistantMessageEvent"]
 
     assert any(r.get("type") == "tool_execution_start" and r.get("toolName") == "write" for r in records)
@@ -243,7 +246,7 @@ def test_websocket_session_replacement_keeps_streaming(ui_server):
             first_file = json.loads(await ws.recv())["data"]["sessionFile"]
 
             await ws.send(json.dumps({"id": "n1", "type": "new_session"}))
-            replaced = (await _recv_until(ws, lambda r: r.get("id") == "n1"))[-1]
+            (await _recv_until(ws, lambda r: r.get("id") == "n1"))[-1]
 
             await ws.send(json.dumps({"id": "s2", "type": "get_state"}))
             second_state = (await _recv_until(ws, lambda r: r.get("id") == "s2"))[-1]["data"]

@@ -20,7 +20,6 @@ from pi_coding_agent.extensions import (
     ExtensionAPI,
     ExtensionRunner,
     ToolCallEvent,
-    ToolCallEventResult,
 )
 from pi_coding_agent.extensions.loader import (
     ENTRY_POINT_GROUP,

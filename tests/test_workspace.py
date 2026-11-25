@@ -16,7 +16,6 @@ import pytest
 from conftest import (
     TEAM_ADMIN_PASSWORD,
     TEAM_USER_PASSWORD,
-    cookie_header,
     login,
     team_server,  # noqa: F401 - re-exported so pytest can see the fixture
 )
@@ -204,7 +203,7 @@ def test_a_user_can_upload_edit_and_download_a_file(team_server):
     try:
         member = _member(team_server, admin, "ada")
         try:
-            uid = member.get("/api/auth/me").json()["user"]["uid"]
+            member.get("/api/auth/me").json()["user"]["uid"]
 
             # Raw bytes: this is the upload path, with no multipart parser involved.
             uploaded = member.put(
@@ -307,7 +306,7 @@ def test_a_symlink_planted_by_the_agent_cannot_escape(team_server):
     try:
         member = _member(team_server, admin, "ada")
         try:
-            uid = member.get("/api/auth/me").json()["user"]["uid"]
+            member.get("/api/auth/me").json()["user"]["uid"]
             member.get("/api/workspace/tree")  # materialises the workspace directory
             workspace = team_server.data_root / "workspaces" / "ada"
             outside = team_server.data_root / "template"

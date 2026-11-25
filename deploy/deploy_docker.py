@@ -698,7 +698,7 @@ def command_up(args: argparse.Namespace) -> int:
     build_sandbox_image(docker, config, force=args.rebuild_sandbox)
 
     compose_up(docker, config)
-    health = wait_for_health(config)
+    wait_for_health(config)
 
     Log.step("Verification")
     credentials = first_boot_credentials(docker, config)

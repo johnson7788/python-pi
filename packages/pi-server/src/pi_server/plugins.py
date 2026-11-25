@@ -21,6 +21,51 @@ _SUBMISSION_ID = re.compile(r"^[a-f0-9]{12}$")
 #: Written next to a submitted package; the package itself lives in ``plugin/``.
 SUBMISSION_META = "submission.json"
 
+#: Capability names a manifest may declare.  Unknown names are rejected rather than
+#: ignored: a typo ("networking") would otherwise silently grant nothing while the
+#: author believes the plugin asked for the right thing.
+KNOWN_CAPABILITIES = frozenset({"tools", "network", "files", "process", "secrets"})
+
+#: Permissions whose presence implies a capability.  ``permissions`` is the detailed
+#: form and ``capabilities`` the summary; a manifest whose two halves disagree is a
+#: manifest nobody can reason about, so it is refused.
+_PERMISSION_CAPABILITIES = {
+    "network": "network",
+    "filesystem": "files",
+    "process": "process",
+    "secrets": "secrets",
+}
+
+
+def _declared_permissions(data: dict[str, Any]) -> dict[str, Any]:
+    raw = data.get("permissions")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _permission_capabilities(permissions: dict[str, Any]) -> set[str]:
+    """Capabilities that ``permissions`` actually exercises."""
+    required: set[str] = set()
+    network = permissions.get("network")
+    if network is True or (isinstance(network, list) and network):
+        required.add("network")
+    filesystem = str(permissions.get("filesystem") or "none").lower()
+    if filesystem in ("read", "write"):
+        required.add("files")
+    if permissions.get("process") is True:
+        required.add("process")
+    secrets = permissions.get("secrets")
+    if isinstance(secrets, list) and secrets:
+        required.add("secrets")
+    return required
+
+
+def _network_hosts(permissions: dict[str, Any]) -> tuple[str, ...]:
+    """Hosts the manifest says it talks to (``true`` means "anywhere")."""
+    network = permissions.get("network")
+    if isinstance(network, list):
+        return tuple(str(host).strip() for host in network if str(host).strip())
+    return ()
+
 
 @dataclass(frozen=True)
 class PluginInfo:
@@ -31,6 +76,8 @@ class PluginInfo:
     entry: str
     capabilities: tuple[str, ...]
     path: str
+    #: Declared host allowlist from ``permissions.network`` (empty = none declared).
+    network_hosts: tuple[str, ...] = ()
 
     @property
     def entry_path(self) -> str:
@@ -43,6 +90,10 @@ class PluginInfo:
             "version": self.version,
             "description": self.description,
             "capabilities": list(self.capabilities),
+            # Shown to an administrator rather than enforced: an in-process plugin
+            # can reach anything the server can.  Publishing the claim at least makes
+            # approval an informed decision.
+            "networkHosts": list(self.network_hosts),
         }
 
 
@@ -61,13 +112,29 @@ def _load_manifest(path: str) -> PluginInfo | None:
         return None
     if not entry or entry.startswith(("/", "..")) or ".." in entry.split("/"):
         return None
-    if not os.path.isfile(os.path.join(path, entry)):
+    entry_file = os.path.join(path, entry)
+    if not os.path.isfile(entry_file):
+        return None
+    # A manifest is supplied by whoever ships the plugin, so a *symlinked* entry is
+    # a way to run code from outside the plugin directory while the path looks
+    # local.  Compare real paths: the entry must resolve inside the plugin root.
+    root = os.path.realpath(path)
+    resolved_entry = os.path.realpath(entry_file)
+    if os.path.commonpath([root, resolved_entry]) != root:
         return None
     version = str(data.get("version") or "0.0.0").strip()
     if not _VERSION.match(version):
         return None
     capabilities = data.get("capabilities")
     caps = tuple(str(item) for item in capabilities) if isinstance(capabilities, list) else ()
+    if any(cap not in KNOWN_CAPABILITIES for cap in caps):
+        return None
+    permissions = _declared_permissions(data)
+    # The two halves of the manifest must agree.  Without this, a plugin can ship
+    # ``permissions.network`` while advertising only ``tools``, and the approval UI
+    # (which reads capabilities) under-reports what it does.
+    if not _permission_capabilities(permissions).issubset(caps):
+        return None
     return PluginInfo(
         id=plugin_id,
         name=str(data.get("name") or plugin_id),
@@ -76,6 +143,7 @@ def _load_manifest(path: str) -> PluginInfo | None:
         entry=entry,
         capabilities=caps,
         path=os.path.abspath(path),
+        network_hosts=_network_hosts(permissions),
     )
 
 

@@ -31,6 +31,7 @@ from typing import Any, Callable
 
 import httpx
 
+from ..net_guard import OutboundURLRejected, local_only_policy, validate_outbound_url
 from .types import ExecResult, SandboxScope
 
 #: Substrings that mean "the sandbox no longer exists" in a provisioner/docker error.
@@ -71,6 +72,29 @@ class ProvisionerBackend:
     ) -> None:
         self.scope = scope
         self.url = (url or "").rstrip("/")
+        # The URL is operator configuration, and a bad one sends the shared token to
+        # whatever it points at.  Private networks are the normal deployment, so they
+        # are allowed by default and *public* addresses are the opt-in
+        # (``PI_SANDBOX_ALLOW_PUBLIC_URL=1``).  Link-local (cloud metadata) is never
+        # allowed.  Validation raises, so a misconfigured deployment fails at startup
+        # instead of at the first command.
+        #
+        # Only when *we* own the transport: an injected client is the caller's
+        # responsibility (tests stub one, and an embedding app may have its own
+        # base URL and dial policy).
+        # Startup checks only what DNS cannot change (scheme, credentials, port, a
+        # literal IP); the name is resolved once, at the first dial.
+        self._validated = False
+        if self.url and client is None:
+            allow_public = os.environ.get("PI_SANDBOX_ALLOW_PUBLIC_URL") == "1"
+            try:
+                validate_outbound_url(
+                    self.url, local_only_policy(allow_public=allow_public), resolve=False
+                )
+            except OutboundURLRejected as error:
+                raise ProvisionerError(
+                    f"PI_SANDBOX_PROVISIONER_URL is not a permitted destination: {error}"
+                ) from error
         self.token = token or ""
         self.image = image
         self.network = network
@@ -84,9 +108,23 @@ class ProvisionerBackend:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
+    def _validate_before_dial(self) -> None:
+        """Resolve and check the provisioner host once, before the first request."""
+        if self._validated or self._client is not None or not self.url:
+            return
+        allow_public = os.environ.get("PI_SANDBOX_ALLOW_PUBLIC_URL") == "1"
+        try:
+            validate_outbound_url(self.url, local_only_policy(allow_public=allow_public))
+        except OutboundURLRejected as error:
+            raise ProvisionerError(
+                f"PI_SANDBOX_PROVISIONER_URL is not a permitted destination: {error}"
+            ) from error
+        self._validated = True
+
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         if not self.url:
             raise ProvisionerError("PI_SANDBOX_PROVISIONER_URL is not set")
+        self._validate_before_dial()
         if self._client is not None:
             response = await self._client.request(
                 method, path, headers=self._headers(), **kwargs

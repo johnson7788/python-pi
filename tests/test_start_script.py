@@ -19,7 +19,6 @@ import time
 from pathlib import Path
 
 import httpx
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 START_SH = REPO_ROOT / "start.sh"
@@ -44,7 +43,7 @@ def test_missing_key_is_reported_before_starting(tmp_path):
     Runs from a copy of the repo root whose `.env` is hidden, so the script's own
     defaults cannot mask the check.
     """
-    port = _free_port()
+    _free_port()
     env = {k: v for k, v in os.environ.items() if k not in ("PI_API_KEY", "MODEL", "PORT")}
     env["PI_AGENT_DIR"] = str(tmp_path)  # a directory with no credentials
 
