@@ -347,6 +347,10 @@
 .conv.is-active { background: var(--primary-soft); color: var(--t1); }
 .conv.is-active .conv-title { font-weight: 500; }
 .conv .dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--primary); }
+/* 会话状态位：运行中显示转圈，后台跑完且未点开时显示绿点。 */
+.conv-status { width: 12px; flex: none; display: grid; place-items: center; }
+.conv-status .spinner { width: 11px; height: 11px; border-width: 1.5px; }
+.conv-done { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
 .conv-glyph { width: 14px; flex: none; display: grid; place-items: center; color: var(--t3); }
 .conv.is-active .conv-glyph { color: var(--primary); }
 .conv-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

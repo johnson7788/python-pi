@@ -26,6 +26,14 @@ import type {
 } from './protocol'
 import { asRecord, isAssistantMessage, isTextBlock, isToolCallBlock } from './protocol'
 import { resolveApiBase, resolveWsUrl } from './endpoints'
+import {
+  markSessionRunning,
+  markSessionSettled,
+  markSessionViewed,
+  reconcileSessionActivity,
+  syncSessionActivity,
+  type SessionActivityMap,
+} from './sessionActivity'
 
 /* -------------------------------------------------------------------------- */
 /* Public view-model types                                                     */
@@ -93,6 +101,8 @@ interface AgentStore {
   agentRunning: boolean
   state: AgentState | null
   sessions: SessionInfo[]
+  /** Per-session running / "finished while you were elsewhere" markers. */
+  sessionActivity: SessionActivityMap
   sessionsError: string | null
   models: ModelInfo[]
   thinkingLevels: string[]
@@ -124,6 +134,7 @@ const INITIAL_STORE: AgentStore = {
   agentRunning: false,
   state: null,
   sessions: [],
+  sessionActivity: {},
   sessionsError: null,
   models: [],
   thinkingLevels: [],
@@ -152,6 +163,9 @@ type Action =
   | { type: 'server_event'; event: ServerEvent }
   | { type: 'sessions'; sessions: SessionInfo[] }
   | { type: 'sessions_error'; error: string }
+  | { type: 'session_running'; path: string }
+  | { type: 'session_settled'; path: string }
+  | { type: 'session_viewed'; path: string }
   | { type: 'optimistic_user'; key: string; text: string; images?: ImageAttachment[] }
   | { type: 'clear_editor_text' }
   | { type: 'dismiss_toast'; id: string }
@@ -448,8 +462,11 @@ function reduceServerEvent(state: AgentStore, event: ServerEvent): AgentStore {
     case 'response':
       return reduceResponse(state, event as Extract<ServerEvent, { type: 'response' }>)
 
-    case 'agent_start':
-      return { ...state, agentRunning: true }
+    case 'agent_start': {
+      const path = state.state?.sessionFile
+      const next = { ...state, agentRunning: true }
+      return path ? { ...next, sessionActivity: markSessionRunning(next.sessionActivity, path) } : next
+    }
 
     case 'turn_start':
       return { ...state, agentRunning: true }
@@ -606,7 +623,14 @@ function reduceServerEvent(state: AgentStore, event: ServerEvent): AgentStore {
       for (const [id, execution] of Object.entries(state.toolExecutions)) {
         tools[id] = execution.status === 'running' ? { ...execution, status: 'done' } : execution
       }
-      return { ...state, agentRunning: false, streamingKey: null, toolExecutions: tools }
+      const path = state.state?.sessionFile
+      const next = { ...state, agentRunning: false, streamingKey: null, toolExecutions: tools }
+      return path
+        ? {
+            ...next,
+            sessionActivity: markSessionSettled(next.sessionActivity, path, path),
+          }
+        : next
     }
 
     case 'tool_execution_start': {
@@ -743,7 +767,21 @@ function reduceResponse(
     case 'get_state': {
       const data = response.data as AgentState
       const questions = data.pendingQuestions ?? []
-      return syncQuestions({ ...state, state: data }, questions)
+      // `isStreaming` is authoritative for the conversation this tab is attached to.
+      // It also keeps a stale global "running" flag from a conversation we switched
+      // away from making every later switch look like a run that just completed.
+      const sessionActivity = data.sessionFile
+        ? syncSessionActivity(state.sessionActivity, data.sessionFile, data.isStreaming === true)
+        : state.sessionActivity
+      return syncQuestions(
+        {
+          ...state,
+          state: data,
+          agentRunning: data.isStreaming === true,
+          sessionActivity,
+        },
+        questions,
+      )
     }
     case 'get_messages': {
       const messages = Array.isArray(data.messages) ? (data.messages as Message[]) : []
@@ -860,9 +898,34 @@ function reducer(state: AgentStore, action: Action): AgentStore {
     case 'server_event':
       return reduceServerEvent(state, action.event)
     case 'sessions':
-      return { ...state, sessions: action.sessions, sessionsError: null }
+      return {
+        ...state,
+        sessions: action.sessions,
+        sessionsError: null,
+        sessionActivity: reconcileSessionActivity(
+          state.sessionActivity,
+          action.sessions,
+          state.state?.sessionFile,
+        ),
+      }
     case 'sessions_error':
       return { ...state, sessionsError: action.error }
+    case 'session_running':
+      return {
+        ...state,
+        sessionActivity: markSessionRunning(state.sessionActivity, action.path),
+      }
+    case 'session_settled':
+      return {
+        ...state,
+        sessionActivity: markSessionSettled(
+          state.sessionActivity,
+          action.path,
+          state.state?.sessionFile,
+        ),
+      }
+    case 'session_viewed':
+      return { ...state, sessionActivity: markSessionViewed(state.sessionActivity, action.path) }
     case 'optimistic_user': {
       const seq = state.seq + 1
       const images = action.images ?? []
@@ -909,12 +972,15 @@ function reducer(state: AgentStore, action: Action): AgentStore {
       return pushError(state, action.source, action.message)
     case 'workspace_changed':
       // A different workspace is a different agent; keep the transport status but
-      // drop everything that belonged to the old one.
+      // drop everything that belonged to the old one. Activity markers are keyed by
+      // session path, which is unique across workspaces, so they survive: switching
+      // workspace must not silently clear a green completion dot.
       return {
         ...INITIAL_STORE,
         connection: state.connection,
         hasConnected: state.hasConnected,
         serverVersion: state.serverVersion,
+        sessionActivity: state.sessionActivity,
       }
     case 'reset_session':
       return {
@@ -926,6 +992,9 @@ function reducer(state: AgentStore, action: Action): AgentStore {
         questions: [],
         activeQuestionId: null,
         stats: null,
+        // The new conversation is a different one; the old run's flag must not leak
+        // into it. `get_state` re-asserts streaming if the adopted session is live.
+        agentRunning: false,
       }
     case 'optimistic_model':
       return { ...state, state: { ...(state.state ?? {}), model: action.model } }
@@ -966,6 +1035,8 @@ export interface AgentApi {
   isCompacting: boolean
   state: AgentState | null
   sessions: SessionInfo[]
+  /** Running / unread-completion markers, keyed by session path. */
+  sessionActivity: SessionActivityMap
   sessionsError: string | null
   models: ModelInfo[]
   thinkingLevels: string[]
@@ -1139,6 +1210,17 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
       }
       dispatchRef.current({ type: 'server_event', event: parsed as ServerEvent })
 
+      // A conversation left mid-turn keeps running on the server after the socket
+      // has stopped forwarding its events. The worker announces that run's end on
+      // this socket, which is the promptest way to raise the sidebar's green dot.
+      if (record.type === 'session_activity' && typeof record.sessionFile === 'string') {
+        dispatchRef.current({ type: 'session_settled', path: record.sessionFile })
+      }
+
+      // The turn is over locally: refresh the list so the row's spinner clears
+      // without waiting for the next poll.
+      if (record.type === 'agent_end') void loadSessions()
+
       // Branch points are the session entry ids behind the messages we render,
       // so they move whenever the transcript does. Refreshing here keeps the
       // "branch from this answer" action available without polling.
@@ -1186,15 +1268,21 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
   }, [connect, enabled, workspace, appId, modeId])
 
   // Sessions and health are cheap; polling them keeps the sidebar honest when a
-  // session is created by another client.
+  // session is created by another client. While something is streaming, poll
+  // faster: the sidebar has to notice the moment a background run ends, and a
+  // 15-second lag would make the green completion dot feel broken. The local
+  // activity map counts too, so a run that just started is not discovered late.
+  const anySessionRunning =
+    store.sessions.some((session) => session.running === true) ||
+    Object.values(store.sessionActivity).some((activity) => activity.running)
   useEffect(() => {
     if (!enabled) return
     void loadSessions()
     const timer = window.setInterval(() => {
       void loadSessions()
-    }, 15_000)
+    }, anySessionRunning ? 4_000 : 15_000)
     return () => window.clearInterval(timer)
-  }, [loadSessions, enabled])
+  }, [anySessionRunning, loadSessions, enabled])
 
   // Stable across renders: the Composer depends on it in an effect, and a new
   // identity on every store update would re-run the injection logic.
@@ -1228,6 +1316,7 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
       isCompacting: Boolean(store.state?.isCompacting),
       state: store.state,
       sessions: store.sessions,
+      sessionActivity: store.sessionActivity,
       sessionsError: store.sessionsError,
       models: store.models,
       thinkingLevels: store.thinkingLevels,
@@ -1256,7 +1345,24 @@ export function useAgent(options: UseAgentOptions = {}): AgentApi {
         window.setTimeout(() => void loadSessions(), 400)
       },
       switchSession: (sessionPath: string) => {
+        // Leaving a running conversation retires it, it does not stop it. Show its
+        // spinner right away instead of waiting for the next list poll to say so.
+        //
+        // Only *this* conversation's own activity counts: `agentRunning` describes
+        // whichever run the tab is attached to, and after switching away from a
+        // long-running conversation it used to stay true. Using it here marked old,
+        // already-finished rows as running, and the next poll turned them into
+        // bogus green completion dots.
+        const leaving = store.state?.sessionFile
+        const leavingRunning = leaving ? store.sessionActivity[leaving]?.running === true : false
+        if (leaving && leaving !== sessionPath && leavingRunning) {
+          dispatchRef.current({ type: 'session_running', path: leaving })
+          // Let the server confirm: if that turn settled in the same instant there is
+          // no background run, and the confirmation (or its absence) becomes the dot.
+          window.setTimeout(() => void loadSessions(), 600)
+        }
         dispatchRef.current({ type: 'reset_session' })
+        dispatchRef.current({ type: 'session_viewed', path: sessionPath })
         send({ type: 'switch_session', sessionPath })
         // The server swaps its session object; state and messages must be
         // re-read afterwards, and the two sends are ordered on one socket.

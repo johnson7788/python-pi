@@ -195,6 +195,10 @@ const MODELS = [
 
 const THINKING_LEVELS = ['off', 'low', 'medium', 'high']
 
+//: Session files with a scripted turn in flight; `/api/sessions` reports them as
+//: `running`, which is what draws the sidebar's spinner.
+const MOCK_RUNNING = new Set()
+
 const SESSIONS = [
   {
     path: SESSION_FILE,
@@ -363,7 +367,12 @@ async function replay(socket, session) {
   if (session.replaying) return
   session.replaying = true
   session.aborted = false
+  session.turnEnded = false
   session.state.isStreaming = true
+  // The path is captured here: switching sessions mid-turn changes `session.state`,
+  // and the file this run is writing to must still be cleared afterwards.
+  const runningPath = session.state.sessionFile
+  if (runningPath) MOCK_RUNNING.add(runningPath)
 
   const emit = (payload) => send(socket, payload)
   const step = async (ms = 45) => {
@@ -538,10 +547,19 @@ async function replay(socket, session) {
       toolResults: [toolResult],
     })
     emit({ type: 'agent_end', messages: session.messages, willRetry: false })
+    session.turnEnded = true
   } finally {
+    // A cancelled run ends where it is. The real agent emits the closing events for
+    // an aborted message, so the sidebar must stop spinning here too — otherwise
+    // local development shows a permanently "running" session after Stop.
+    if (session.aborted && !session.turnEnded) {
+      emit({ type: 'turn_end', message: null, toolResults: [] })
+      emit({ type: 'agent_end', messages: session.messages, willRetry: false })
+    }
     session.replaying = false
     session.state.isStreaming = false
     session.state.messageCount = session.messages.length
+    if (runningPath) MOCK_RUNNING.delete(runningPath)
   }
 }
 
@@ -679,6 +697,10 @@ async function handleCommand(socket, session, command) {
       session.state.sessionFile = target.path
       session.state.sessionName = target.name
       session.state.messageCount = 0
+      // The real runtime retires a run it leaves behind, so the conversation now on
+      // screen is *not* the streaming one. Reporting the old flag here would make
+      // the sidebar believe the newly opened session is running.
+      session.state.isStreaming = false
       send(socket, ok(id, type, { cancelled: false }))
       return
     }
@@ -742,7 +764,7 @@ const server = createServer((request, response) => {
       json({ models: MODELS })
       return
     case '/api/sessions':
-      json({ sessions: SESSIONS })
+      json({ sessions: SESSIONS.map((item) => ({ ...item, running: MOCK_RUNNING.has(item.path) })) })
       return
     case '/api/workspaces':
       if (request.method === 'GET') {

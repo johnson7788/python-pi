@@ -50,6 +50,9 @@ class FakeOpenAIHandler(BaseHTTPRequestHandler):
     #: be driven end to end instead of only through the extension's own unit tests.
     tool = "write"
     bash_command = "git push"
+    #: Seconds to stall before answering, so a test can observe a turn in flight. Kept
+    #: at zero everywhere else: the suite should not pay for a sleep it does not need.
+    delay = 0.0
 
     def log_message(self, *args) -> None:  # keep test output clean
         pass
@@ -60,6 +63,8 @@ class FakeOpenAIHandler(BaseHTTPRequestHandler):
         type(self).bodies.append(body)
 
         type(self).calls += 1
+        if type(self).delay:
+            time.sleep(type(self).delay)
         payload = b""
         if type(self).calls == 1:
             if type(self).tool == "bash":
@@ -152,6 +157,7 @@ def fake_openai():
     FakeOpenAIHandler.bodies = []
     FakeOpenAIHandler.tool = "write"
     FakeOpenAIHandler.bash_command = "git push"
+    FakeOpenAIHandler.delay = 0.0
     server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenAIHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

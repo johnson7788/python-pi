@@ -941,7 +941,22 @@ class OpenAiCompletionsProvider:
             headers = _build_headers(model, options)
             url = _request_url(model, body, compat)
 
-            async with client.stream("POST", url, json=body, headers=headers) as response:
+            # Waiting for response headers is part of the wait a user can cancel.
+            # `async with client.stream(...)` awaits them with no way out, so a gateway
+            # that takes seconds to start answering made "stop" look frozen until it
+            # did. Race the send against the signal, then read the body as before.
+            request = client.build_request("POST", url, json=body, headers=headers)
+            send = asyncio.ensure_future(client.send(request, stream=True))
+            while True:
+                done, _ = await asyncio.wait({send}, timeout=_STREAM_POLL_SECONDS)
+                if done:
+                    break
+                if signal is not None and signal.aborted:
+                    send.cancel()
+                    raise ProviderError("Request was aborted", provider=model.provider)
+            response = await send
+
+            try:
                 if response.status_code >= 400:
                     detail = await _read_error_body(response)
                     raise ProviderError(
@@ -995,6 +1010,8 @@ class OpenAiCompletionsProvider:
                         break
                     handle_payloads(decoder.feed(text))
                 handle_payloads(decoder.flush())
+            finally:
+                await response.aclose()
 
             self._finish_blocks(stream, output, state)
 

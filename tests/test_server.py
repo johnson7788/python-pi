@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 import pytest
 import websockets
-from conftest import write_agent_config
+from conftest import FakeOpenAIHandler, write_agent_config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -276,3 +276,126 @@ def test_state_endpoint_reflects_the_shared_session(ui_server):
     # user + assistant + toolResult + assistant
     assert state["messageCount"] == 4
     assert state["isStreaming"] is False
+
+    # The sidebar draws its spinner from this flag, so every row must carry it even
+    # when nothing is running.
+    listing = httpx.get(f"{server.base_url}/api/sessions?scope=all", timeout=10).json()["sessions"]
+    assert listing, "the session that just ran is listed"
+    assert all(session["running"] is False for session in listing)
+
+
+def test_sessions_endpoint_reports_a_turn_in_flight(ui_server):
+    """The sidebar's spinner is driven by `running` on the list endpoint, and the
+    flag has to move while a turn is actually streaming — not only afterwards.
+
+    The first turn is a warm-up: a session file only appears after the first
+    assistant message (empty sessions deliberately leave no file to list), so the
+    observed turn is the session's second.
+    """
+    server, _, _ = ui_server
+
+    async def scenario() -> tuple[list[dict], list[dict]]:
+        async with websockets.connect(server.ws_url) as ws:
+            await ws.recv()  # ready
+            await ws.recv()  # get_state
+            await ws.send(json.dumps({"id": "warm", "type": "prompt", "message": "hello"}))
+            await _recv_until(ws, lambda r: r.get("type") == "agent_end")
+
+            # Stall the fake model so the next turn is still in flight when read.
+            FakeOpenAIHandler.delay = 0.6
+            try:
+                await ws.send(json.dumps({"id": "slow", "type": "prompt", "message": "slow"}))
+                await _recv_until(ws, lambda r: r.get("type") == "agent_start")
+                await asyncio.sleep(0.2)
+                in_flight = httpx.get(
+                    f"{server.base_url}/api/sessions?scope=all", timeout=10
+                ).json()["sessions"]
+                await _recv_until(ws, lambda r: r.get("type") == "agent_end", timeout=60)
+            finally:
+                FakeOpenAIHandler.delay = 0.0
+        settled = httpx.get(
+            f"{server.base_url}/api/sessions?scope=all", timeout=10
+        ).json()["sessions"]
+        return in_flight, settled
+
+    in_flight, settled = asyncio.run(scenario())
+    assert any(row["running"] for row in in_flight), "a streaming turn is reported running"
+    assert all(row["running"] is False for row in settled), "the flag clears when the turn ends"
+
+
+def test_a_retired_turn_stays_running_and_announces_its_settle(ui_server):
+    """Switching away mid-turn must not cancel the run, and the sidebar has to see
+    both halves of it: running while it finishes, then a settle notice naming the
+    conversation (which the client turns into the green completion dot)."""
+    server, _, _ = ui_server
+
+    def sessions() -> list[dict]:
+        return httpx.get(f"{server.base_url}/api/sessions?scope=all", timeout=10).json()["sessions"]
+
+    async def scenario() -> tuple[str, list[dict], dict, list[dict]]:
+        async with websockets.connect(server.ws_url) as ws:
+            await ws.recv()  # ready
+            old_path = json.loads(await ws.recv())["data"]["sessionFile"]
+
+            # Warm up: an empty session leaves no file to list.
+            await ws.send(json.dumps({"id": "warm", "type": "prompt", "message": "hello"}))
+            await _recv_until(ws, lambda r: r.get("type") == "agent_end")
+
+            FakeOpenAIHandler.delay = 0.6
+            try:
+                await ws.send(json.dumps({"id": "slow", "type": "prompt", "message": "slow"}))
+                await _recv_until(ws, lambda r: r.get("type") == "agent_start")
+                # Navigate away while the model is still answering: the run is retired,
+                # not cancelled.
+                await ws.send(json.dumps({"id": "n", "type": "new_session"}))
+                await _recv_until(ws, lambda r: r.get("id") == "n")
+                in_flight = sessions()
+                records = await _recv_until(
+                    ws, lambda r: r.get("type") == "session_activity", timeout=30
+                )
+            finally:
+                FakeOpenAIHandler.delay = 0.0
+        return old_path, in_flight, records[-1], sessions()
+
+    old_path, in_flight, settled_event, after = asyncio.run(scenario())
+
+    def find_row(rows: list[dict]) -> dict:
+        return next(item for item in rows if item["path"] == old_path)
+
+    assert find_row(in_flight)["running"] is True, "the abandoned run still counts as running"
+    assert settled_event["sessionFile"] == old_path
+    assert settled_event["running"] is False
+    assert find_row(after)["running"] is False, "the background run has finished"
+
+
+def test_abort_is_prompt_and_clears_running(ui_server):
+    """Stop must not feel like a hang, and the list flag must clear once it stops."""
+    server, _, _ = ui_server
+
+    async def scenario() -> tuple[float, list[dict], list[dict]]:
+        async with websockets.connect(server.ws_url) as ws:
+            await ws.recv()  # ready
+            await ws.recv()  # get_state
+            await ws.send(json.dumps({"id": "warm", "type": "prompt", "message": "hello"}))
+            await _recv_until(ws, lambda r: r.get("type") == "agent_end")
+
+            FakeOpenAIHandler.delay = 2.0
+            try:
+                await ws.send(json.dumps({"id": "slow", "type": "prompt", "message": "slow"}))
+                await _recv_until(ws, lambda r: r.get("type") == "agent_start")
+                started = time.monotonic()
+                await ws.send(json.dumps({"id": "a", "type": "abort"}))
+                records = await _recv_until(ws, lambda r: r.get("id") == "a", timeout=30)
+                elapsed = time.monotonic() - started
+            finally:
+                FakeOpenAIHandler.delay = 0.0
+        listing = httpx.get(f"{server.base_url}/api/sessions?scope=all", timeout=10).json()["sessions"]
+        return elapsed, records, listing
+
+    elapsed, records, listing = asyncio.run(scenario())
+    types = [record.get("type") for record in records]
+    assert "agent_end" in types, "abort must end the turn, not hang it"
+    # The provider stream is polled for aborts every 0.5s; the old code waited for
+    # response headers first (the fake model sleeps 2s), which is the regression.
+    assert elapsed < 1.5, f"abort took {elapsed:.2f}s"
+    assert all(row["running"] is False for row in listing), "the list flag clears after abort"

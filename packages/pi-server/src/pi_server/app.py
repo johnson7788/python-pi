@@ -263,6 +263,29 @@ class SessionWorker:
         except Exception:  # noqa: BLE001
             return None
 
+    def running_session_files(self) -> set[str]:
+        """Absolute paths of this worker's conversations that are streaming now.
+
+        Includes runs the user walked away from: the runtime retires them instead
+        of cancelling, and the sidebar still has to draw their spinner.
+        """
+        if self._controller is None or self._state is None:
+            return set()
+        runtime = getattr(self._state, "runtime", None)
+        getter = getattr(runtime, "running_session_files", None)
+        if callable(getter):
+            try:
+                return set(getter())
+            except Exception:  # noqa: BLE001 - a torn-down runtime is simply idle
+                return set()
+        try:
+            session = self._controller.session
+            if session.is_streaming and session.session_file:
+                return {os.path.realpath(session.session_file)}
+        except Exception:  # noqa: BLE001
+            pass
+        return set()
+
     async def ensure_started(self) -> None:
         """Bootstrap on first use, so the server binds instantly and idle users cost nothing."""
         if self._controller is not None:
@@ -292,6 +315,11 @@ class SessionWorker:
             # tab exists the count is zero, so a scheduled run that tries to ask
             # fails fast instead of parking a turn nobody can see.
             self._controller.set_client_count(lambda: self.hub.client_count)
+            # A conversation left mid-turn keeps streaming after its events stopped
+            # reaching the tabs; this is the one notification that it has finished.
+            set_settled = getattr(state.runtime, "set_on_background_settled", None)
+            if callable(set_settled):
+                set_settled(self._notify_background_settled)
             # The policy goes in after ``RpcMode`` has bound the host, because binding is
             # what supplies the UI context a confirmation dialog needs.
             if self._policy_factory is not None and state.extension_runner is not None:
@@ -308,6 +336,21 @@ class SessionWorker:
         except Exception:  # noqa: BLE001 - bookkeeping must not be able to break the stream
             pass
         self.hub.emit_routed(payload)
+
+    def _notify_background_settled(self, session_path: str) -> None:
+        """Tell the tabs that a conversation abandoned mid-turn has finished.
+
+        The client turns this into the sidebar's green "done, unread" dot. It is an
+        extra record on the same socket, not a protocol command, so an older client
+        simply ignores it.
+        """
+        self._emit(
+            {
+                "type": "session_activity",
+                "sessionFile": session_path,
+                "running": False,
+            }
+        )
 
     def _observe(self, payload: dict[str, Any]) -> None:
         kind = payload.get("type")
@@ -3308,6 +3351,19 @@ def create_app(
         wanted_app = request.query_params.get("app") or ""
         wanted_mode = request.query_params.get("mode") or ""
 
+        # Running state is per user, not per request: a conversation left mid-turn
+        # keeps streaming in a worker that may belong to another workspace, and the
+        # sidebar lists every workspace at once. Union the live workers.
+        uid = LOCAL_UID
+        if database is not None:
+            user = auth.current_user(request)
+            if user is None:
+                raise auth.reject_unauthenticated()
+            uid = user.uid
+        running_files: set[str] = set()
+        for live in registry.workers_for(uid):
+            running_files |= live.running_session_files()
+
         def serialize(info: Any, workspace: dict[str, str] | None) -> dict[str, Any]:
             return {
                 "path": info.path,
@@ -3320,6 +3376,7 @@ def create_app(
                 "messageCount": info.message_count,
                 "firstMessage": info.first_message,
                 "workspace": workspace,
+                "running": os.path.realpath(str(info.path)) in running_files,
             }
 
         # ``scope=all`` feeds the sidebar's "按工作区" grouping: one call for every

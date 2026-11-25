@@ -571,6 +571,8 @@ interface WorkspaceSession {
   modified?: number | string
   /** Set by the server when the list spans workspaces (`scope=all`). */
   workspace?: { id: string; name: string } | null
+  /** True while the server is streaming this conversation (even in the background). */
+  running?: boolean
 }
 interface ScheduleRunRow {
   id: string
@@ -1376,15 +1378,33 @@ export function Workbench({ auth, route }: { auth: AuthApi; route: string }) {
                       ? null
                       : group.rows.map((session) => {
                           const active = Boolean(activeSessionPath && activeSessionPath === session.path)
+                          const activity = agent.sessionActivity[session.path]
+                          const running = activity?.running === true
+                          const unread = activity?.unread === true
+                          const status = running ? '· 运行中' : unread ? '· 已完成，未查看' : ''
                           return (
                             <button
                               key={session.path || session.id}
                               type="button"
                               className={`conv${active ? ' is-active' : ''}`}
-                              title={sessionTitle(session)}
+                              title={`${sessionTitle(session)}${status}`}
                               onClick={() => openAnySession(session)}
                             >
-                              {active ? <span className="dot" /> : null}
+                              {running ? (
+                                <span className="conv-status" title="运行中" aria-label="运行中">
+                                  <span className="spinner" />
+                                </span>
+                              ) : unread ? (
+                                <span
+                                  className="conv-status"
+                                  title="已完成，点开查看"
+                                  aria-label="已完成，未查看"
+                                >
+                                  <span className="conv-done" />
+                                </span>
+                              ) : active ? (
+                                <span className="dot" />
+                              ) : null}
                               <span className="conv-title">{sessionTitle(session)}</span>
                               <time>{timeLabel(session.modified)}</time>
                             </button>

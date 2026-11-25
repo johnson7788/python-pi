@@ -569,6 +569,18 @@ export interface TurnEndEvent {
   toolResults?: Message[]
 }
 
+/**
+ * Out-of-band sidebar notice: a conversation left mid-turn finished its run.
+ *
+ * Not a pi RPC command — the web server adds it so a background run can raise
+ * the green completion dot after its events stopped reaching the tab.
+ */
+export interface SessionActivityEvent {
+  type: 'session_activity'
+  sessionFile: string
+  running: boolean
+}
+
 export interface ToolExecutionStartEvent {
   type: 'tool_execution_start'
   toolCallId: string
@@ -665,6 +677,7 @@ export type ServerEvent =
   | TurnStartEvent
   | AgentEndEvent
   | TurnEndEvent
+  | SessionActivityEvent
   | ToolExecutionStartEvent
   | ToolExecutionUpdateEvent
   | ToolExecutionEndEvent
@@ -719,6 +732,11 @@ export interface SessionInfo {
   firstMessage?: string | null
   /** Owning workspace; set only when the list spans every workspace (scope=all). */
   workspace?: { id: string; name: string } | null
+  /**
+   * True while the conversation is streaming, including runs the user navigated
+   * away from (the server keeps them alive in the background).
+   */
+  running?: boolean
 }
 
 export interface SessionsResponse {

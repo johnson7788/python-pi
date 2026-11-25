@@ -113,6 +113,9 @@ class AgentSessionRuntime:
         self._extension_runner = extension_runner
         self._rebind_session: Callable[[AgentSession], Awaitable[None]] | None = None
         self._before_session_invalidate: Callable[[], None] | None = None
+        #: Told the session file when a conversation retired mid-turn settles, so a
+        #: host can raise the sidebar's "finished while you were elsewhere" marker.
+        self._on_background_settled: Callable[[str], None] | None = None
         self._lock = asyncio.Lock()
         #: Sessions replaced mid-turn stay alive here until their run settles, so
         #: switching away never cancels work the user already started.
@@ -158,6 +161,36 @@ class AgentSessionRuntime:
         user walked away from has actually finished.
         """
         return any(not entry.task.done() for entry in self._retiring.values())
+
+    def set_on_background_settled(self, callback: Callable[[str], None] | None) -> None:
+        """Called with the session file once a retired conversation has settled.
+
+        A session retired mid-turn is detached from the host's event stream, so this
+        is the only notification that the work the user walked away from is done.
+        """
+        self._on_background_settled = callback
+
+    def running_session_files(self) -> set[str]:
+        """Absolute paths of the sessions streaming right now.
+
+        Besides the live session, this covers conversations retired mid-turn: they
+        keep running in the background, and the sidebar must show them as running
+        even though their events no longer reach the client.
+        """
+        files: set[str] = set()
+
+        def add(session: AgentSession) -> None:
+            if not getattr(session, "is_streaming", False):
+                return
+            path = session.session_file
+            if path:
+                files.add(os.path.realpath(path))
+
+        add(self._session)
+        for entry in list(self._retiring.values()):
+            if not entry.task.done():
+                add(entry.session)
+        return files
 
     # -- replacement -------------------------------------------------------------------
 
@@ -415,6 +448,16 @@ class AgentSessionRuntime:
         # (or superseded), so the run must keep going: only an idle session is freed.
         while session.is_streaming and loop.time() < deadline:
             await asyncio.sleep(0.25)
+        # It finished on its own (the loop above ran out only on a stuck run, which is
+        # an abort rather than a completion). Report before disposing: the disposed
+        # session can no longer report where it was writing.
+        settled = not session.is_streaming
+        path = session.session_file
+        if settled and path and self._on_background_settled is not None:
+            try:
+                self._on_background_settled(path)
+            except Exception:  # noqa: BLE001 - a host callback must not break teardown
+                pass
         try:
             session.dispose()
         except Exception:  # noqa: BLE001 - teardown is best effort

@@ -405,6 +405,38 @@ async def test_switching_back_adopts_the_still_running_session(tmp_path, monkeyp
     assert disposed == [True]
 
 
+async def test_a_retired_run_is_reported_running_until_it_settles(tmp_path, monkeypatch):
+    """The sidebar needs both halves of a background run: that it is running, and
+    the moment it finishes (where the green completion dot comes from)."""
+    runtime = await _make_runtime(tmp_path, [FauxTurn(text="done")])
+    retired = runtime.session
+    await retired.prompt("hello")
+    target = retired.session_file
+    assert target is not None
+
+    settled: list[str] = []
+    runtime.set_on_background_settled(settled.append)
+
+    # No scripted turn lasts long enough to race against, so hold the one flag the
+    # replacement layer looks at — only for the conversation being retired.
+    monkeypatch.setattr(AgentSession, "is_streaming", property(lambda session: session is retired))
+    await runtime.new_session()
+
+    assert {os.path.realpath(path) for path in runtime.running_session_files()} == {
+        os.path.realpath(target)
+    }
+
+    monkeypatch.undo()
+    for _ in range(80):
+        if not runtime.has_retiring_runs():
+            break
+        await asyncio.sleep(0.05)
+
+    assert settled == [target], "the host is told which conversation finished"
+    assert runtime.running_session_files() == set(), "nothing is streaming any more"
+    await runtime.dispose()
+
+
 async def test_dispose_releases_the_session(tmp_path):
     runtime = await _make_runtime(tmp_path, [FauxTurn(text="x")])
     session = runtime.session

@@ -11,7 +11,7 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 | 目录 / 文件 | 是什么 | 入库（文件数） |
 |---|---|---|
 | `packages/` | 4 个 Python 包：`pi-ai`（模型层）、`pi-agent-core`（agent 循环）、`pi-coding-agent`（工具/扩展/skills）、`pi-server`（HTTP+WS 服务、多租户、应用目录） | 是（90） |
-| `web/` | 浏览器前端（React + Vite）：`src/workbench/` 是主界面，另有 `pages/`、`components/`、`lib/` | 是（51） |
+| `web/` | 浏览器前端（React + Vite）：`src/workbench/` 是主界面，另有 `pages/`、`components/`、`lib/` | 是（53） |
 | `office/` | 三个编辑器（doc / slides / sheets）的前端工程 + Rust `xlsx-engine`；构建产物写到 `office-dist/` | 是（686） |
 | `plugins/` | 内置插件：`pubmed`、`clinical-calc`、`csv-tools`、`web-fetch`、`chart-tools` | 是（61） |
 | `template/` | team 模式的租户模板：`skills/` 软链给每个新用户 | 是（13） |
@@ -116,7 +116,7 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   │   ├── sidebar-workspace.png  (37,142 B)
 │   │   ├── transcript-dsh-style-thinking-open.png  (127,642 B)
 │   │   └── transcript-dsh-style.png  (98,838 B)
-│   ├── new_frontend.html  (84,576 B)
+│   ├── new_frontend.html  (84,549 B)
 │   ├── office/
 │   │   ├── ACCEPTANCE.md  (2,031 B)
 │   │   ├── p0-word-editor.png  (335,614 B)
@@ -1050,7 +1050,7 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   │           │   ├── __init__.py  (891 B)
 │   │           │   ├── anthropic_messages.py  (35,404 B)
 │   │           │   ├── faux.py  (9,464 B)
-│   │           │   └── openai_completions.py  (50,761 B)
+│   │           │   └── openai_completions.py  (51,619 B)
 │   │           ├── stream.py  (9,508 B)
 │   │           ├── tools.py  (8,960 B)
 │   │           ├── transform.py  (16,796 B)
@@ -1062,7 +1062,7 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   │           ├── __init__.py  (3,476 B)
 │   │           ├── _version.py  (220 B)
 │   │           ├── agent_session.py  (61,150 B)
-│   │           ├── agent_session_runtime.py  (19,602 B)
+│   │           ├── agent_session_runtime.py  (21,602 B)
 │   │           ├── bootstrap.py  (18,508 B)
 │   │           ├── cli.py  (8,516 B)
 │   │           ├── compaction.py  (20,285 B)
@@ -1122,7 +1122,7 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │       └── src/
 │           └── pi_server/
 │               ├── __init__.py  (832 B)
-│               ├── app.py  (165,758 B)
+│               ├── app.py  (168,286 B)
 │               ├── apps.py  (43,652 B)
 │               ├── auth.py  (11,649 B)
 │               ├── cli.py  (8,643 B)
@@ -1216,7 +1216,7 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │       ├── plugin.json  (555 B)
 │       └── README.md  (1,315 B)
 ├── pyproject.toml  (845 B)
-├── README.md  (27,376 B)
+├── README.md  (28,789 B)
 ├── scripts/
 │   ├── build-office.sh  (290 B)
 │   ├── build-xlsx-sidecar.sh  (146 B)
@@ -1250,10 +1250,10 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │           │   └── build_deck.py  (65,691 B)
 │           └── SKILL.md  (7,998 B)
 ├── tests/
-│   ├── conftest.py  (13,957 B)
+│   ├── conftest.py  (14,251 B)
 │   ├── test_agent_loop.py  (33,772 B)
 │   ├── test_agent_session.py  (30,968 B)
-│   ├── test_agent_session_runtime.py  (15,406 B)
+│   ├── test_agent_session_runtime.py  (16,691 B)
 │   ├── test_apps.py  (18,249 B)
 │   ├── test_artifacts.py  (2,700 B)
 │   ├── test_auth_models.py  (24,049 B)
@@ -1287,7 +1287,7 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
 │   ├── test_sandbox_end_to_end.py  (12,672 B)
 │   ├── test_sandbox_provisioner.py  (19,304 B)
 │   ├── test_schedules.py  (7,132 B)
-│   ├── test_server.py  (10,143 B)
+│   ├── test_server.py  (16,383 B)
 │   ├── test_session_fork.py  (21,408 B)
 │   ├── test_session_manager.py  (31,611 B)
 │   ├── test_skill_prefs.py  (3,244 B)
@@ -1310,9 +1310,9 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
     ├── .gitignore  (38 B)
     ├── dist/  (13 个文件，生成物，略)
     ├── index.html  (1,104 B)
-    ├── mock-server.mjs  (48,242 B)
+    ├── mock-server.mjs  (49,567 B)
     ├── package-lock.json  (79,797 B)
-    ├── package.json  (1,263 B)
+    ├── package.json  (1,400 B)
     ├── public/
     │   ├── apple-touch-icon.png  (3,030 B)
     │   ├── favicon-16.png  (517 B)
@@ -1336,6 +1336,7 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
     │   ├── verify-dom.mjs  (9,606 B)
     │   ├── verify-mock.mjs  (4,490 B)
     │   ├── verify-question.mjs  (12,079 B)
+    │   ├── verify-session-activity.mjs  (5,879 B)
     │   └── verify-transcript.mjs  (9,333 B)
     ├── src/
     │   ├── App.tsx  (1,822 B)
@@ -1355,9 +1356,10 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
     │   │   ├── endpoints.ts  (1,297 B)
     │   │   ├── images.ts  (3,777 B)
     │   │   ├── markdown.ts  (1,992 B)
-    │   │   ├── protocol.ts  (21,152 B)
+    │   │   ├── protocol.ts  (21,706 B)
     │   │   ├── router.ts  (1,377 B)
-    │   │   ├── useAgent.ts  (50,408 B)
+    │   │   ├── sessionActivity.ts  (3,969 B)
+    │   │   ├── useAgent.ts  (55,322 B)
     │   │   ├── useAuth.ts  (5,402 B)
     │   │   └── useTheme.ts  (2,225 B)
     │   ├── main.tsx  (516 B)
@@ -1365,8 +1367,8 @@ python-pi 仓库的文件清单与用途说明。回答三个问题：**这个�
     │   │   └── Login.tsx  (8,190 B)
     │   ├── styles.css  (23,693 B)
     │   └── workbench/
-    │       ├── workbench.css  (80,251 B)
-    │       └── Workbench.tsx  (224,066 B)
+    │       ├── workbench.css  (80,582 B)
+    │       └── Workbench.tsx  (225,247 B)
     ├── tsconfig.json  (586 B)
     └── vite.config.ts  (1,205 B)
 ```
